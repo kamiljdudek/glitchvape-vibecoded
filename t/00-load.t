@@ -25,9 +25,11 @@ my @modules = qw(
     GlitchVape::Fonts
     GlitchVape::Generator
     GlitchVape::IO
+    GlitchVape::Licenses
     GlitchVape::Magick
     GlitchVape::Noise
     GlitchVape::Palette
+    GlitchVape::Paths
     GlitchVape::Pipeline
     GlitchVape::Pixels
     GlitchVape::Random

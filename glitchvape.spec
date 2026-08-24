@@ -3,7 +3,17 @@ Version:        0.01
 Release:        1%{?dist}
 Summary:        Apply VHS, CRT and databending effects to photographs
 
-License:        MIT
+# The program is MIT. The binary package also carries two typefaces that are
+# not the program's: Departure Mono and Fusion Pixel, both under the SIL Open
+# Font License 1.1, each installed as its author published it with the licence
+# text beside the font -- which is what the OFL asks for and what
+# `glitchvape --licenses` and the about window quote.
+#
+# VCR OSD Mono and W95FA are *not* here. They are free to use, their
+# redistribution terms are still being established, and until that is settled
+# the Makefile refuses to put them in the tarball; see `make check-licenses`.
+# Anyone who has them puts them in one of the drop-in directories below.
+License:        MIT AND OFL-1.1
 # TODO: point both of these at the repository once it is on a forge.
 URL:            https://example.invalid/glitchvape
 Source0:        %{name}-%{version}.tar.gz
@@ -62,11 +72,11 @@ Recommends:     perl-Image-ExifTool
 Recommends:     libheif-tools
 Recommends:     fontconfig
 
-# The typefaces the presets ask for are not shipped -- they are a couple of
-# dozen megabytes under licences of their own. Font *roles* fall through to
-# whatever fontconfig can see, so these are what makes the fallbacks good
-# rather than merely present. `glitchvape --check-fonts` reports what each
-# role resolved to.
+# Two typefaces ship (see the License tag); the rest of what the presets ask
+# for does not. Font *roles* fall through to whatever fontconfig can see, so
+# these are what makes the fallbacks good rather than merely present.
+# `glitchvape --check-fonts` reports what each role resolved to, and names the
+# drop-in directory for anything still missing.
 Recommends:     dejavu-sans-fonts
 Recommends:     google-noto-sans-cjk-fonts
 Recommends:     cascadia-code-fonts
@@ -88,9 +98,18 @@ reproduced exactly from its seed.
 This package contains the command-line tools and the library. For the window,
 install %{name}-gui.
 
+Departure Mono and Fusion Pixel are included under the SIL Open Font License;
+%{name} --licenses prints their terms along with this program's. Fonts of your
+own go in ~/.local/share/glitchvape/fonts, or in
+%{_datadir}/%{name}/fonts for every account on the machine -- both are
+searched ahead of what is installed here, so neither is disturbed by an
+upgrade.
+
 
 %package gui
 Summary:        Graphical front end for GlitchVape
+# No fonts in this subpackage: the assets belong to the base package.
+License:        MIT
 Requires:       %{name} = %{version}-%{release}
 Requires:       perl(Gtk3)
 Requires:       perl(Gtk3::ImageView)
@@ -137,23 +156,46 @@ appstream-util validate-relax --nonet \
 # The Makefile asserts that nothing outside the GUI module set reaches for
 # Gtk3, which is what makes the base package installable without it.
 make check-split
+# And that every font in the tarball arrived with the licence it is under.
+make check-licenses
 make test
 
 
 %files
 %doc README.md
-# Requires a LICENSE file at the top of the tarball.
-%license LICENSE
+# Tagged where the Makefile installed it rather than copied into
+# %%{_licensedir}, because this is the copy the program itself reads: the
+# about window and --licenses quote this file instead of restating it in Perl,
+# so there is one LICENSE on disk and `rpm -qL %{name}` still finds it.
+%license %{_datadir}/%{name}/LICENSE
 %{_bindir}/%{name}
 %{_bindir}/%{name}-batch
 %dir %{_datadir}/%{name}
 %dir %{_datadir}/%{name}/assets
 %dir %{_datadir}/%{name}/assets/artwork
-%dir %{_datadir}/%{name}/assets/fonts
 %dir %{_datadir}/%{name}/assets/luts
 %{_datadir}/%{name}/assets/artwork/logo.png
 %{_datadir}/%{name}/assets/artwork/icon-256.png
 %{_datadir}/%{name}/presets/
+
+# The bundled font releases, each unpacked as published: the .otf files and,
+# beside them, the OFL text and README their authors shipped. Owned whole
+# rather than file by file so that updating a font is dropping in the new
+# release, not editing this list.
+#
+# The licence files inside are not separately %%license-tagged: they are
+# already in this glob, and listing a path twice in one %%files section is how
+# a spec grows a "file listed twice" warning for no gain. What matters is that
+# they are installed beside the fonts, which is where the OFL wants them and
+# where GlitchVape::Licenses looks.
+%{_datadir}/%{name}/assets/fonts/
+
+# Shipped empty, and stays empty: the drop-in directory for fonts this package
+# may not distribute -- VCR OSD Mono and W95FA today. It is on the search path
+# ahead of the bundled fonts above, so a file dropped here wins and survives
+# every upgrade of this package. Per-user, the same thing is
+# ~/.local/share/glitchvape/fonts and needs no packaging at all.
+%dir %{_datadir}/%{name}/fonts
 # GUI.pm and GUI/ belong to the subpackage; everything else is here.
 %{perl_vendorlib}/GlitchVape.pm
 %{perl_vendorlib}/GlitchVape/
@@ -173,3 +215,6 @@ make test
 %changelog
 * Mon Aug 24 2026 Kamil Dudek <kamiljdudek@localhost.localdomain> - 0.01-1
 - Initial package.
+- Bundle Departure Mono and Fusion Pixel under the OFL, licence text included.
+- Add a drop-in font directory under %{_datadir}/%{name} for the typefaces
+  that are not ours to distribute.

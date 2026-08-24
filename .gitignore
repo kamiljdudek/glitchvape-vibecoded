@@ -13,17 +13,27 @@ out/
 # The input side of the same coin, and not the program's to distribute.
 Pictures/
 
-# Bundled typefaces.
+# Typefaces.
 #
-# Twenty-odd megabytes, and the licences are the fonts' own rather than this
-# project's -- VCR OSD Mono and W95FA in particular are free to use but not
-# obviously free to redistribute inside somebody else's repository.
+# A font belongs in this repository only if it came with permission to hand it
+# on. The rule is the one `make check-licenses` and `make dist` apply: a
+# release unpacked whole -- LICENSE, README and all -- may be committed; a
+# font file dropped in loose may not, because nothing beside it says what its
+# terms are.
 #
-# The program degrades correctly without them: GlitchVape::Fonts falls back
-# through each role's candidate list to whatever fontconfig can see, and
-# --check-fonts names the apt package or the download for anything still
-# missing. See "Optional fonts" in the README for what to put here.
-assets/fonts/
+# So everything under assets/fonts/ is ignored by default and the releases
+# that are ours to distribute are named back in, one line each. Adding a font
+# to the distribution is therefore a deliberate line here plus the unpacked
+# licence beside it, and never something that happens by forgetting.
+#
+# Held back today: VCR OSD Mono and W95FA, both free to use, neither yet
+# established as free to redistribute inside somebody else's package. Nothing
+# breaks without them -- GlitchVape::Fonts falls through each role's candidate
+# list to whatever fontconfig can see, and --check-fonts names the download
+# and the directory to put it in. See "Fonts" in the README.
+assets/fonts/*
+!assets/fonts/DepartureMono-1.500/
+!assets/fonts/fusion-pixel-font-12px-monospaced-otf-v2026.08.11/
 
 # Artwork is deliberately NOT ignored: assets/artwork/logo.png is a few
 # kilobytes, is this project's own, and the about window needs it.

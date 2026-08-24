@@ -130,6 +130,96 @@ sub asset_tree
 }
 
 # ---------------------------------------------------------------------------
+# The search path
+#
+# More than one directory since fonts started being installed by a package:
+# assets/fonts belongs to rpm, so a font someone adds has to have somewhere
+# else to go. The order is the whole of the promise -- what you drop in wins
+# over what shipped -- so it is asserted rather than described.
+
+{
+    my $home   = File::Temp->newdir( 'gv_home_XXXXXX',   TMPDIR => 1 );
+    my $system = File::Temp->newdir( 'gv_system_XXXXXX', TMPDIR => 1 );
+    my $env    = File::Temp->newdir( 'gv_env_XXXXXX',    TMPDIR => 1 );
+
+    my $user_fonts =
+        File::Spec->catdir( "$home", '.local', 'share', 'glitchvape', 'fonts' );
+    my $system_fonts =
+        File::Spec->catdir( "$system", 'glitchvape', 'fonts' );
+
+    File::Path::make_path( $user_fonts, $system_fonts );
+
+    local $ENV{ HOME }             = "$home";
+    local $ENV{ XDG_DATA_DIRS }    = "$system";
+    local $ENV{ GLITCHVAPE_FONTS } = "$env";
+    delete local $ENV{ XDG_DATA_HOME };
+
+    is GlitchVape::Fonts::user_dir(), $user_fonts,
+        'the drop-in directory is XDG_DATA_HOME, defaulted from $HOME';
+
+    my @dirs = GlitchVape::Fonts::search_dirs();
+
+    is $dirs[ 0 ], "$env", 'GLITCHVAPE_FONTS is searched first';
+    is $dirs[ 1 ], $user_fonts, 'then the per-user drop-in directory';
+    is $dirs[ 2 ], $system_fonts, 'then glitchvape/fonts under XDG_DATA_DIRS';
+
+    # The bundled directory is last, so that a font dropped into any of the
+    # above shadows one that shipped rather than losing to it.
+    like $dirs[ -1 ], qr/assets.fonts\z/,
+        'and the bundled directory is searched last';
+
+    # A directory that is not there is not searched, but naming it is not an
+    # error either: the per-user one does not exist until somebody creates it.
+    ok !( grep { !-d } @dirs ), 'only directories that exist are searched';
+}
+
+{
+    # XDG_DATA_HOME set explicitly, and the defaults still present in
+    # XDG_DATA_DIRS -- a session that sets it to a narrower list must not
+    # silently stop searching the documented system directory.
+    my $data = File::Temp->newdir( 'gv_xdg_XXXXXX', TMPDIR => 1 );
+    my $fonts = File::Spec->catdir( "$data", 'glitchvape', 'fonts' );
+    File::Path::make_path( $fonts );
+
+    local $ENV{ XDG_DATA_HOME } = "$data";
+    delete local $ENV{ GLITCHVAPE_FONTS };
+
+    is GlitchVape::Fonts::user_dir(), $fonts,
+        'an explicit XDG_DATA_HOME is used as it stands';
+
+    my @dirs = GlitchVape::Fonts::search_dirs();
+    is $dirs[ 0 ], $fonts, 'and comes first once GLITCHVAPE_FONTS is unset';
+}
+
+{
+    # A drop-in font beats a bundled one of the same name, which is the point
+    # of the ordering and the answer to "where do I put VCR OSD Mono".
+    my $drop = asset_tree( 'HotelEight-Regular.otf' => 'dropped in' );
+
+    # A stand-in for the packaged tree: Assets::root() is what asset_dir()
+    # hangs 'fonts' off, so the bundled copy has to sit under one.
+    my $ship = asset_tree( 'fonts/HotelEight-Regular.otf' => 'shipped' );
+
+    local $ENV{ GLITCHVAPE_FONTS }  = "$drop";
+    local $ENV{ GLITCHVAPE_ASSETS } = "$ship";
+
+    like GlitchVape::Fonts::resolve( 'HotelEight-Regular' ), qr/\Q$drop\E/,
+        'a dropped-in font shadows a bundled one of the same name';
+}
+
+{
+    # Several directories at once, since GLITCHVAPE_FONTS is a path now.
+    my $one = asset_tree( 'IndiaNine-Regular.otf' => 'x' );
+    my $two = asset_tree( 'JulietTen-Regular.otf' => 'x' );
+
+    local $ENV{ GLITCHVAPE_FONTS } = "$one:$two";
+
+    ok GlitchVape::Fonts::resolve( 'IndiaNine-Regular' ),
+        'GLITCHVAPE_FONTS is a colon-separated path: the first entry';
+    ok GlitchVape::Fonts::resolve( 'JulietTen-Regular' ), 'and the second';
+}
+
+# ---------------------------------------------------------------------------
 # Roles
 
 {

@@ -11,6 +11,7 @@ use Gtk3 ();
 use GlitchVape           ();
 use GlitchVape::Assets   ();
 use GlitchVape::Config   ();
+use GlitchVape::Licenses ();
 use GlitchVape::Registry ();
 
 our $VERSION = '0.01';
@@ -31,6 +32,24 @@ effects registered and presets found. Both are discovered at run time rather
 than compiled in -- a preset dropped into F<presets/> is a preset, and an
 effect is whatever called C<register> -- so the numbers are worth stating
 rather than assuming.
+
+=head1 THE LICENCE PAGE IS READ OFF DISK
+
+The dialog's licence page is not C<set_license_type( 'mit-x11' )> and a list
+of fonts typed out here. It is the project's F<LICENSE> followed by every
+licence file that came with a bundled font, read at the moment the window
+opens -- see L<GlitchVape::Licenses>.
+
+Two of the bundled faces are under the SIL Open Font License, which asks that
+its text travel with the font, and the honest way to satisfy that is to show
+the file the font's author wrote rather than a paraphrase of it that this
+program's author maintains. It also means a font added by dropping a release
+into F<~/.local/share/glitchvape/fonts> is credited here without anyone
+editing this file.
+
+The built-in licence type is still the fallback, for the install so broken
+that not even F<LICENSE> is there: the program is MIT-licensed whether or not
+its licence file survived packaging.
 
 =cut
 
@@ -57,10 +76,10 @@ sub show
     $about->set_program_name( 'GlitchVape' );
     $about->set_version( $GlitchVape::VERSION );
     $about->set_comments( _comments() );
-    $about->set_copyright(
-        'Vaporwave and glitch-art transformations for ' . 'photographs' );
+    $about->set_copyright( 'Copyright © 2026 Kamil Dudek' );
 
-    $about->set_license_type( 'mit-x11' );
+    _set_license( $about );
+
     $about->set_website( 'https://github.com/' );
     $about->set_website_label( 'Source' );
 
@@ -69,10 +88,7 @@ sub show
         $about->set_logo( $logo );
     }
 
-    # The two bundled things whose licences are not the program's own, named
-    # where somebody looking for them would look.
-    $about->add_credit_section( 'Bundled artwork and fonts',
-        [ 'Terminus, VCR OSD Mono, Departure Mono, Fusion Pixel, W95FA' ] );
+    _add_credits( $about );
 
     $about->run;
     $about->destroy;
@@ -92,7 +108,69 @@ sub _comments
         $presets = scalar @$found;
     }
 
-    return sprintf "%d effects · %d presets", $effects, $presets;
+    return sprintf "Vaporwave and glitch-art transformations for photographs\n"
+        . "%d effects · %d presets", $effects, $presets;
+}
+
+# The licence page: the real files if they are there, the built-in MIT text if
+# they are not. set_license() puts the dialog into GTK_LICENSE_CUSTOM, so the
+# two are alternatives rather than something to set both of.
+sub _set_license
+{
+    my ( $about ) = @_;
+
+    local $@;
+    my $notice = eval { GlitchVape::Licenses::notice() };
+
+    if ( defined $notice && length $notice )
+    {
+        # Not wrapped: these files are wrapped at 72 columns already, and
+        # wrapping them again puts a ragged second line under every line of
+        # the SIL Open Font License.
+        $about->set_wrap_license( 0 );
+        $about->set_license( $notice );
+
+        return;
+    }
+
+    $about->set_license_type( 'mit-x11' );
+
+    return;
+}
+
+# Everything bundled whose licence is not this project's own. The fonts come
+# from what is actually on disk; the two entries after them are things baked
+# into the source, which no directory walk could find.
+sub _add_credits
+{
+    my ( $about ) = @_;
+
+    local $@;
+    my $bundled = eval { GlitchVape::Licenses::bundled() } || [];
+
+    my @fonts;
+    for my $entry ( @$bundled )
+    {
+        my $line = $entry->{ name };
+        $line .= " -- $entry->{ license }" if $entry->{ license };
+
+        push @fonts, $line;
+    }
+
+    if ( @fonts )
+    {
+        $about->add_credit_section( 'Bundled fonts', \@fonts );
+    }
+
+    $about->add_credit_section(
+        'Also',
+        [   'vgatext draws with Terminus glyphs baked into the source'
+                . ' -- SIL Open Font License',
+            'Every other typeface is whatever fontconfig could see',
+        ]
+    );
+
+    return;
 }
 
 sub _logo

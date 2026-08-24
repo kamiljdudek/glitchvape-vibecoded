@@ -31,6 +31,7 @@ use GlitchVape::Config    ();
 use GlitchVape::DTMF      ();
 use GlitchVape::Generator ();
 use GlitchVape::Fonts     ();
+use GlitchVape::Licenses  ();
 use GlitchVape::Palette   ();
 use GlitchVape::Registry  ();
 use GlitchVape::Tools     ();
@@ -124,6 +125,8 @@ GetOptions(
     'explain=s'          => \&explain_effect,
     'check-deps'         => \&check_deps,
     'check-fonts'        => \&check_fonts,
+    'licenses'           => \&show_licenses,
+    'licences'           => \&show_licenses,
 
     'h|help'  => sub { pod2usage( -verbose => 1, -exitval => 0 ) },
     'man'     => sub { pod2usage( -verbose => 2, -exitval => 0 ) },
@@ -733,6 +736,23 @@ sub check_deps
     exit 0;
 }
 
+sub show_licenses
+{
+    my $notice = GlitchVape::Licenses::notice();
+
+    unless ( defined $notice && length $notice )
+    {
+        print "glitchvape: no licence files found.\n"
+            . "This is a broken install rather than an unlicensed program:\n"
+            . "GlitchVape is under the MIT licence, and every bundled font\n"
+            . "ships the licence its author published beside it.\n";
+        exit 1;
+    }
+
+    print $notice;
+    exit 0;
+}
+
 sub check_fonts
 {
     print "Font roles (first available candidate wins):\n";
@@ -752,9 +772,24 @@ sub check_fonts
         }
     }
 
-    printf "\nBundled font directory: %s\n", GlitchVape::Fonts::asset_dir();
-    print "Drop .ttf/.otf files there, or unpack a release into a\n"
-        . "subdirectory of it, to override the system fonts.\n";
+    print "\nSearched, in order:\n";
+    for my $dir ( GlitchVape::Fonts::search_dirs() )
+    {
+        print "  $dir\n";
+    }
+
+    # The one to name is the one they can write to. On a packaged install the
+    # bundled directory belongs to the package manager, and a font dropped
+    # into it disappears at the next upgrade.
+    if ( my $user = GlitchVape::Fonts::user_dir() )
+    {
+        print "\nDrop .ttf/.otf files into\n"
+            . "  $user\n"
+            . "or unpack a release whole into a subdirectory of it -- the\n"
+            . "licence and README come along and are shown by --licenses.\n";
+
+        print "It does not exist yet:  mkdir -p $user\n" unless -d $user;
+    }
 
     # Exit non-zero when a role could not be satisfied, so this is usable as
     # a setup check in a script.
@@ -825,6 +860,7 @@ glitchvape - apply vaporwave and glitch-art transformations to an image
        --list-generators   generated track kinds and their parameters
        --check-deps        report on external tools and Perl modules
        --check-fonts       report which font roles resolve
+       --licenses          print this program's licence and every bundled font's
    -h, --help              this summary
        --man               full documentation
 
@@ -928,6 +964,46 @@ the length.
 
 The vaporwave filters apply to the file only: slowing is a resample, and a
 resampled DTMF tone is no longer on the DTMF grid.
+
+=head2 Fonts
+
+Presets ask for a font I<role> -- C<vcr>, C<pixel>, C<ui> -- rather than a
+font name, so a preset keeps working on a machine with a different set
+installed. C<--check-fonts> prints what each role resolved to and the
+directories that were searched, in order:
+
+=over 4
+
+=item * C<$GLITCHVAPE_FONTS>, colon-separated.
+
+=item * F<~/.local/share/glitchvape/fonts> -- the drop-in directory. Create it
+and put a C<.ttf> or C<.otf> in it, or unpack a whole release into a
+subdirectory of it; both are picked up with nothing to configure and no root
+needed.
+
+=item * F<glitchvape/fonts> under each system data directory --
+F</usr/local/share/glitchvape/fonts> and F</usr/share/glitchvape/fonts> -- for
+a font every account should see.
+
+=item * The fonts that shipped with the program, which on a packaged install
+belong to the package manager and are best left alone.
+
+=back
+
+Unpacking a release whole rather than picking the font file out of it is worth
+the second of effort: the licence comes with it, and C<--licenses> then quotes
+that file rather than leaving the font uncredited.
+
+=head2 Licences
+
+GlitchVape is under the MIT licence. It ships two typefaces that are not its
+own -- Departure Mono and Fusion Pixel, both under the SIL Open Font License,
+which asks that its text travel with the font -- and it does not ship VCR OSD
+Mono or W95FA, whose terms are still being established.
+
+C<--licenses> prints the program's licence followed by every licence file
+found beside a font, read from the files themselves. Anything you drop into
+the directories above is included on the same terms.
 
 =head1 EXAMPLES
 

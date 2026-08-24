@@ -21,14 +21,43 @@ Presets ask for a I<role> -- C<vcr>, C<cjk>, C<pixel> -- not a font name, so
 they keep working on a machine that has a different subset installed. Each role
 lists candidates best-first; the first one present wins.
 
-Files dropped into F<assets/fonts> take priority over anything installed
-system-wide, which is how the fonts that Debian does not package (VCR OSD Mono
-in particular) get picked up without needing to be installed at all.
+Files found in the font directories take priority over anything installed
+system-wide, which is how the fonts nobody packages (VCR OSD Mono in
+particular) get picked up without needing to be installed at all.
+
+=head1 WHERE FONTS ARE LOOKED FOR
+
+More than one directory, because an installed package owns F<assets/fonts>
+and nobody should be dropping files into a directory that the next C<rpm -U>
+will rewrite. In order:
+
+=over 4
+
+=item * C<$GLITCHVAPE_FONTS>, colon-separated, for pointing at a set of fonts
+without moving anything.
+
+=item * C<$XDG_DATA_HOME/glitchvape/fonts> -- F<~/.local/share/glitchvape/fonts>
+by default. B<This is the drop-in directory>: it needs no root, it survives
+upgrades, and it is what L</resolve_or_die> names when a role cannot be
+satisfied.
+
+=item * F<glitchvape/fonts> under each C<$XDG_DATA_DIRS> entry, which on a
+standard system means F</usr/local/share/glitchvape/fonts> and
+F</usr/share/glitchvape/fonts> -- the system-wide equivalent, for a font
+every account should see.
+
+=item * The bundled F<assets/fonts>, which is the checkout in a checkout and
+the installed data directory in a package. Last, so that anything dropped in
+above shadows a bundled font of the same name rather than fighting it.
+
+=back
 
 Subdirectories are searched too, so an upstream release can be unpacked whole
 -- licence, README and all -- rather than having its font files picked out of
-it. The top level is still searched first, so a file dropped straight into
-F<assets/fonts> continues to win over anything in a folder beneath it.
+it. That is not only convenience: the licence travelling with the font is what
+lets the about window and C<--licenses> quote it from the file rather than
+from a copy pasted into the source. Within one directory the top level is
+searched first, so a loose file still wins over one in a folder beneath it.
 
 Only formats FreeType can actually load are considered: C<ttf>, C<otf>,
 C<ttc>, C<pcf> and C<bdf>. The C<woff> and C<woff2> files that font releases
@@ -97,8 +126,7 @@ my %ROLE = (
 
 my %CACHE;
 
-# The asset directory walked once per location, since resolving one role
-# asks after as many as eight candidate names.
+# Each search directory walked once, keyed by path. See _files_under.
 my %SCANNED;
 
 =head2 roles()
@@ -115,15 +143,88 @@ sub roles
 
 =head2 asset_dir()
 
-Directory searched for bundled font files.
+The bundled font directory: the checkout's F<assets/fonts>, or the one the
+packaging installed. Owned by whoever installed it, so it is the one place on
+the search path that is not yours to drop files into.
 
 =cut
 
 sub asset_dir
 {
-    return $ENV{ GLITCHVAPE_FONTS } if $ENV{ GLITCHVAPE_FONTS };
-
     return GlitchVape::Assets::dir( 'fonts' );
+}
+
+=head2 user_dir()
+
+F<$XDG_DATA_HOME/glitchvape/fonts>, whether or not it exists yet -- the
+directory to tell somebody to create. undef only when there is no home
+directory to hang it off, which is a system account rather than a person.
+
+=cut
+
+sub user_dir
+{
+    my $base = $ENV{ XDG_DATA_HOME };
+
+    # A relative XDG path is to be ignored rather than resolved, says the
+    # specification, and it is right: relative to what?
+    if ( !defined $base || !length $base || $base !~ m{\A/} )
+    {
+        my $home = $ENV{ HOME };
+        return undef unless defined $home && length $home;
+
+        $base = File::Spec->catdir( $home, '.local', 'share' );
+    }
+
+    return File::Spec->catdir( $base, 'glitchvape', 'fonts' );
+}
+
+=head2 search_dirs()
+
+Every directory that exists on the search path, in the order it is searched.
+See L</WHERE FONTS ARE LOOKED FOR>.
+
+=cut
+
+sub search_dirs
+{
+    my @dirs;
+
+    push @dirs, grep { length } split /:/, $ENV{ GLITCHVAPE_FONTS }
+        if defined $ENV{ GLITCHVAPE_FONTS };
+
+    if ( my $user = user_dir() )
+    {
+        push @dirs, $user;
+    }
+
+    push @dirs, map { File::Spec->catdir( $_, 'glitchvape', 'fonts' ) }
+        _data_dirs();
+
+    push @dirs, asset_dir();
+
+    my %seen;
+    return grep { -d $_ && !$seen{ $_ }++ } @dirs;
+}
+
+# The system data directories, XDG_DATA_DIRS unioned with the defaults rather
+# than replaced by them. The specification says a set variable replaces the
+# default, but desktop sessions routinely set it to a list that has dropped
+# /usr/local/share, and a documented drop-in directory that silently stops
+# being searched depending on which session started the program is worse than
+# searching two directories that are usually empty.
+sub _data_dirs
+{
+    my @dirs;
+
+    push @dirs, grep { length } split /:/, $ENV{ XDG_DATA_DIRS }
+        if defined $ENV{ XDG_DATA_DIRS };
+
+    push @dirs, File::Spec->catdir( q{}, 'usr', 'local', 'share' ),
+        File::Spec->catdir( q{}, 'usr', 'share' );
+
+    my %seen;
+    return grep { !$seen{ $_ }++ } @dirs;
 }
 
 =head2 resolve( $spec )
@@ -191,7 +292,9 @@ sub resolve_or_die
     # A lookup table rather than a chain of branches: the roles are unrelated
     # to one another, so there is no ordering worth expressing, and adding a
     # role is one more entry instead of one more elsif.
-    my $assets = asset_dir();
+    # The directory to name is the one they can actually write to. Installed
+    # from a package, assets/fonts belongs to rpm; ~/.local/share does not.
+    my $assets = user_dir() || asset_dir();
 
     my %hint_for = (
         cjk       => "  sudo apt install fonts-noto-cjk fonts-ipafont\n",
@@ -202,11 +305,13 @@ sub resolve_or_die
 
         # Neither of these is packaged anywhere, so the only real answer is to
         # download the file and drop it into the bundled font directory.
-        vcr => "  Download VCR OSD Mono and drop the .ttf into $assets\n"
+        vcr => "  Download VCR OSD Mono and drop the .ttf into\n"
+            . "  $assets  (mkdir -p it first)\n"
             . "  https://www.dafont.com/vcr-osd-mono.font\n"
             . "  Or:  sudo apt install fonts-cascadia-code\n",
 
-        ui => "  Download W95FA and drop the .otf into $assets\n"
+        ui => "  Download W95FA and drop the .otf into\n"
+            . "  $assets  (mkdir -p it first)\n"
             . "  https://www.dafont.com/w95fa.font\n"
             . "  Or:  sudo apt install fonts-dejavu\n",
     );
@@ -242,19 +347,26 @@ sub available
     return [ map { [ $_, resolve( $_ ) ] } roles() ];
 }
 
-# Every font file under the asset directory, nearest first: the whole top
-# level before any subdirectory, and each level in sorted order.
+# Every font file on the search path: each directory in turn, and within a
+# directory the whole top level before any subdirectory, each level sorted.
 #
-# Breadth-first rather than depth-first because the ordering is the documented
-# behaviour -- a file dropped straight into assets/fonts wins -- and this
-# extends it rather than changing it. An unpacked release in a versioned
-# subdirectory becomes a fallback instead of being invisible.
+# Breadth-first within a directory rather than depth-first because the
+# ordering is the documented behaviour -- a file dropped straight in wins --
+# and the recursion extends it rather than changing it. An unpacked release in
+# a versioned subdirectory becomes a fallback instead of being invisible.
+sub _asset_files
+{
+    return map { _files_under( $_ ) } search_dirs();
+}
+
+# One directory, cached: resolving a single role asks after as many as eight
+# candidate names, and each of those would otherwise walk the tree again.
 #
 # Symbolic links to directories are not followed: a font directory is somebody
 # else's release tree, and walking into a link is how a loop becomes a hang.
-sub _asset_files
+sub _files_under
 {
-    my $dir = asset_dir();
+    my ( $dir ) = @_;
 
     return @{ $SCANNED{ $dir } } if $SCANNED{ $dir };
 
