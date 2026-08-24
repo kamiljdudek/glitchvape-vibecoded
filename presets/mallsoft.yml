@@ -1,0 +1,73 @@
+name: mallsoft
+title: Empty shopping centre, security-camera memory
+
+# Mallsoft is defined by absence: washed-out colour, soft focus, nothing
+# sharp enough to be a subject. The damage is minimal on purpose -- the mood
+# comes from the grade and the haze, not from glitching.
+
+output:
+  max_dim: 1500
+
+effects:
+  downsample:
+    factor: 2.2
+    filter: triangle
+
+  grade:
+    brightness: 116
+    saturation: 62
+    contrast: -14
+    gamma: 1.12
+    tint: '#D4A5A5'
+    tint_strength: 0.2
+
+  gradient_map:
+    name: mallsoft
+    strength: 0.45
+
+  chroma_bleed:
+    amount: 5
+    saturation: 0.9
+
+  chroma_shift:
+    amount: 2
+
+  softness:
+    blur: 1.8
+    sharpen: 0.4
+    radius: 3
+
+  bloom:
+    threshold: 55
+    radius: 40
+    strength: 0.55
+    tint: '#FFE9F0'
+
+  grain:
+    amount: 0.035
+    shadow_bias: 0.3
+    mono: 1
+
+  scanlines:
+    opacity: 0.1
+    spacing: 4
+    softness: 1
+
+  glare:
+    strength: 0.14
+    angle: 30
+
+  vignette:
+    strength: 0.3
+    size: 1.6
+
+  text:
+    string: ''
+    font: cjk
+    size: 10
+    gravity: SouthWest
+    color: '#FFFFFF'
+    shadow: '#C9ADA7'
+    shadow_offset: 3
+    opacity: 0.55
+    spacing: 20

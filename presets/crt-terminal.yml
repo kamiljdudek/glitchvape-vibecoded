@@ -1,0 +1,63 @@
+name: crt-terminal
+title: Green phosphor monitor, close up
+
+# Monochrome by construction: the gradient map collapses the image to one hue
+# before anything else runs, so the grille and scanlines are shaping a
+# single-colour signal rather than tinting a colour one.
+
+output:
+  max_dim: 1400
+
+effects:
+  downsample:
+    factor: 3
+    filter: point
+
+  grade:
+    saturation: 0
+    contrast: 30
+    gamma: 0.85
+
+  gradient_map:
+    name: crt
+    strength: 1.0
+
+  bloom:
+    threshold: 45
+    radius: 18
+    strength: 1.1
+    tint: '#39FF14'
+
+  softness:
+    blur: 1.2
+    sharpen: 0.8
+    radius: 2
+
+  scanlines:
+    opacity: 0.45
+    spacing: 3
+    thickness: 1
+    softness: 1
+    drift: 3
+
+  grille:
+    width: 2
+    strength: 0.2
+    brighten: 1.2
+
+  grain:
+    amount: 0.05
+    shadow_bias: 0.5
+    mono: 1
+
+  curvature:
+    amount: 0.075
+    zoom: 1.1
+
+  glare:
+    strength: 0.12
+    angle: 40
+
+  vignette:
+    strength: 0.6
+    size: 1.25

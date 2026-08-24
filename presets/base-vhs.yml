@@ -1,0 +1,65 @@
+name: base-vhs
+title: Shared foundation for tape looks (meant to be extended)
+
+# Everything a picture goes through on its way onto tape and back off again,
+# with the damage dialled low. Other presets inherit this and turn things up
+# rather than restating the whole chain.
+
+output:
+  max_dim: 1600
+
+effects:
+  # Tape resolution comes first so every later effect works on soft detail.
+  downsample:
+    preset: vhs
+    filter: triangle
+
+  grade:
+    brightness: 112
+    saturation: 118
+    contrast: 6
+    tint: '#2B1E5C'
+    tint_strength: 0.08
+
+  # Luma sharp, chroma smeared: the defining artefact of composite video.
+  chroma_bleed:
+    amount: 7
+    saturation: 1.1
+
+  chroma_shift:
+    amount: 3
+    jitter: 1
+
+  softness:
+    blur: 0.7
+    sharpen: 1.4
+    radius: 2
+
+  wave:
+    amplitude: 2
+    wavelength: 140
+    harmonic: 0.5
+
+  tracking:
+    bands: 2
+    height: 14
+    displacement: 20
+    noise: 0.28
+
+  head_switch:
+    height: 12
+    skew: 22
+    noise: 0.45
+
+  grain:
+    amount: 0.05
+    shadow_bias: 0.6
+    mono: 1
+
+  scanlines:
+    opacity: 0.22
+    spacing: 3
+
+  vignette:
+    strength: 0.35
+    size: 1.5

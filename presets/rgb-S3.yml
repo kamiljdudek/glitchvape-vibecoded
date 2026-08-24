@@ -1,0 +1,43 @@
+name: rgb-S3
+
+effects:
+  rgb_shift:
+    amount: 5
+    angle: 0
+    edge: smear
+    jitter: 0.034
+    mode: random
+    pulse: 0
+  wave:
+    amplitude: 2.4
+    edge: wrap
+    harmonic: 0.074
+    phase: '-2'
+    wavelength: 90
+  static:
+    density: 0.032
+    intensity: 0.68
+    streak: 3
+  scanlines:
+    drift: 0
+    opacity: 0.213
+    softness: 0
+    spacing: 3
+    thickness: 1
+  vignette:
+    size: 1.4
+    softness: 2.36
+    strength: 0.72
+  text:
+    color: '#FFFFFF'
+    font: vcr
+    gravity: Center
+    opacity: 0.9
+    rotate: 0
+    shadow: '#FF00AA'
+    shadow_offset: 4
+    size: 7.1
+    spacing: 0
+    string: 'devoid of memory'
+    x: 0.006
+    y: 0.327

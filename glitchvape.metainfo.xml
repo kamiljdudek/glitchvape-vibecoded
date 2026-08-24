@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.glitchvape.GlitchVape</id>
+
+  <name>GlitchVape</name>
+  <summary>Apply VHS, CRT and databending effects to photographs</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      GlitchVape puts a photograph through a signal chain of thirty-nine
+      effects: tape wobble and tracking error, chromatic aberration, pixel
+      sorting and databending, film grain, scanlines and phosphor grilles,
+      and the text and furniture that sit over the top.
+    </p>
+    <p>
+      Order is not a free choice, so effects declare where in the chain they
+      belong and the pipeline sorts by it. Presets bundle a whole look, and
+      a render can be reproduced exactly from its seed.
+    </p>
+    <p>
+      The window is a front end rather than a second implementation: its
+      controls are generated from the same declarations that drive the
+      command line, and Export goes through the same code path, so a saved
+      image is identical to the equivalent invocation of the CLI.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">glitchvape.desktop</launchable>
+
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+
+  <keywords>
+    <keyword>glitch</keyword>
+    <keyword>vaporwave</keyword>
+    <keyword>VHS</keyword>
+    <keyword>CRT</keyword>
+    <keyword>databend</keyword>
+  </keywords>
+
+  <provides>
+    <binary>glitchvape</binary>
+    <binary>glitchvape-gui</binary>
+    <binary>glitchvape-batch</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.01" date="2026-08-24">
+      <description>
+        <p>
+          Adding an effect is now a three-page assistant with a live preview,
+          and the effect categories have been renamed to say what they are.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>

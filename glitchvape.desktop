@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GlitchVape
+GenericName=Image Glitch Editor
+Comment=Apply VHS, CRT and databending effects to photographs
+Exec=glitchvape-gui %f
+TryExec=glitchvape-gui
+Icon=glitchvape
+Terminal=false
+Categories=Graphics;Photography;RasterGraphics;2DGraphics;
+Keywords=glitch;vhs;crt;vaporwave;databend;pixelsort;scanlines;retro;
+MimeType=image/png;image/jpeg;image/heif;image/heic;image/tiff;image/webp;image/bmp;image/gif;image/avif;
+StartupNotify=true
+StartupWMClass=glitchvape-gui

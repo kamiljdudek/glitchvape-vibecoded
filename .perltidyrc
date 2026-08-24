@@ -1,0 +1,131 @@
+# perltidy configuration for GlitchVape
+#
+#   perltidy -pro=.perltidyrc lib/GlitchVape/*.pm      # rewrites in place
+#   perltidy -pro=.perltidyrc -nst -o=/dev/null <file> # analyse only
+#
+# perltidy reads this file automatically when run from the project root, so a
+# bare `perltidy <file>` picks it up.
+#
+# The house style is deliberately wide and unpacked: braces on their own lines,
+# spaces inside every kind of bracket, nothing welded together. This codebase is
+# arithmetic on pixel buffers and long chains of ImageMagick arguments, where
+# the risk is misreading a nesting level rather than running out of screen.
+
+
+# ---------------------------------------------------------------------------
+# Brace placement
+# ---------------------------------------------------------------------------
+
+# Opening brace of a block goes on the line *after* the condition, lined up
+# with the keyword (Allman / BSD style):
+#
+#     if ( $shift > 0 )
+#     {
+#         ...
+#     }
+#
+# rather than the K&R form with the brace trailing the condition.
+--opening-brace-on-new-line
+
+# Subroutine definitions get the same treatment, so a sub body's opening brace
+# is never visually confused with a hash constructor on the same line.
+--opening-sub-brace-on-new-line
+
+# The brace itself is not indented past the keyword it belongs to.
+--brace-left-and-indent-list=0
+
+# `}` and `else` sit on separate lines. Cuddling them ( `} else {` ) hides the
+# end of the first branch.
+--nocuddled-else
+
+# Opening brace of an anonymous hash or a list stays where it is; moving those
+# to their own line would push every effect's parameter table down a line for
+# no gain.
+--noopening-anonymous-sub-brace-on-new-line
+
+
+# ---------------------------------------------------------------------------
+# Whitespace inside brackets -- the "wide" part
+# ---------------------------------------------------------------------------
+
+# Tightness 0 means "always put a space inside": foo( $x ), [ 1, 2 ], { a => 1 }.
+# The default of 1 collapses these to foo($x), which reads faster on short
+# calls but makes a nested expression like
+#     substr( $bytes, ( $y + $r ) * $stride + $off, $rw )
+# noticeably harder to bracket-match by eye.
+--paren-tightness=0
+--brace-tightness=0
+--square-bracket-tightness=0
+
+# Note that brace-tightness governs hash *subscripts* as well as hash
+# constructors, so 0 gives `$p->{ amount }` and not just `{ a => 1 }`. That is
+# the consistent reading of a wide style, but it is the one setting here most
+# likely to be worth reconsidering: --brace-tightness=1 keeps `{ a => 1 }`
+# spaced while writing subscripts as `$p->{amount}`.
+
+# Same, for the block braces of anonymous subs and hash constructors.
+--block-brace-tightness=0
+
+# Do not pull a closing bracket up onto the previous line to save space.
+# Vertical tightness is the main way perltidy makes code compact; all of it
+# is off here.
+--vertical-tightness=0
+--vertical-tightness-closing=0
+--block-brace-vertical-tightness=0
+
+# Closing token gets no extra indentation beyond its opening line.
+--closing-token-indentation=0
+
+# Do not weld nested containers together, e.g. collapsing
+#     func( [ 1, 2 ] )
+# onto one bracket pair.
+--noweld-nested-containers
+
+
+# ---------------------------------------------------------------------------
+# Indentation and width
+# ---------------------------------------------------------------------------
+
+# Re-run until the formatting stops changing. Without this, a handful of long
+# call sites oscillate between two equally-valid line breakings, so a second
+# `perltidy` pass produces a diff and the style is not reproducible.
+--converge
+
+--indent-columns=4              # one level of block indentation
+--continuation-indentation=4    # wrapped expressions indent by a full level
+--maximum-line-length=80        # comfortable for side-by-side diffs
+
+# Do not outdent long quoted strings; the error messages in this codebase are
+# multi-line and should stay under their statement.
+--nooutdent-long-quotes
+--nooutdent-long-comments
+
+
+# ---------------------------------------------------------------------------
+# Operators and alignment
+# ---------------------------------------------------------------------------
+
+# Break *before* the logical operators when a condition has to wrap, so each
+# clause starts a line. Deliberately narrow: including assignment and
+# arithmetic operators here makes perltidy split simple statements in
+# surprising places.
+--want-break-before="&& || // and or"
+
+# Keep the vertical alignment of consecutive assignments and fat commas, which
+# is what makes the effect parameter tables readable as tables.
+--valign-code
+
+# perltidy already writes `if ( ... )` by default. Explicitly asking for a
+# space after every keyword would also produce `sin ( $x )` and `int ( $x )`,
+# which is not the intent.
+--nospace-function-paren
+
+
+# ---------------------------------------------------------------------------
+# Comments
+# ---------------------------------------------------------------------------
+
+# Leave full-line comments exactly where and how they are written. The
+# explanatory comments in this codebase are hand-wrapped to sit at a specific
+# indentation next to the code they explain.
+--nohanging-side-comments

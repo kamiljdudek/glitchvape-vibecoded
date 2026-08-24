@@ -1,0 +1,48 @@
+name: gameboy
+title: Four-tone handheld LCD
+
+# Four colours, hard dithered, at a resolution low enough that the dither
+# pattern is part of the image rather than a texture over it. Posterising
+# before the palette remap keeps the four tones evenly spread instead of
+# collapsing into two.
+
+output:
+  max_dim: 1200
+
+effects:
+  downsample:
+    factor: 6
+    filter: point
+
+  grade:
+    saturation: 0
+    contrast: 34
+    gamma: 0.9
+
+  posterize:
+    levels: 4
+    dither: floydsteinberg
+
+  palette:
+    name: gameboy
+    strength: 1.0
+    dither: floydsteinberg
+
+  scanlines:
+    opacity: 0.12
+    spacing: 6
+    thickness: 2
+
+  grille:
+    width: 3
+    strength: 0.1
+    brighten: 1.05
+
+  vignette:
+    strength: 0.35
+    size: 1.5
+
+  letterbox:
+    ratio: ''
+    border: 0.03
+    color: '#9BBC0F'

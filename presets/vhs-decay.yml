@@ -1,0 +1,77 @@
+name: vhs-decay
+title: Third-generation dub, tape shedding oxide
+extends: base-vhs
+
+# A tape that has been copied several times and stored badly. The tell is that
+# the damage is uneven: some bands are fine, others have lost tracking
+# entirely, and the colour has drifted further than the brightness.
+
+effects:
+  downsample:
+    preset: vhs
+    filter: point
+
+  grade:
+    saturation: 128
+    contrast: 10
+    tint: '#3A1E6E'
+    tint_strength: 0.12
+    gamma: 0.95
+
+  chroma_bleed:
+    amount: 14
+    saturation: 1.25
+
+  chroma_shift:
+    amount: 7
+    jitter: 3
+
+  wave:
+    amplitude: 5
+    wavelength: 95
+    harmonic: 0.6
+
+  tracking:
+    bands: 6
+    height: 22
+    displacement: 55
+    noise: 0.45
+    brighten: 0.22
+
+  dropout:
+    count: 20
+    length: 120
+    thickness: 2
+
+  head_switch:
+    height: 18
+    skew: 34
+    noise: 0.6
+
+  ghost:
+    offset: 9
+    strength: 0.22
+
+  static:
+    density: 0.012
+    streak: 4
+
+  grain:
+    amount: 0.09
+    shadow_bias: 0.55
+    mono: 1
+
+  scanlines:
+    opacity: 0.3
+    spacing: 3
+    drift: 3
+
+  vignette:
+    strength: 0.45
+    size: 1.4
+
+  osd:
+    rec: 1
+    timestamp: 1
+    mode: SP
+    size: 4

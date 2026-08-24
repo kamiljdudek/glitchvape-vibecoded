@@ -1,0 +1,386 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use utf8;
+
+use FindBin ();
+use lib "$FindBin::Bin/../lib";
+
+use Encode         ();
+use File::Basename qw(basename);
+use File::Spec     ();
+use Getopt::Long   qw(GetOptions :config no_ignore_case bundling);
+use Pod::Usage     qw(pod2usage);
+
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
+
+# Decode the command line so CLI-supplied text matches what a preset would
+# yield; see the same note in glitchvape.
+## no critic (Variables::RequireLocalizedPunctuationVars)
+@ARGV = map { Encode::decode( 'UTF-8', $_ ) } @ARGV;
+## use critic
+
+use GlitchVape         ();
+use GlitchVape::Config ();
+use GlitchVape::IO     ();
+
+our $VERSION = '0.01';
+
+my %opt = (
+    preset    => undef,
+    outdir    => 'out',
+    format    => 'png',
+    seed      => undef,
+    set       => [],
+    enable    => [],
+    disable   => [],
+    jobs      => 0,
+    max_dim   => undef,
+    quality   => undef,
+    recursive => 0,
+    force     => 0,
+    all       => 0,
+    verbose   => 0,
+    tag_seed  => 0,
+);
+
+GetOptions(
+    'p|preset=s'    => \$opt{ preset },
+    'o|outdir=s'    => \$opt{ outdir },
+    'f|format=s'    => \$opt{ format },
+    's|seed=s'      => \$opt{ seed },
+    'set=s@'        => $opt{ set },
+    'e|enable=s@'   => $opt{ enable },
+    'd|disable=s@'  => $opt{ disable },
+    'j|jobs=i'      => \$opt{ jobs },
+    'max-dim=i'     => \$opt{ max_dim },
+    'quality=i'     => \$opt{ quality },
+    'r|recursive'   => \$opt{ recursive },
+    'force'         => \$opt{ force },
+    'a|all-presets' => \$opt{ all },
+    'tag-seed'      => \$opt{ tag_seed },
+    'v|verbose+'    => \$opt{ verbose },
+    'h|help'        => sub { pod2usage( -verbose => 1, -exitval => 0 ) },
+    'man'           => sub { pod2usage( -verbose => 2, -exitval => 0 ) },
+) or pod2usage( -verbose => 0, -exitval => 2 );
+
+pod2usage(
+    -message => "glitchvape-batch: no input given\n",
+    -verbose => 0,
+    -exitval => 2,
+) unless @ARGV;
+
+my @inputs = collect_inputs( @ARGV );
+
+die "glitchvape-batch: no readable images found\n" unless @inputs;
+
+# Three ways to choose what to render: every preset, one named preset, or no
+# preset at all (effects come purely from --enable/--set).
+my @presets;
+
+if ( $opt{ all } )
+{
+    @presets = map { $_->{ name } } @{ GlitchVape::Config::list_presets() };
+
+    # Presets meant only to be inherited from are not renders in their own
+    # right, so a base-* template never becomes an output file.
+    @presets = grep { !defined || !m{^base-} } @presets;
+}
+elsif ( defined $opt{ preset } )
+{
+    @presets = ( $opt{ preset } );
+}
+else
+{
+    @presets = ( undef );
+}
+
+my @jobs;
+for my $input ( @inputs )
+{
+    for my $preset ( @presets )
+    {
+        my $output = GlitchVape::IO::derive_output_path(
+            $input,
+            dir      => $opt{ outdir },
+            format   => $opt{ format },
+            preset   => $preset,
+            seed     => $opt{ seed },
+            tag_seed => $opt{ tag_seed },
+        );
+        next if -e $output && !$opt{ force };
+        push @jobs, { input => $input, preset => $preset, output => $output };
+    }
+}
+
+unless ( @jobs )
+{
+    print "Nothing to do (all outputs exist; use --force to overwrite).\n";
+    exit 0;
+}
+
+printf "%d image(s) x %d preset(s) = %d render(s)\n",
+    scalar @inputs, scalar @presets, scalar @jobs;
+
+my $workers = $opt{ jobs } || detect_cpus();
+$workers = scalar @jobs if $workers > @jobs;
+
+# Forking for a single job costs more than it saves.
+my $failures;
+if ( $workers > 1 )
+{
+    $failures = run_parallel( \@jobs, $workers );
+}
+else
+{
+    $failures = run_serial( \@jobs );
+}
+
+printf "\n%d succeeded, %d failed\n", scalar( @jobs ) - $failures, $failures;
+
+if ( $failures )
+{
+    exit 1;
+}
+
+exit 0;
+
+# ---------------------------------------------------------------------------
+
+sub render_one
+{
+    my ( $job ) = @_;
+
+    my $result = GlitchVape::render(
+        input   => $job->{ input },
+        output  => $job->{ output },
+        preset  => $job->{ preset },
+        set     => $opt{ set },
+        enable  => $opt{ enable },
+        disable => $opt{ disable },
+        seed    => $opt{ seed },
+        max_dim => $opt{ max_dim },
+        quality => $opt{ quality },
+        verbose => $opt{ verbose } > 1,
+    );
+
+    return sprintf(
+        '%s  seed=%s  %.1fs',
+        $job->{ output },
+        $result->{ seed },
+        $result->{ elapsed }
+    );
+}
+
+sub run_serial
+{
+    my ( $jobs ) = @_;
+    my $failed = 0;
+
+    for my $job ( @$jobs )
+    {
+        my $line = eval { render_one( $job ) };
+        if ( $@ )
+        {
+            my $err = $@;
+            $err =~ s/\s+\z//;
+            print "  FAIL $job->{output}\n        $err\n";
+            $failed++;
+        }
+        else
+        {
+            print "  ok   $line\n";
+        }
+    }
+    return $failed;
+}
+
+sub run_parallel
+{
+    my ( $jobs, $pool_size ) = @_;
+
+    unless ( eval { require Parallel::ForkManager; 1 } )
+    {
+        warn "glitchvape-batch: Parallel::ForkManager not installed, "
+            . "running serially.\n"
+            . "  Install it with:  sudo apt install libparallel-forkmanager-perl\n";
+        return run_serial( $jobs );
+    }
+
+    my $pm     = Parallel::ForkManager->new( $pool_size );
+    my $failed = 0;
+
+    # Children cannot report back directly, so the exit code carries success
+    # and the message comes through the data-structure callback.
+    $pm->run_on_finish(
+        sub {
+            my ( undef, $exit, undef, undef, undef, $data ) = @_;
+            if ( $exit == 0 )
+            {
+                print "  ok   ${ $data || \'' }\n";
+            }
+            else
+            {
+                print "  FAIL ${ $data || \'(no message)' }\n";
+                $failed++;
+            }
+        }
+    );
+
+    printf "running %d worker(s)\n", $pool_size;
+
+    for my $job ( @$jobs )
+    {
+        $pm->start and next;
+
+        my $line = eval { render_one( $job ) };
+        if ( $@ )
+        {
+            my $err = $@;
+            $err =~ s/\s+\z//;
+            $err =~ s/\n/ /g;
+            $pm->finish( 1, \"$job->{output}: $err" );
+        }
+        $pm->finish( 0, \$line );
+    }
+
+    $pm->wait_all_children;
+    return $failed;
+}
+
+sub collect_inputs
+{
+    my ( @args ) = @_;
+    my @out;
+
+    for my $arg ( @args )
+    {
+        if ( -d $arg )
+        {
+            push @out, scan_dir( $arg );
+        }
+        elsif ( -f $arg )
+        {
+            push @out, $arg;
+        }
+        else
+        {
+            warn
+                "glitchvape-batch: skipping '$arg' (not a file or directory)\n";
+        }
+    }
+
+    my %seen;
+    return grep { !$seen{ $_ }++ } @out;
+}
+
+sub scan_dir
+{
+    my ( $dir ) = @_;
+    my @out;
+
+    opendir my $dh, $dir or do
+    {
+        warn "glitchvape-batch: cannot read directory $dir: $!\n";
+        return;
+    };
+
+    for my $entry ( sort readdir $dh )
+    {
+        next if $entry =~ /^\./;
+        my $path = File::Spec->catfile( $dir, $entry );
+
+        if ( -d $path )
+        {
+            push @out, scan_dir( $path ) if $opt{ recursive };
+        }
+        elsif ( -f $path && GlitchVape::IO::is_supported( $path ) )
+        {
+            push @out, $path;
+        }
+    }
+    closedir $dh;
+
+    return @out;
+}
+
+sub detect_cpus
+{
+    open my $fh, '<', '/proc/cpuinfo' or return 2;
+    my $n = grep { /^processor\s*:/ } <$fh>;
+    close $fh;
+
+    # Assume at least two, so an unreadable or unusual cpuinfo still gets
+    # some parallelism rather than none.
+    if ( $n > 1 )
+    {
+        return $n;
+    }
+
+    return 2;
+}
+
+__END__
+
+=head1 NAME
+
+glitchvape-batch - render many images, or many presets, in parallel
+
+=head1 SYNOPSIS
+
+  glitchvape-batch [options] <file-or-directory> ...
+
+  glitchvape-batch -p vhs-decay Pictures/
+  glitchvape-batch --all-presets Pictures/IMG_8111.HEIC
+  glitchvape-batch -p mallsoft -j 8 -o renders/ Pictures/ -r
+
+ Options:
+   -p, --preset NAME     preset to apply
+   -a, --all-presets     render every preset (excluding base-* templates)
+   -o, --outdir DIR      output directory (default out)
+   -f, --format EXT      output format (default png)
+   -s, --seed VALUE      shared seed for every render
+       --tag-seed        include the seed in output filenames
+       --set E.P=V       parameter override; repeatable
+   -e, --enable NAME     switch an effect on; repeatable
+   -d, --disable NAME    switch an effect off; repeatable
+   -j, --jobs N          parallel workers (default: CPU count)
+   -r, --recursive       descend into subdirectories
+       --force           overwrite existing outputs
+       --max-dim N       downscale sources first
+       --quality N       output quality
+   -v, --verbose         more detail; twice for per-effect logging
+   -h, --help            this summary
+       --man             full documentation
+
+=head1 DESCRIPTION
+
+Renders every input against every selected preset. Existing outputs are
+skipped unless C<--force> is given, so an interrupted run can be restarted
+without redoing finished work.
+
+Output paths are derived from the input name and the preset, so one directory
+can hold every variant without collisions:
+
+  Pictures/IMG_8111.HEIC + preset mallsoft  ->  out/IMG_8111.mallsoft.png
+
+=head2 Comparing presets
+
+C<--all-presets> against a single image renders the whole library at once,
+which is the quickest way to decide what a given photograph wants:
+
+  glitchvape-batch --all-presets --seed 1 Pictures/IMG_8111.HEIC
+
+=head2 Parallelism
+
+Work is distributed with L<Parallel::ForkManager> when it is installed, one
+image per worker. Rendering is CPU-bound and single-threaded per image, so the
+default of one worker per core is usually right.
+
+=head1 SEE ALSO
+
+L<glitchvape>, L<GlitchVape>
+
+=cut

@@ -1,0 +1,414 @@
+package GlitchVape::Registry;
+
+use strict;
+use warnings;
+
+use List::Util   qw(any);
+use Scalar::Util qw(looks_like_number);
+
+our $VERSION = '0.01';
+
+=head1 NAME
+
+GlitchVape::Registry - effect declaration, lookup and parameter validation
+
+=head1 DESCRIPTION
+
+Effects declare themselves at load time. Everything the CLI needs -- flag
+names, defaults, help text, validation ranges -- comes from that one
+declaration, so adding an effect never means editing the option parser.
+
+=head1 STAGES
+
+Order is not a free choice: scanlines applied before a downsample get eaten by
+the resample, and a vignette applied before a chroma split gets its dark edges
+smeared into colour fringes. Effects therefore declare a numeric stage and the
+pipeline sorts by it. Presets may override with an explicit C<order:> list.
+
+    10  format     resolution reduction, crop, aspect
+    20  colour     grading, palette, duotone, depth reduction
+    30  channels   channel separation and bleed
+    40  damage     pixel sorting, databending, compression damage
+    50  signal     transport artefacts: wobble, roll, ghost, snow
+    60  grain      film grain and ordered dither
+    70  optics     scanlines, phosphor, bloom, glass, lens
+    80  overlay    text, grid, furniture
+    90  framing    final crop, border, letterbox
+
+A stage is two things at once: the point in the chain where an effect runs,
+and the heading a person browses it under. The names above are chosen to be
+honest about both. C<colour> rather than C<grade>, because only one of the
+seven effects there is grading; C<damage> rather than C<destroy>, because the
+latter said how it felt rather than what it did; C<optics> rather than
+C<screen>, because a lens is not a screen but belongs in the same late pass.
+
+=head2 STAGE_INFO
+
+Each stage carries its running order, a presentable title and a line of
+description. The interface reads all three; nothing else needs the last two.
+
+=cut
+
+use constant STAGE_INFO => {
+    format => {
+        order => 10,
+        title => 'Resolution & Format',
+        blurb =>
+            'Throw away resolution or change the shape of the frame. Runs '
+            . 'first, because everything after it works on what is left.',
+    },
+    colour => {
+        order => 20,
+        title => 'Colour',
+        blurb => 'Grade it, reduce it, or force it into a fixed palette.',
+    },
+    channels => {
+        order => 30,
+        title => 'Channel Separation',
+        blurb =>
+            'Pull red, green and blue apart, or let colour bleed sideways '
+            . 'the way composite video does.',
+    },
+    damage => {
+        order => 40,
+        title => 'Data Damage',
+        blurb =>
+            'Corrupt the picture as data rather than as an image: sorted, '
+            . 'displaced, compressed past recovery.',
+    },
+    signal => {
+        order => 50,
+        title => 'Signal & Tape',
+        blurb => 'What the picture picked up in transport: wobble, tracking, '
+            . 'ghosting, snow.',
+    },
+    grain => {
+        order => 60,
+        title => 'Grain & Dither',
+        blurb =>
+            'The texture of the medium: film grain, and the patterns left '
+            . 'by a reduced bit depth.',
+    },
+    optics => {
+        order => 70,
+        title => 'Screen & Optics',
+        blurb => 'What it looks like through the glass: scanlines, phosphor, '
+            . 'bloom, curvature, lens softness.',
+    },
+    overlay => {
+        order => 80,
+        title => 'Overlays',
+        blurb => 'Text and furniture drawn on top of the finished picture.',
+    },
+    framing => {
+        order => 90,
+        title => 'Framing',
+        blurb => 'The last word on the edges: bars, borders, aspect.',
+    },
+};
+
+=head2 STAGES
+
+Stage name to running order, which is all the pipeline itself needs.
+
+=cut
+
+use constant STAGES =>
+    { map { $_ => STAGE_INFO->{ $_ }{ order } } keys %{ +STAGE_INFO } };
+
+my %EFFECT;
+
+=head2 register( %spec )
+
+    GlitchVape::Registry->register(
+        name    => 'scanlines',
+        title   => 'Scanlines',
+        stage   => 'optics',
+        summary => 'CRT horizontal scanline overlay',
+        params  => {
+            opacity => { default => 0.35, type => 'num', min => 0, max => 1,
+                         doc => 'Darkness of each line' },
+            spacing => { default => 3, type => 'int', min => 1, max => 64,
+                         doc => 'Pixels between line centres' },
+        },
+        apply   => \&_scanlines,
+    );
+
+C<name> is the identifier -- the CLI flag, the preset key, the cache key --
+and never changes. C<title> is what a person is shown. An effect that omits
+one gets a title derived from its name, so the two never drift apart by
+accident, only on purpose.
+
+=cut
+
+sub register
+{
+    my ( $class, %spec ) = @_;
+    $class = ref $class || $class;
+
+    my $name = $spec{ name }
+        or die "GlitchVape::Registry: effect registered without a name\n";
+
+    die "GlitchVape::Registry: effect '$name' registered twice\n"
+        if $EFFECT{ $name };
+
+    die "GlitchVape::Registry: effect '$name' has no apply coderef\n"
+        unless ref $spec{ apply } eq 'CODE';
+
+    my $stage = $spec{ stage } // 'optics';
+    my $order = STAGES->{ $stage }
+        or die
+        "GlitchVape::Registry: effect '$name' has unknown stage '$stage'\n";
+
+    my $params = $spec{ params } || {};
+    for my $p ( sort keys %$params )
+    {
+        my $d = $params->{ $p };
+
+        # A parameter that omits its type is inferred from the shape of its
+        # default: anything numeric is treated as a number, everything else
+        # as a free string.
+        if ( !$d->{ type } )
+        {
+            if ( looks_like_number( $d->{ default } ) )
+            {
+                $d->{ type } = 'num';
+            }
+            else
+            {
+                $d->{ type } = 'str';
+            }
+        }
+        die "GlitchVape::Registry: $name.$p has no default\n"
+            unless exists $d->{ default };
+    }
+
+    $EFFECT{ $name } = {
+        name     => $name,
+        title    => $spec{ title } // _titlecase( $name ),
+        stage    => $stage,
+        order    => $order,
+        summary  => $spec{ summary } // '',
+        params   => $params,
+        apply    => $spec{ apply },
+        requires => $spec{ requires } || [],
+        doc      => $spec{ doc } // '',
+    };
+
+    return $EFFECT{ $name };
+}
+
+# 'chroma_shift' -> 'Chroma Shift'. Only a fallback: every shipped effect
+# declares a title, because the derived form cannot know that 'osd' wants to
+# be 'Camcorder OSD'.
+sub _titlecase
+{
+    my ( $name ) = @_;
+
+    my @words = split /_/, $name;
+    return join q{ }, map { ucfirst } @words;
+}
+
+=head2 get( $name )
+
+Effect spec hashref, or undef.
+
+=cut
+
+sub get
+{
+    my ( $class, $name ) = @_;
+    $name = $class unless ref $class || $class eq __PACKAGE__;
+    return $EFFECT{ $name };
+}
+
+=head2 names()
+
+All registered effect names, in pipeline order then alphabetically.
+
+=cut
+
+sub names
+{
+    # Materialised rather than returned straight from sort: the behaviour of a
+    # sort evaluated in scalar context is undefined.
+    my @names =
+        sort { $EFFECT{ $a }{ order } <=> $EFFECT{ $b }{ order } || $a cmp $b }
+        keys %EFFECT;
+    return @names;
+}
+
+=head2 all()
+
+The full registry as a hashref, keyed by name.
+
+=cut
+
+sub all { \%EFFECT }
+
+=head2 by_stage()
+
+Effect names grouped as C<< { stage => [ names ] } >>.
+
+=cut
+
+sub by_stage
+{
+    my %out;
+    push @{ $out{ $EFFECT{ $_ }{ stage } } }, $_ for names();
+    return \%out;
+}
+
+=head2 stages()
+
+Stage names in running order.
+
+=cut
+
+sub stages
+{
+    my @stages =
+        sort { STAGES->{ $a } <=> STAGES->{ $b } } keys %{ +STAGES };
+    return @stages;
+}
+
+=head2 stage_info( $stage )
+
+    { name, order, title, blurb }
+
+for one stage, or undef. The interface groups the effect chooser by this;
+nothing in the render path reads past C<order>.
+
+=cut
+
+sub stage_info
+{
+    my ( $class, $stage ) = @_;
+    $stage = $class unless ref $class || $class eq __PACKAGE__;
+
+    my $info = STAGE_INFO->{ $stage } or return undef;
+    return { name => $stage, %$info };
+}
+
+=head2 resolve_params( $name, $given )
+
+Merge user-supplied values over defaults, coercing and range-checking each.
+Dies on an unknown parameter -- a silently ignored typo in a preset is the
+difference between "the effect did nothing" and half an hour of confusion.
+
+=cut
+
+sub resolve_params
+{
+    my ( $class, $name, $given ) = @_;
+    $given ||= {};
+
+    my $spec = $EFFECT{ $name }
+        or die "GlitchVape: unknown effect '$name'. Try --list-effects.\n";
+
+    my %out;
+    my $params = $spec->{ params };
+
+    for my $key ( keys %$given )
+    {
+        next if $key eq 'enabled' || $key eq 'order';
+        if ( !$params->{ $key } )
+        {
+            my @known = sort keys %$params;
+
+            # Listing what *is* accepted turns a typo from a dead end into a
+            # one-line fix. An effect with no parameters at all says so.
+            my $hint = "  It takes no parameters.\n";
+            if ( @known )
+            {
+                $hint = '  Valid: ' . join( ', ', @known ) . "\n";
+            }
+
+            die "GlitchVape: effect '$name' has no parameter '$key'.\n" . $hint;
+        }
+    }
+
+    for my $key ( sort keys %$params )
+    {
+        my $d = $params->{ $key };
+
+        # A key the caller did not mention falls back to the declared
+        # default; note that an explicitly-supplied undef is honoured rather
+        # than being replaced.
+        my $val = $d->{ default };
+        if ( exists $given->{ $key } )
+        {
+            $val = $given->{ $key };
+        }
+        $out{ $key } = _coerce( $name, $key, $val, $d );
+    }
+
+    return \%out;
+}
+
+sub _coerce
+{
+    my ( $effect, $key, $val, $d ) = @_;
+    my $type = $d->{ type };
+
+    if ( $type eq 'bool' )
+    {
+        return 0 if !defined $val;
+        return 0 if $val =~ /^(0|no|off|false|)$/i;
+        return 1;
+    }
+
+    if ( $type eq 'num' || $type eq 'int' )
+    {
+        die "GlitchVape: $effect.$key expects a number, got '$val'\n"
+            unless looks_like_number( $val );
+        if ( $type eq 'int' )
+        {
+
+            # Round to nearest rather than truncating, and round away from
+            # zero on negatives so that -2.5 becomes -3, not -2.
+            my $bias = 0.5;
+            if ( $val < 0 )
+            {
+                $bias = -0.5;
+            }
+            $val = int( $val + $bias );
+        }
+        else
+        {
+            # Force numeric context so that a string from the CLI compares
+            # numerically against min/max below.
+            $val = $val + 0;
+        }
+
+        if ( defined $d->{ min } && $val < $d->{ min } )
+        {
+            die "GlitchVape: $effect.$key must be >= $d->{min}, got $val\n";
+        }
+        if ( defined $d->{ max } && $val > $d->{ max } )
+        {
+            die "GlitchVape: $effect.$key must be <= $d->{max}, got $val\n";
+        }
+        return $val;
+    }
+
+    if ( $type eq 'enum' )
+    {
+        my @ok = @{ $d->{ values } || [] };
+        return $val if any { lc $_ eq lc( $val // '' ) } @ok;
+        die "GlitchVape: $effect.$key must be one of: "
+            . join( ', ', @ok )
+            . " (got '"
+            . ( $val // '' ) . "')\n";
+    }
+
+    if ( $type eq 'list' )
+    {
+        return $val if ref $val eq 'ARRAY';
+        return [ grep { length } split /\s*,\s*/, ( $val // '' ) ];
+    }
+
+    return $val;
+}
+
+1;

@@ -1,0 +1,82 @@
+name: broadcast
+title: Weak aerial, 2am, off-air
+extends: base-vhs
+
+# An over-the-air signal rather than a tape: ghosting from multipath, snow
+# from a weak carrier, and a picture that will not hold vertical lock. The
+# interlace comb is the giveaway that this is live video and not a still.
+
+output:
+  max_dim: 1500
+
+effects:
+  downsample:
+    preset: vhs-pal
+    filter: triangle
+
+  grade:
+    brightness: 108
+    saturation: 88
+    contrast: 12
+    tint: '#1E3A5C'
+    tint_strength: 0.1
+
+  ghost:
+    offset: 22
+    count: 3
+    strength: 0.4
+    falloff: 0.55
+
+  interlace:
+    offset: 4
+    dim: 0.16
+    field: odd
+
+  vhold:
+    offset: 0.06
+    tear: 8
+
+  static:
+    density: 0.055
+    intensity: 0.9
+    streak: 5
+
+  tracking:
+    bands: 4
+    height: 12
+    displacement: 26
+    noise: 0.5
+
+  dropout:
+    count: 26
+    length: 150
+    thickness: 2
+
+  head_switch:
+    height: 16
+    skew: 28
+    noise: 0.65
+
+  grain:
+    amount: 0.1
+    shadow_bias: 0.4
+    mono: 1
+
+  scanlines:
+    opacity: 0.32
+    spacing: 2
+    drift: 2
+
+  curvature:
+    amount: 0.045
+    zoom: 1.06
+
+  vignette:
+    strength: 0.5
+    size: 1.35
+
+  osd:
+    rec: 0
+    timestamp: 1
+    mode: ''
+    size: 3.8

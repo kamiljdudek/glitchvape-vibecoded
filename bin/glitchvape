@@ -1,0 +1,961 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use utf8;
+
+use FindBin ();
+use lib "$FindBin::Bin/../lib";
+
+use Encode       ();
+use Getopt::Long qw(GetOptions :config no_ignore_case bundling);
+use Pod::Usage   qw(pod2usage);
+
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
+
+# Decode the command line up front so that a string given as
+# --set text.string=ヴェイパーウェイブ is character data by the time it reaches
+# an effect, exactly as the same string loaded from a YAML preset would be.
+# Without this the two paths disagree and CLI text renders as mojibake.
+#
+# Not localised: this is a program's main body, so there is no enclosing scope
+# to restore @ARGV to, and the decoded form is what every later stage expects.
+## no critic (Variables::RequireLocalizedPunctuationVars)
+@ARGV = map { Encode::decode( 'UTF-8', $_ ) } @ARGV;
+## use critic
+
+use GlitchVape            ();
+use GlitchVape::Audio     ();
+use GlitchVape::Config    ();
+use GlitchVape::DTMF      ();
+use GlitchVape::Generator ();
+use GlitchVape::Fonts     ();
+use GlitchVape::Palette   ();
+use GlitchVape::Registry  ();
+use GlitchVape::Tools     ();
+use GlitchVape::IO        ();
+
+our $VERSION = '0.01';
+
+my %opt = (
+    preset   => undef,
+    output   => undef,
+    seed     => undef,
+    max_dim  => undef,
+    quality  => undef,
+    set      => [],
+    enable   => [],
+    disable  => [],
+    animate  => 0,
+    frames   => 24,
+    fps      => 12,
+    verbose  => 0,
+    dry_run  => 0,
+    optimise => 0,
+
+    audio        => undef,
+    audio_start  => undef,
+    audio_end    => undef,
+    audio_filter => [],
+    audio_gain   => undef,
+
+    dtmf                => undef,
+    dtmf_digits         => 0,
+    dtmf_tone_ms        => undef,
+    dtmf_gap_ms         => undef,
+    dtmf_same_key_pause => undef,
+    dtmf_dial_tone      => undef,
+    dtmf_dial_tone_sec  => undef,
+    dtmf_gain           => undef,
+    show_dial           => 0,
+);
+
+# Generated tracks are a list rather than a set of flags, because there can be
+# several and two of the same kind is a perfectly ordinary thing to ask for.
+# --generate starts one and --gen sets a parameter on whichever was started
+# most recently, which is the one shape that needs no quoting: a phrase full of
+# commas and spaces is just a value.
+my @generated;
+
+GetOptions(
+    'p|preset=s'   => \$opt{ preset },
+    'o|output=s'   => \$opt{ output },
+    's|seed=s'     => \$opt{ seed },
+    'set=s@'       => $opt{ set },
+    'e|enable=s@'  => $opt{ enable },
+    'd|disable=s@' => $opt{ disable },
+    'max-dim=i'    => \$opt{ max_dim },
+    'quality=i'    => \$opt{ quality },
+    'optimise!'    => \$opt{ optimise },
+    'optimize!'    => \$opt{ optimise },
+
+    'a|animate' => \$opt{ animate },
+    'frames=i'  => \$opt{ frames },
+    'fps=i'     => \$opt{ fps },
+
+    'audio=s'         => \$opt{ audio },
+    'audio-start=f'   => \$opt{ audio_start },
+    'audio-end=f'     => \$opt{ audio_end },
+    'audio-filter=s@' => $opt{ audio_filter },
+    'audio-gain=f'    => \$opt{ audio_gain },
+
+    'dtmf=s'                => \$opt{ dtmf },
+    'dtmf-digits'           => \$opt{ dtmf_digits },
+    'dtmf-tone-ms=i'        => \$opt{ dtmf_tone_ms },
+    'dtmf-gap-ms=i'         => \$opt{ dtmf_gap_ms },
+    'dtmf-same-key-pause=i' => \$opt{ dtmf_same_key_pause },
+    'dtmf-dial-tone=s'      => \$opt{ dtmf_dial_tone },
+    'dtmf-dial-tone-sec=f'  => \$opt{ dtmf_dial_tone_sec },
+    'dtmf-gain=f'           => \$opt{ dtmf_gain },
+    'show-dial'             => \$opt{ show_dial },
+
+    'generate=s' => \&start_generated,
+    'gen=s'      => \&set_generated,
+
+    'v|verbose+' => \$opt{ verbose },
+    'n|dry-run'  => \$opt{ dry_run },
+
+    'list-effects'       => \&list_effects,
+    'list-presets'       => \&list_presets,
+    'list-palettes'      => \&list_palettes,
+    'list-audio-filters' => \&list_audio_filters,
+    'list-generators'    => \&list_generators,
+    'explain=s'          => \&explain_effect,
+    'check-deps'         => \&check_deps,
+    'check-fonts'        => \&check_fonts,
+
+    'h|help'  => sub { pod2usage( -verbose => 1, -exitval => 0 ) },
+    'man'     => sub { pod2usage( -verbose => 2, -exitval => 0 ) },
+    'version' => sub { print "glitchvape $VERSION\n"; exit 0 },
+) or pod2usage( -verbose => 0, -exitval => 2 );
+
+# Bare `--set foo.bar=1` style arguments are common enough to accept without
+# the flag, since a shell history full of --set gets tiresome.
+my @inputs;
+for my $arg ( @ARGV )
+{
+    if ( $arg =~ /^[\w-]+\.[\w-]+=/ )
+    {
+        push @{ $opt{ set } }, $arg;
+    }
+    else
+    {
+        push @inputs, $arg;
+    }
+}
+
+pod2usage(
+    -message => "glitchvape: no input file given\n",
+    -verbose => 0,
+    -exitval => 2,
+) unless @inputs;
+
+pod2usage(
+    -message =>
+        "glitchvape: only one input file; use glitchvape-batch for many\n",
+    -verbose => 0,
+    -exitval => 2,
+) if @inputs > 1;
+
+my $input = $inputs[ 0 ];
+
+unless ( -f $input )
+{
+    die "glitchvape: no such file: $input\n";
+}
+
+unless ( GlitchVape::IO::is_supported( $input ) )
+{
+    warn "glitchvape: $input has an unusual extension; attempting anyway\n";
+}
+
+my $output = $opt{ output };
+
+if ( !defined $output )
+{
+    # An animated render defaults to video, a still to PNG. The extension is
+    # what picks the encoder further down, so this has to match the mode.
+    my $default_format = 'png';
+    if ( $opt{ animate } )
+    {
+        $default_format = 'mp4';
+    }
+
+    $output = GlitchVape::IO::derive_output_path(
+        $input,
+        dir    => 'out',
+        format => $default_format,
+        preset => $opt{ preset },
+    );
+}
+
+my $audio = eval { build_audio_spec() };
+
+if ( my $err = $@ )
+{
+    $err =~ s/\s+\z//;
+    print { *STDERR } "$err\n";
+    exit 2;
+}
+
+my $result = eval {
+    GlitchVape::render(
+        input    => $input,
+        output   => $output,
+        preset   => $opt{ preset },
+        set      => $opt{ set },
+        enable   => $opt{ enable },
+        disable  => $opt{ disable },
+        seed     => $opt{ seed },
+        max_dim  => $opt{ max_dim },
+        quality  => $opt{ quality },
+        optimise => $opt{ optimise },
+        verbose  => $opt{ verbose },
+        dry_run  => $opt{ dry_run },
+        animate  => build_animate_spec( $audio ),
+    );
+};
+
+if ( my $err = $@ )
+{
+    $err =~ s/\s+\z//;
+    print { *STDERR } "$err\n";
+    exit 1;
+}
+
+if ( $opt{ dry_run } )
+{
+    print "Pipeline for ", ( $opt{ preset } // '(no preset)' ), ":\n";
+    my $desc = $result->{ pipeline }->describe;
+
+    if ( length $desc )
+    {
+        print "$desc\n";
+    }
+    else
+    {
+        print "  (no effects enabled)\n";
+    }
+    printf "\nseed: %s\noutput would be: %s\n", $result->{ seed },
+        $result->{ output };
+    exit 0;
+}
+
+printf "%s  %dx%d  seed=%s  %.1fs\n",
+    $result->{ output },
+    $result->{ dims }[ 0 ], $result->{ dims }[ 1 ],
+    $result->{ seed },
+    $result->{ elapsed };
+
+if ( $result->{ audio } )
+{
+    printf "  audio: %s\n", GlitchVape::Audio::describe( $result->{ audio } );
+}
+
+if ( $opt{ verbose } > 1 && $result->{ timings } )
+{
+    printf "  %-16s %5.2fs\n", @$_ for @{ $result->{ timings } };
+}
+
+exit 0;
+
+# ---------------------------------------------------------------------------
+
+# The audio spec, or undef when no track was asked for. Built before rendering
+# rather than inside it so that a mistyped filter name costs nothing: this is
+# the one part of the command line that can be fully checked without decoding
+# the photograph.
+sub build_audio_spec
+{
+    my @made = build_generated();
+
+    return undef unless defined $opt{ audio } || @made;
+
+    # Generated tracks on their own are a complete soundtrack: they are the
+    # track, and the loop repeats to cover them exactly as it would a file.
+    unless ( defined $opt{ audio } )
+    {
+        return { generated => \@made };
+    }
+
+    die "glitchvape: no such audio file: $opt{audio}\n" unless -f $opt{ audio };
+
+    unless ( GlitchVape::Audio::is_supported( $opt{ audio } ) )
+    {
+        warn "glitchvape: $opt{audio} has an unusual extension; "
+            . "attempting anyway\n";
+    }
+
+    my $probe = GlitchVape::Audio::probe( $opt{ audio } );
+
+    my $start = $opt{ audio_start };
+    $start = 0 unless defined $start;
+
+    # No --audio-end means the rest of the file, which is what a user who
+    # passed a jingle rather than an album track will have meant.
+    my $end = $opt{ audio_end };
+    $end = $probe->{ duration } unless defined $end;
+
+    $start = 0                    if $start < 0;
+    $end   = $probe->{ duration } if $end > $probe->{ duration };
+
+    die sprintf( "glitchvape: --audio-end %s is not after --audio-start %s\n",
+        $end, $start )
+        unless $end > $start;
+
+    my %given;
+    for my $item ( @{ $opt{ audio_filter } } )
+    {
+        my ( $name, $value ) = $item =~ /^([\w-]+)=(.*)$/;
+
+        unless ( defined $name )
+        {
+            die "glitchvape: --audio-filter takes name=value, got '$item'.\n"
+                . "  Try --list-audio-filters\n";
+        }
+
+        $given{ $name } = $value;
+    }
+
+    my $spec = {
+        path      => $opt{ audio },
+        start     => $start,
+        end       => $end,
+        filters   => GlitchVape::Audio::resolve_filters( \%given ),
+        generated => \@made,
+    };
+
+    if ( defined $opt{ audio_gain } )
+    {
+        $spec->{ gain } = $opt{ audio_gain };
+    }
+
+    if ( GlitchVape::Audio::is_long( $spec ) )
+    {
+        # The same exclamation the wizard shows, for the same reason: the loop
+        # is repeated to cover this, so it is also the encode time.
+        warn sprintf
+            "glitchvape: !  the selected audio is %s long, so the loop will\n"
+            . "   repeat to cover it and the encode will take a while.\n",
+            GlitchVape::Audio::format_time(
+            GlitchVape::Audio::selection_length( $spec ) );
+    }
+
+    for my $cut ( GlitchVape::Audio::truncated( $spec ) )
+    {
+        # The file decides the length, so anything longer is cut. That is the
+        # rule working, but what disappears is the end of something somebody
+        # typed, so it is worth saying out loud.
+        # The description goes on its own line: it is a whole sentence for a
+        # dialled phrase, and folded into the message it makes the first line
+        # run off the terminal.
+        warn sprintf
+            "glitchvape: !  the last %s of this will not be heard, because\n"
+            . "   the soundtrack is shorter than it is:\n"
+            . "     %s\n"
+            . "   Lengthen the crop, or shorten the track.\n",
+            GlitchVape::Audio::format_time( $cut->[ 1 ] ), $cut->[ 0 ];
+    }
+
+    return $spec;
+}
+
+# --generate starts a track; every --gen after it belongs to that track.
+sub start_generated
+{
+    my ( undef, $kind ) = @_;
+
+    push @generated, { kind => "$kind" };
+
+    return;
+}
+
+sub set_generated
+{
+    my ( undef, $pair ) = @_;
+
+    unless ( @generated )
+    {
+        die "glitchvape: --gen needs a --generate before it.\n"
+            . "  Try --list-generators\n";
+    }
+
+    my ( $name, $value ) = $pair =~ /^([\w-]+)=(.*)\z/s;
+
+    unless ( defined $name )
+    {
+        die "glitchvape: --gen takes name=value, got '$pair'.\n"
+            . "  Try --list-generators\n";
+    }
+
+    $generated[ -1 ]{ $name } = $value;
+
+    return;
+}
+
+# Every generated track, validated. Built before rendering rather than inside
+# it so that a mistyped kind or parameter costs nothing: this is the part of
+# the command line that can be checked without decoding the photograph.
+sub build_generated
+{
+    my @spec = @generated;
+
+    # --dtmf and its family are the shorthand for the commonest case, and
+    # append one dialled track of their own.
+    if ( defined $opt{ dtmf } && length $opt{ dtmf } )
+    {
+        push @spec, dtmf_from_flags();
+    }
+
+    my @resolved;
+
+    for my $track ( @spec )
+    {
+        my $done = GlitchVape::Generator::resolve( $track );
+        next unless $done;
+
+        report_dialled( $done );
+        push @resolved, $track;
+    }
+
+    return @resolved;
+}
+
+sub dtmf_from_flags
+{
+    my $mode = 'text';
+    if ( $opt{ dtmf_digits } )
+    {
+        $mode = 'digits';
+    }
+
+    my %spec = ( kind => 'dtmf', text => $opt{ dtmf }, mode => $mode );
+
+    # Only what was actually asked for is put in the spec; everything else is
+    # left for GlitchVape::DTMF to default, so the Hayes cadence lives in one
+    # place rather than being repeated here.
+    my %from = (
+        tone_ms           => $opt{ dtmf_tone_ms },
+        gap_ms            => $opt{ dtmf_gap_ms },
+        same_key_pause_ms => $opt{ dtmf_same_key_pause },
+        dial_tone         => $opt{ dtmf_dial_tone },
+        dial_tone_sec     => $opt{ dtmf_dial_tone_sec },
+        gain              => $opt{ dtmf_gain },
+    );
+
+    for my $key ( sort keys %from )
+    {
+        $spec{ $key } = $from{ $key } if defined $from{ $key };
+    }
+
+    return \%spec;
+}
+
+# Only a dialled track has any of this; everything else falls straight
+# through.
+sub report_dialled
+{
+    my ( $resolved ) = @_;
+
+    my $presses = $resolved->{ _presses } or return;
+
+    if ( $opt{ show_dial } )
+    {
+        printf "dialling: %s\n", join q{}, @$presses;
+    }
+
+    # Characters with no key at all are worth saying rather than losing
+    # quietly: a phrase full of commas dials as noticeably less than it looks
+    # like it should.
+    my $dropped = $resolved->{ _dropped };
+    return unless $dropped && @$dropped;
+
+    my %seen;
+    my @unique = grep { !$seen{ $_ }++ } @$dropped;
+
+    warn sprintf "glitchvape: no key for %d character(s): %s\n",
+        scalar @$dropped, join q{}, sort @unique;
+
+    return;
+}
+
+sub build_animate_spec
+{
+    my ( $spec ) = @_;
+
+    unless ( $opt{ animate } )
+    {
+        # A soundtrack on a still is nothing. Worth saying rather than
+        # ignoring.
+        warn "glitchvape: --audio and --dtmf have no effect without "
+            . "--animate\n"
+            if $spec;
+
+        return undef;
+    }
+
+    return {
+        frames => $opt{ frames },
+        fps    => $opt{ fps },
+        audio  => $spec,
+    };
+}
+
+sub list_audio_filters
+{
+    print "Audio filters, in the order they are applied:\n\n";
+
+    for my $f ( @{ GlitchVape::Audio::filters() } )
+    {
+        printf "  %-9s %s..%s  default %-5s %s\n",
+            $f->{ name }, $f->{ min }, $f->{ max }, $f->{ default },
+            $f->{ summary };
+    }
+
+    print <<'END_USAGE';
+
+A filter not named is switched off. Values are clamped to the range shown.
+
+  glitchvape -p mallsoft --animate --audio track.mp3 \
+      --audio-start 30 --audio-end 52 \
+      --audio-filter slowed=0.75 --audio-filter reverb=0.5 photo.heic
+
+END_USAGE
+
+    exit 0;
+}
+
+sub list_generators
+{
+    print "Generated tracks. Each --generate starts one; the --gen after it\n"
+        . "set its parameters, and there can be as many as you like.\n";
+
+    for my $kind ( GlitchVape::Generator::kinds() )
+    {
+        my $declared = GlitchVape::Generator::get( $kind );
+
+        printf "\n%s  --  %s\n%s\n", $kind, $declared->{ label },
+            $declared->{ summary };
+
+        my $params = $declared->{ params };
+
+        for my $name ( @{ $declared->{ order } } )
+        {
+            my $field = $params->{ $name };
+
+            my $range = $field->{ type };
+            if ( $field->{ type } eq 'enum' )
+            {
+                $range = join '|', @{ $field->{ values } };
+            }
+            elsif ( defined $field->{ min } )
+            {
+                $range = "$field->{min}..$field->{max}";
+            }
+
+            printf "  %-18s %-22s default %s\n", $name, $range,
+                $field->{ default };
+        }
+    }
+
+    print <<'END_USAGE';
+
+  glitchvape -p anaglyph --animate \
+      --generate static --gen tone=0.5 --gen seconds=20 \
+      --generate dtmf --gen 'text=call me maybe' --gen dial_tone=eu \
+      photo.heic
+
+END_USAGE
+
+    exit 0;
+}
+
+sub list_effects
+{
+    my $all = GlitchVape::Registry->all;
+    my $by  = GlitchVape::Registry->by_stage;
+
+    for my $stage ( GlitchVape::Registry->stages )
+    {
+        next unless $by->{ $stage };
+
+        # Both spellings: the key is what --explain reports and what the
+        # library calls it, the title is what the graphical interface shows.
+        my $info = GlitchVape::Registry->stage_info( $stage );
+        printf "\n%s  -- %s\n", uc $stage, $info->{ title };
+        for my $name ( @{ $by->{ $stage } } )
+        {
+            printf "  %-14s %s\n", $name, $all->{ $name }{ summary };
+        }
+    }
+    print "\nUse --explain <effect> for parameters.\n";
+    exit 0;
+}
+
+sub explain_effect
+{
+    my ( undef, $name ) = @_;
+
+    my $spec = GlitchVape::Registry->get( $name )
+        or die "glitchvape: no effect named '$name'. Try --list-effects.\n";
+
+    printf "%s  (stage: %s)\n%s\n", $name, $spec->{ stage }, $spec->{ summary };
+
+    if ( length $spec->{ doc } )
+    {
+        my $doc = $spec->{ doc };
+        $doc =~ s/^/  /mg;
+        print "\n$doc";
+    }
+
+    my $params = $spec->{ params };
+    unless ( %$params )
+    {
+        print "\nThis effect takes no parameters.\n";
+        exit 0;
+    }
+
+    print "\nParameters:\n";
+    for my $p ( sort keys %$params )
+    {
+        my $d = $params->{ $p };
+
+        my $range =
+              $d->{ type } eq 'enum' ? join( '|', @{ $d->{ values } } )
+            : defined $d->{ min }    ? "$d->{min}..$d->{max}"
+            :                          $d->{ type };
+
+        printf "  %-14s %-22s default %-10s %s\n",
+            $p, $range, $d->{ default }, ( $d->{ doc } // '' );
+    }
+
+    printf "\nExample:\n  glitchvape --set %s.%s=<value> input.heic\n",
+        $name, ( sort keys %$params )[ 0 ];
+    exit 0;
+}
+
+sub list_presets
+{
+    my $presets = GlitchVape::Config::list_presets();
+
+    unless ( @$presets )
+    {
+        print "No presets found in: ",
+            join( ', ', GlitchVape::Config::preset_dirs() ), "\n";
+        exit 0;
+    }
+
+    printf "  %-16s %s\n", $_->{ name }, $_->{ title } for @$presets;
+    exit 0;
+}
+
+sub list_palettes
+{
+    print "Palettes:\n";
+    for my $n ( GlitchVape::Palette::names() )
+    {
+        my $c = GlitchVape::Palette::colors( $n );
+        printf "  %-12s %-34s %s\n", $n, join( ' ', @$c ),
+            GlitchVape::Palette::title( $n );
+    }
+
+    print "\nDuotone ramps:\n";
+    for my $n ( GlitchVape::Palette::duotone_names() )
+    {
+        my $c = GlitchVape::Palette::duotone( $n );
+        printf "  %-12s %s -> %s\n", $n, @$c;
+    }
+    exit 0;
+}
+
+sub check_deps
+{
+    my $missing = 0;
+
+    print "External tools:\n";
+    for my $t ( GlitchVape::Tools::report() )
+    {
+        my ( $name, $path, $pkg ) = @$t;
+        if ( $path )
+        {
+            printf "  %-10s %s\n", $name, $path;
+        }
+        else
+        {
+            printf "  %-10s MISSING   sudo apt install %s\n", $name, $pkg;
+            $missing++;
+        }
+    }
+
+    print "\nPerl modules:\n";
+    for my $mod ( qw(Image::Magick YAML::XS Path::Tiny File::Which) )
+    {
+        # require on a path string rather than a string eval, which would
+        # compile whatever the loop variable happened to contain.
+        my $file = $mod . '.pm';
+        $file =~ s{::}{/}g;
+
+        my $ok = eval { require $file; 1 };
+
+        my $state = 'MISSING';
+        if ( $ok )
+        {
+            $state = 'ok';
+        }
+        else
+        {
+            $missing++;
+        }
+
+        printf "  %-16s %s\n", $mod, $state;
+    }
+
+    if ( my $ver = GlitchVape::Tools::imagemagick_version() )
+    {
+        printf "\nImageMagick major version: %d\n", $ver;
+
+        my $heic = 'no';
+        if ( GlitchVape::Tools::supports_format( 'HEIC' ) )
+        {
+            $heic = 'yes';
+        }
+        printf "HEIC read support: %s\n", $heic;
+    }
+
+    if ( $missing )
+    {
+        print "\n$missing item(s) missing.\n";
+        exit 1;
+    }
+
+    print "\nAll dependencies present.\n";
+    exit 0;
+}
+
+sub check_fonts
+{
+    print "Font roles (first available candidate wins):\n";
+    my $missing = 0;
+
+    for my $entry ( @{ GlitchVape::Fonts::available() } )
+    {
+        my ( $role, $path ) = @$entry;
+        if ( $path )
+        {
+            printf "  %-10s %s\n", $role, $path;
+        }
+        else
+        {
+            printf "  %-10s MISSING\n", $role;
+            $missing++;
+        }
+    }
+
+    printf "\nBundled font directory: %s\n", GlitchVape::Fonts::asset_dir();
+    print "Drop .ttf/.otf files there, or unpack a release into a\n"
+        . "subdirectory of it, to override the system fonts.\n";
+
+    # Exit non-zero when a role could not be satisfied, so this is usable as
+    # a setup check in a script.
+    if ( $missing )
+    {
+        exit 1;
+    }
+
+    exit 0;
+}
+
+__END__
+
+=head1 NAME
+
+glitchvape - apply vaporwave and glitch-art transformations to an image
+
+=head1 SYNOPSIS
+
+  glitchvape [options] <input>
+
+  glitchvape --preset vhs-decay Pictures/IMG_8111.HEIC
+  glitchvape -p mallsoft --set scanlines.opacity=0.5 -o out/mall.png photo.png
+  glitchvape -p hotline --animate --frames 24 --fps 12 photo.heic
+
+ Options:
+   -p, --preset NAME       preset to build the pipeline from
+   -o, --output PATH       output file (default out/<name>.<preset>.png)
+   -s, --seed VALUE        any string or number; same seed gives same result
+       --set E.P=V         override one parameter; repeatable
+   -e, --enable NAME       switch an effect on with its defaults; repeatable
+   -d, --disable NAME      switch an effect off; repeatable
+       --max-dim N         downscale the source first (default 1920)
+       --quality N         output quality for lossy formats
+       --optimise          post-process with pngquant/gifsicle
+
+   -a, --animate           render a loop instead of a still
+       --frames N          frames in the loop (default 24)
+       --fps N             frame rate (default 12)
+
+       --audio PATH        add a soundtrack; the loop repeats to cover it
+       --audio-start SEC   where to start in the track (default 0)
+       --audio-end SEC     where to stop (default the end of the file)
+       --audio-filter F=V  vaporwave filter; repeatable
+       --audio-gain N      level of the file when mixed with --dtmf
+
+       --generate KIND     add a generated track; repeatable
+       --gen KEY=VALUE     set a parameter on the last --generate
+
+       --dtmf TEXT         shorthand for one dialled track
+       --dtmf-digits       take TEXT as a literal dial string
+       --dtmf-tone-ms MS   tone length (Hayes S11 default: 95)
+       --dtmf-gap-ms MS    inter-digit pause (default: 95)
+       --dtmf-same-key-pause MS   extra pause between two presses of one key
+       --dtmf-dial-tone R  lift the handset first: eu, us, uk, jp
+       --dtmf-dial-tone-sec S     how long that lasts (default 2)
+       --dtmf-gain N       level of the tones (default 0.8)
+       --show-dial         print the keypress sequence
+
+   -n, --dry-run           resolve and print the pipeline, render nothing
+   -v, --verbose           per-effect logging; twice for timings
+
+       --list-effects      all effects, grouped by pipeline stage
+       --explain NAME      parameters and documentation for one effect
+       --list-presets      available presets
+       --list-palettes     named palettes and duotone ramps
+       --list-audio-filters  audio filters and their ranges
+       --list-generators   generated track kinds and their parameters
+       --check-deps        report on external tools and Perl modules
+       --check-fonts       report which font roles resolve
+   -h, --help              this summary
+       --man               full documentation
+
+=head1 DESCRIPTION
+
+Reads a PNG, JPEG or HEIC, applies a chain of effects, and writes a still or a
+short looping animation.
+
+=head2 Presets and overrides
+
+A preset is a YAML file naming effects and their parameters. Overrides applied
+with C<--set> always win, so a preset is a starting point rather than a
+commitment:
+
+  glitchvape -p vhs-decay --set tracking.bands=12 --set grain.amount=0.2 in.heic
+
+C<--enable> switches on an effect the preset did not mention, using its
+defaults; C<--disable> switches one off.
+
+=head2 Seeds
+
+Effects that use randomness draw from a seeded generator. Passing the same
+C<--seed> with the same input and settings reproduces a render exactly. Each
+effect gets its own derived stream, so adding or removing one effect does not
+change what any other effect does -- which means tuning a preset one parameter
+at a time actually converges.
+
+Without C<--seed>, a random one is chosen and printed on completion, so a
+result worth keeping can always be reproduced.
+
+=head2 Animation
+
+C<--animate> renders the pipeline once per frame and encodes the sequence.
+Effects with a periodic component read their position in the loop and complete
+exactly one cycle, so the result loops seamlessly. The output extension picks
+the encoder: C<.mp4>, C<.webm> or C<.gif>.
+
+=head2 Audio
+
+C<--audio> adds a soundtrack, and in doing so changes what the length of the
+output means. The loop stays as many frames as C<--frames> says, but it is
+repeated for as long as the track lasts:
+
+  glitchvape -p mallsoft --animate --audio track.mp3 \
+      --audio-start 30 --audio-end 52 photo.heic
+
+That is 24 frames at 12 fps -- a two-second loop -- repeated eleven times over
+twenty-two seconds of music.
+
+C<--audio-filter> switches on one of the vaporwave filters, with an amount. A
+filter that is not named is off:
+
+  --audio-filter slowed=0.75    resample slower and lower, the tape sound
+  --audio-filter reverb=0.5     the other half of "slowed + reverb"
+  --audio-filter muffled=0.65   roll the top off, around 3 kHz
+  --audio-filter wobble=0.25    slow pitch wobble, a worn transport
+
+C<--list-audio-filters> prints the ranges. Slowing a selection lengthens it,
+so a twenty-second crop at C<slowed=0.75> is a twenty-seven second video.
+
+A GIF cannot carry audio; C<.mp4> and C<.webm> can.
+
+=head2 Generated tracks
+
+A soundtrack does not have to be a file. C<--generate> adds one the program
+makes up, and it is repeatable -- static under a dialled phrase under a piece
+of music is an ordinary thing to want:
+
+  glitchvape -p anaglyph --animate \
+      --generate static --gen tone=0.5 --gen seconds=20 \
+      --generate dtmf --gen 'text=call me maybe' --gen dial_tone=eu \
+      photo.heic
+
+Each C<--generate> starts a track and the C<--gen> flags after it belong to
+it. Clumsier than one flag carrying a comma-separated list, and deliberately:
+a dialled phrase is prose, full of spaces and commas, and this way it needs no
+quoting rules of its own. C<--list-generators> prints the kinds.
+
+C<dtmf> spells a phrase out on a phone keypad. Letters go in the multi-tap way
+-- C<c> is key 2 pressed three times -- a space is a single 0, and digits,
+C<*> and C<#> are already keys, so mixed input like C<call 5551234> needs no
+flag. C<mode=digits> takes the text literally instead, which is the only way
+to reach the C<A>-C<D> column. C<dial_tone=eu> lifts the handset first.
+
+C<static> is an untuned television: pink noise rather than white, band-limited
+to a set's audio path, with mains hum and the occasional crackle under it.
+Pink because white noise puts most of its energy in the octave where hearing
+tires fastest, and half a minute of that is unpleasant however quietly it is
+played.
+
+C<--dtmf> and its C<--dtmf-*> family are shorthand for one dialled track.
+
+=head2 Mixing
+
+Given C<--audio> and any number of C<--generate>, everything is summed and
+B<the file decides the length>. Static simply carries on for as long as it
+lasts; a dialled phrase plays once, stops, and after three seconds of silence
+the line opens again for whatever is left -- rather than looping, which would
+turn a sentence into a stutter. With no file, the longest generated track sets
+the length.
+
+The vaporwave filters apply to the file only: slowing is a resample, and a
+resampled DTMF tone is no longer on the DTMF grid.
+
+=head1 EXAMPLES
+
+Look at what a preset would do, without rendering:
+
+  glitchvape -p vhs-decay --dry-run photo.heic
+
+Push one effect harder:
+
+  glitchvape -p vhs-decay --set pixelsort.lower=0.1 --set pixelsort.upper=0.4 photo.heic
+
+Build a look from nothing:
+
+  glitchvape -e duotone -e scanlines -e grain --set duotone.name=hotline photo.heic
+
+Reproduce a render you liked:
+
+  glitchvape -p mallsoft --seed 1743029 photo.heic
+
+An anaglyph loop with a number being dialled over television static:
+
+  glitchvape -p anaglyph --animate \
+      --generate static --gen seconds=30 --gen tone=0.4 \
+      --generate dtmf --gen text=0202122 --gen dial_tone=eu \
+      photo.heic
+
+=head1 SEE ALSO
+
+L<GlitchVape>, L<glitchvape-batch>
+
+=cut

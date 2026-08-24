@@ -1,0 +1,76 @@
+name: hotline
+title: Neon-noir, high contrast, blown-out highlights
+
+# The opposite of mallsoft: saturated to the point of clipping, hard contrast,
+# everything either magenta or cyan. Bloom does the heavy lifting -- without
+# the glow spilling past the highlights it reads as a colour filter rather
+# than as light.
+
+output:
+  max_dim: 1600
+
+effects:
+  downsample:
+    factor: 1.6
+    filter: triangle
+
+  grade:
+    brightness: 104
+    saturation: 175
+    contrast: 26
+    gamma: 0.88
+
+  gradient_map:
+    name: hotline
+    strength: 0.55
+
+  chroma_shift:
+    amount: 10
+    angle: 12
+    jitter: 3
+
+  chroma_bleed:
+    amount: 6
+    saturation: 1.3
+
+  bloom:
+    threshold: 58
+    radius: 30
+    strength: 0.9
+    tint: '#F6019D'
+
+  pixelsort:
+    direction: horizontal
+    key: luma
+    lower: 0.0
+    upper: 0.22
+    min_run: 20
+    max_run: 260
+    coverage: 0.5
+
+  grain:
+    amount: 0.05
+    shadow_bias: 0.7
+    mono: 1
+
+  scanlines:
+    opacity: 0.26
+    spacing: 3
+
+  grille:
+    width: 2
+    strength: 0.16
+
+  vignette:
+    strength: 0.55
+    size: 1.3
+
+  text:
+    string: 電脳
+    font: cjk
+    size: 16
+    gravity: NorthEast
+    color: '#2DE2E6'
+    shadow: '#F6019D'
+    shadow_offset: 6
+    opacity: 0.92

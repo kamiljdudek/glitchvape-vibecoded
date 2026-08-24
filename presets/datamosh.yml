@@ -1,0 +1,62 @@
+name: datamosh
+title: Decoder given the wrong frame
+
+# Damage at the file level rather than the picture level. databend runs before
+# blockshift so the block displacement lands on already-corrupted colour,
+# which is the order it would happen in a real broken stream.
+
+output:
+  max_dim: 1400
+
+effects:
+  downsample:
+    factor: 1.5
+    filter: triangle
+
+  grade:
+    saturation: 150
+    contrast: 14
+
+  databend:
+    hits: 26
+    quality: 55
+    start: 0.12
+    mode: random
+    attempts: 10
+
+  blockshift:
+    blocks: 26
+    size: 16
+    spread: 9
+    width_blocks: 12
+    height_blocks: 4
+
+  slice:
+    slices: 30
+    spread: 70
+    bias: 2.6
+
+  chroma_shift:
+    amount: 9
+    jitter: 5
+
+  pixelsort:
+    direction: vertical
+    key: luma
+    lower: 0.0
+    upper: 0.3
+    min_run: 14
+    max_run: 200
+    coverage: 0.35
+
+  grain:
+    amount: 0.06
+    shadow_bias: 0.4
+
+  scanlines:
+    opacity: 0.18
+    spacing: 3
+
+  vignette:
+    strength: 0.35
+    size: 1.5

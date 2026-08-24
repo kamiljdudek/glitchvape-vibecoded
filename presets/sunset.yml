@@ -1,0 +1,70 @@
+name: sunset
+title: Synthwave horizon with grid and sun
+
+# The graphic look rather than the tape look: the photograph becomes a
+# backdrop for drawn furniture. The gradient map is strong here because the
+# grid only reads as belonging to the image if the image shares its palette.
+
+output:
+  max_dim: 1600
+
+effects:
+  downsample:
+    factor: 1.8
+    filter: triangle
+
+  grade:
+    brightness: 100
+    saturation: 145
+    contrast: 18
+    gamma: 0.92
+
+  gradient_map:
+    name: sunset
+    strength: 0.7
+
+  chroma_shift:
+    amount: 5
+
+  bloom:
+    threshold: 60
+    radius: 34
+    strength: 0.75
+    tint: '#FF6B9D'
+
+  grain:
+    amount: 0.045
+    shadow_bias: 0.6
+    mono: 1
+
+  scanlines:
+    opacity: 0.2
+    spacing: 3
+
+  grid:
+    horizon: 0.6
+    lines_h: 16
+    lines_v: 24
+    color: '#FF00AA'
+    width: 2
+    opacity: 0.8
+    perspective: 2.4
+    sun: 1
+    sun_size: 0.26
+    sun_colors: '#FFE261,#FF3864'
+    sun_bands: 8
+
+  vignette:
+    strength: 0.45
+    size: 1.4
+
+  text:
+    string: 新世紀
+    font: cjk
+    size: 13
+    gravity: North
+    color: '#FFE261'
+    shadow: '#C44569'
+    shadow_offset: 5
+    opacity: 0.9
+    y: 0.06

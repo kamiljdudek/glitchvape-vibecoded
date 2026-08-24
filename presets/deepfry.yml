@@ -1,0 +1,55 @@
+name: deepfry
+title: Reposted into oblivion
+
+# Generational loss taken past the point of legibility. Every stage compounds
+# the last: the JPEG passes create blocking, the saturation boost turns the
+# blocking into colour, and the sharpen turns the colour into edges.
+
+output:
+  max_dim: 1100
+
+effects:
+  downsample:
+    factor: 3.5
+    filter: point
+
+  grade:
+    saturation: 260
+    contrast: 45
+    gamma: 0.8
+
+  deepfry:
+    quality: 7
+    passes: 6
+    scale: 0.72
+    saturate: 1.35
+
+  chroma_shift:
+    amount: 5
+    jitter: 4
+
+  softness:
+    blur: 0
+    sharpen: 6
+    radius: 1.5
+
+  quantize:
+    colors: 24
+    dither: 1
+
+  static:
+    density: 0.02
+    intensity: 1.0
+    streak: 2
+
+  grain:
+    amount: 0.12
+    shadow_bias: 0.2
+
+  scanlines:
+    opacity: 0.2
+    spacing: 2
+
+  vignette:
+    strength: 0.4
+    size: 1.4

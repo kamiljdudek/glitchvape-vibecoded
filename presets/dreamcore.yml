@@ -1,0 +1,69 @@
+name: dreamcore
+title: Overexposed, hazy, half-remembered
+
+# Almost no damage and a great deal of glow. The look depends on the bloom
+# threshold being low enough that midtones bloom too, which is what makes it
+# feel lit from inside rather than merely bright.
+
+output:
+  max_dim: 1600
+
+effects:
+  downsample:
+    factor: 1.8
+    filter: triangle
+
+  grade:
+    brightness: 124
+    saturation: 108
+    contrast: -8
+    gamma: 1.2
+    tint: '#B967FF'
+    tint_strength: 0.14
+
+  duotone:
+    name: bluepink
+    strength: 0.35
+
+  chroma_shift:
+    amount: 4
+    angle: 45
+
+  chroma_bleed:
+    amount: 10
+    saturation: 1.15
+
+  bloom:
+    threshold: 38
+    radius: 55
+    strength: 1.0
+    tint: '#FFD9F0'
+
+  softness:
+    blur: 2.4
+    sharpen: 0.3
+    radius: 4
+
+  grain:
+    amount: 0.03
+    shadow_bias: 0.25
+    mono: 1
+    size: 2
+
+  glare:
+    strength: 0.22
+    angle: -25
+    width: 0.5
+
+  vignette:
+    strength: 0.25
+    size: 1.8
+
+  watermark:
+    string: 夢
+    font: cjk
+    size: 7
+    color: '#FFFFFF'
+    opacity: 0.09
+    rotate: -25
+    spacing: 3.0

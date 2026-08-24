@@ -1,0 +1,210 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use utf8;
+
+use FindBin ();
+use lib "$FindBin::Bin/../lib";
+
+use Encode       ();
+use Getopt::Long qw(GetOptions :config no_ignore_case bundling pass_through);
+use Pod::Usage   qw(pod2usage);
+
+binmode STDOUT, ':encoding(UTF-8)';
+binmode STDERR, ':encoding(UTF-8)';
+
+# As in bin/glitchvape: decode the command line up front so a preset name or
+# path containing non-ASCII is character data everywhere below.
+## no critic (Variables::RequireLocalizedPunctuationVars)
+@ARGV = map { Encode::decode( 'UTF-8', $_ ) } @ARGV;
+## use critic
+
+our $VERSION = '0.01';
+
+my %opt = (
+    preset => undef,
+    seed   => undef,
+);
+
+GetOptions(
+    'p|preset=s' => \$opt{ preset },
+    's|seed=s'   => \$opt{ seed },
+    'h|help'     => sub { pod2usage( -verbose => 1, -exitval => 0 ) },
+    'man'        => sub { pod2usage( -verbose => 2, -exitval => 0 ) },
+    'version'    => sub { print "glitchvape-gui $VERSION\n"; exit 0 },
+) or pod2usage( -verbose => 0, -exitval => 2 );
+
+# Gtk3 is loaded before GlitchVape::GUI so that a missing binding is reported
+# as the one apt command that fixes it, rather than as a compile failure deep
+# inside a module the user has no reason to have heard of.
+my $have_gtk = eval {
+    require Gtk3;
+    Gtk3->import( '-init' );
+    1;
+};
+
+unless ( $have_gtk )
+{
+    my $err = $@ || 'unknown error';
+    print { *STDERR } <<"END_MISSING";
+glitchvape-gui: the Gtk3 Perl binding is not available.
+
+  sudo apt install libgtk3-perl libgtk3-imageview-perl
+
+For an animated preview as well:
+
+  sudo apt install gir1.2-gstreamer-1.0 gstreamer1.0-plugins-good \\
+                   gstreamer1.0-gtk3 gstreamer1.0-libav
+
+The command-line tool does not need any of these:
+
+  glitchvape --preset vhs-decay photo.heic
+
+($err)
+END_MISSING
+    exit 1;
+}
+
+my $input = shift @ARGV;
+
+if ( defined $input && !-f $input )
+{
+    die "glitchvape-gui: no such file: $input\n";
+}
+
+require GlitchVape::GUI;
+
+my $app = GlitchVape::GUI->new(
+    input  => $input,
+    preset => $opt{ preset },
+    seed   => $opt{ seed },
+);
+
+exit $app->run;
+
+__END__
+
+=head1 NAME
+
+glitchvape-gui - graphical front end to glitchvape
+
+=head1 SYNOPSIS
+
+  glitchvape-gui [options] [image]
+
+  glitchvape-gui
+  glitchvape-gui Pictures/IMG_8111.HEIC
+  glitchvape-gui -p vhs-decay Pictures/IMG_8111.HEIC
+
+ Options:
+   -p, --preset NAME       preset to select at startup
+   -s, --seed VALUE        seed to start from
+   -h, --help              this summary
+       --man               full documentation
+
+=head1 DESCRIPTION
+
+Presets and their parameters on the left, the render on the right. Press Apply
+to render a preview; press Export to write the result at full size.
+
+This is a front end, not a second implementation. The parameter controls are
+generated from the same declarations that produce the command-line flags and
+C<glitchvape --explain>, and Export calls the same C<GlitchVape::render> the
+command-line tool calls -- so an exported file is reproducible from its seed
+with C<glitchvape> alone.
+
+=head2 The menu
+
+The hamburger at the end of the header bar holds what is done rarely enough
+not to want a button of its own: a new seed, the frame count and rate, saving
+the current settings as a preset, C<--check-deps> in a window, emptying the
+render cache, and the about box.
+
+C<Randomize> replaced an entry field with the seed in it, because the number
+was never typed: what it is only matters afterwards, for reproducing a render
+that came out well, and the status line reports it after every render.
+
+Whether to animate at all is a checkbox under Apply rather than a menu item,
+since it changes what Apply does rather than how the result is shown.
+
+C<Copy command line> puts the F<glitchvape> invocation that produces this
+render on the clipboard. It is diffed against the preset rather than dumped
+in full -- the state has a value for every parameter of every effect, and
+printing all of them would be correct and unreadable -- so what comes out is
+the handful of flags that actually differ.
+
+=head2 The picture appears when you open it
+
+Opening a file shows the photograph immediately, with nothing applied. There
+is no pipeline to run, so it costs only the decode -- and a cache lookup the
+second time. Deliberately not the preset's render even when one was named:
+that can be eight seconds, and this is meant to be the thing that happens at
+once. Apply is what renders the preset.
+
+=head2 Undo
+
+An undo step is one Apply. Effects are not applied on top of one another: the
+pipeline sorts them by stage, because order is not a free choice -- scanlines
+applied before a downsample are eaten by the resample -- so an effect enabled
+later may still have to run earlier. Undo therefore restores a whole
+configuration and re-renders it.
+
+Re-rendering would be slow if it happened, so it mostly does not: every render
+is cached under a digest of the settings that produced it, and a state on the
+undo stack has been rendered before.
+
+=head2 Adding a track
+
+Ticking Animate reveals a soundtrack row. Adding a track asks for a file and
+then opens a three-page wizard: crop the file on a waveform, choose the
+vaporwave filters while auditioning them, and confirm. An exclamation appears
+if the selection passes thirty seconds -- the loop is repeated to cover the
+track, so half a minute of audio is a long encode and a large file -- but it
+does not stop you.
+
+The track appears in the preview as well as in the export, since what a
+soundtrack does to a loop is exactly what a still cannot show. Removing it is
+one press on the row.
+
+C<Add generated track> beside it adds a soundtrack the program makes up. A
+popover asks which kind -- phone dial tones, television static -- and the
+window for that one opens already configured for it, titled with its name.
+
+Neither knows what the kinds are: the popover and the controls both come from
+L<GlitchVape::Generator>'s registry, so a new generator appears in both
+without this being edited.
+
+There is one file at most; generated tracks stack, so add as many as you like.
+Everything is mixed, the file decides the length, and each generated track
+covers it in whatever way suits it.
+
+The speaker button in the toolbar plays the preview silently, for the fifth
+time round a loop when the soundtrack has stopped telling you anything. It
+does not touch the render: the exported file still has its sound.
+
+The result is the same C<--audio> and C<--generate> the command-line tool
+takes, so a soundtrack built here is a command line that could have been
+typed.
+
+=head2 Preview size
+
+Previews render at a reduced size, chosen in the toolbar under the preview.
+Effects work in pixels rather than fractions of the frame, so a small preview
+is a fair impression of the full-size render rather than a crop of it. Export
+always renders at full size.
+
+=head2 The cache
+
+Renders are kept in C<$XDG_CACHE_HOME/glitchvape>, or C<~/.cache/glitchvape>.
+Working files go in a per-session subdirectory that is removed when the
+program exits; directories left behind by a crashed session are swept at
+startup; and the shared preview store is capped at 256 MB, discarding
+least-recently-used entries.
+
+=head1 SEE ALSO
+
+L<glitchvape> for the command-line tool, L<glitchvape-batch> for many files at
+once, and L<GlitchVape::GUI> for how the window is put together.
+
+=cut

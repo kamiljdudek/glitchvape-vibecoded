@@ -1,0 +1,234 @@
+# perlcritic configuration for GlitchVape
+#
+#   perlcritic lib/ bin/ t/
+#
+# Runs at severity 1 — the harshest setting — so that anything reported is
+# something nobody has looked at yet. Roughly 1100 findings appear at that
+# level against a clean run of the default policies; everything below is either
+# fixed in the code or disabled here with the reason why.
+#
+# The bar for disabling a policy: it must be wrong for *this* codebase, not
+# merely inconvenient. Where a policy was pointing at something real, the code
+# changed instead — see "Acted on" at the bottom.
+
+severity = 1
+verbose  = %f: %m at line %l, column %c.  (%p, severity %s)\n
+
+# ============================================================================
+# Regular expressions
+# ============================================================================
+
+# Requires /x on every pattern, including /^\d+$/. On patterns this short the
+# added whitespace costs more clarity than it buys.
+[-RegularExpressions::RequireExtendedFormatting]
+
+# Requires /m and /s everywhere. Both change what ^, $ and . mean. Applying
+# them blanket-fashion to patterns written for single-line semantics would
+# silently alter matching — this is a policy that causes bugs rather than
+# preventing them.
+[-RegularExpressions::RequireLineBoundaryMatching]
+[-RegularExpressions::RequireDotMatchAnything]
+
+# \. and \$ inside a pattern are universally read correctly; rewriting them as
+# [.] and [\$] is a net loss.
+[-RegularExpressions::ProhibitEscapedMetacharacters]
+
+# [0-9] is deliberate in places where \d's Unicode-digit behaviour is not
+# wanted (parsing numeric CLI input, hex colours).
+[-RegularExpressions::ProhibitEnumeratedClasses]
+
+# Flags /^base-/ and similar. These are genuine prefix patterns, not
+# fixed-string equality tests.
+[-RegularExpressions::ProhibitFixedStringMatches]
+
+# ============================================================================
+# Layout and formatting
+# ============================================================================
+
+# `return if $x` and `next unless $y` are idiomatic Perl guard clauses and
+# read better than the three-line block form, particularly at the top of the
+# effect callbacks where they are the early-exit condition.
+[-ControlStructures::ProhibitPostfixControls]
+
+# `unless (@jobs) { ... }` is clear. The compound conditions that genuinely
+# needed De Morgan's law to read have been rewritten as `if`.
+[-ControlStructures::ProhibitUnlessBlocks]
+
+# Flags `return unless $draws > 0` and similar single-comparison guards. The
+# policy's real target is negating a compound expression, which the reader has
+# to apply De Morgan's law to; those cases were rewritten. A lone `unless
+# $x > 0` needs no such work.
+[-ControlStructures::ProhibitNegativeExpressionsInUnlessAndUntilConditions]
+
+# Used only where the loop steps by a computed chunk (pixelsort's run
+# splitting, slice's variable-height bands), which is exactly the case a
+# foreach cannot express.
+[-ControlStructures::ProhibitCStyleForLoops]
+
+# Enforce the project's own perltidy style rather than perltidy's defaults, so
+# that the two tools agree instead of pulling in opposite directions: a file
+# that `perltidy` would reformat is now a perlcritic finding.
+#
+#     perltidy -b lib/GlitchVape/Whatever.pm
+#
+# is the fix for any complaint from this policy. Note that it runs perltidy
+# over every file, which is most of perlcritic's runtime here.
+[CodeLayout::RequireTidyCode]
+perltidyrc = .perltidyrc
+
+# @$ref and %$ref are standard Perl. @{$ref} is used where it aids grouping.
+[-References::ProhibitDoubleSigils]
+
+# int($x + 0.5) is clearer than int $x + 0.5 — which parses differently.
+[-CodeLayout::ProhibitParensWithBuiltins]
+
+# '' vs q{}. Pure ceremony.
+[-ValuesAndExpressions::ProhibitEmptyQuotes]
+[-ValuesAndExpressions::ProhibitNoisyQuotes]
+
+# Flags "  Valid: " in expressions that also concatenate "\n", which needs
+# double quotes. Mixing quote styles within one expression is worse than
+# using double quotes throughout.
+[-ValuesAndExpressions::ProhibitInterpolationOfLiterals]
+
+# "\xFF" is the clearest way to write a byte in the pixel tests, which are
+# about raw byte strings; chr(0xFF) obscures what is being built.
+[-ValuesAndExpressions::ProhibitEscapedCharacters]
+
+# ============================================================================
+# Documentation
+# ============================================================================
+
+# Requires the full CPAN-distribution POD boilerplate — AUTHOR, VERSION,
+# DIAGNOSTICS, DEPENDENCIES, INCOMPATIBILITIES, BUGS AND LIMITATIONS, LICENSE
+# AND COPYRIGHT, CONFIGURATION AND ENVIRONMENT — in every file. This is an
+# internal tool, not a distribution; ~180 findings of pure ceremony. The
+# modules do carry NAME and DESCRIPTION where it helps.
+[-Documentation::RequirePodSections]
+
+# POD sits next to the code it documents, so that a parameter's meaning and
+# its default are visible in the same screen. Moving it all past __END__ would
+# separate them.
+[-Documentation::RequirePodAtEnd]
+
+# Test scripts do not need a $VERSION; the library modules all have one.
+[-Modules::RequireVersionVar]
+
+# ============================================================================
+# Subroutine conventions
+# ============================================================================
+
+# One-line accessors (sub width { $_[0]{w} }) unpack positionally on purpose:
+# several are called per row inside pixel loops.
+[-Subroutines::RequireArgUnpacking]
+
+# Would add an explicit return to every one-line accessor for no behavioural
+# change.
+[-Subroutines::RequireFinalReturn]
+
+# $rng->rand and $ctx->log are method calls; there is no ambiguity with the
+# builtins at the call site.
+[-Subroutines::ProhibitBuiltinHomonyms]
+
+# set_rect($x, $y, $w, $h, $bytes) is the conventional shape for a rectangle
+# blit. Converting positional geometry into a hash makes every call site
+# noisier.
+[Subroutines::ProhibitManyArgs]
+max_arguments = 6
+
+# ============================================================================
+# Error handling
+# ============================================================================
+
+# These are user-facing errors from an application, not a library. The message
+# is the useful part; a caller's line number is not, and croak would report the
+# wrong frame for errors raised inside effect callbacks.
+[-ErrorHandling::RequireCarping]
+
+# "return undef" is deliberate wherever a function means "not found": a bare
+# return yields an empty list in list context, which is a different answer.
+[-Subroutines::ProhibitExplicitReturnUndef]
+
+# The `do { local $@; eval {...}; $@ }` idiom used throughout does capture and
+# inspect $@; the policy cannot see through the do block.
+[-ErrorHandling::RequireCheckingReturnValueOfEval]
+
+# `local $@;` before an eval is the correct way to protect the caller's value.
+[-Variables::RequireInitializationForLocalVars]
+
+# $@, $!, $/ and $? are the Perl API. English.pm adds a dependency and makes
+# the code less recognisable, not more.
+[-Variables::ProhibitPunctuationVars]
+
+# Checking the return of every print to STDOUT is not useful in a CLI; a failed
+# write to a closed pipe is not something this program can act on. `open` is
+# always checked.
+[InputOutput::RequireCheckedSyscalls]
+functions = open
+
+# The default window of 9 lines between open and close assumes a compact
+# style. With braces on their own lines and a fork/exec block between the two,
+# the honest minimum here is wider; the handles concerned are still opened and
+# closed within one sub.
+[InputOutput::RequireBriefOpen]
+lines = 20
+
+# Neither policy can tell a read handle from a write handle, and the answer
+# differs completely between them. On a *write* handle a failing close means
+# buffered data never reached the disk and the file is silently truncated —
+# every write handle in this codebase is therefore checked by hand
+# (Raster::write_ppm, Palette::gradient_file, Glitch::_databend). On a *read*
+# handle close reports nothing actionable, and demanding a check there is how
+# `or die` ends up attached to something that cannot meaningfully fail.
+[-InputOutput::RequireCheckedClose]
+
+# ============================================================================
+# Values
+# ============================================================================
+
+# use constant is used for genuine compile-time constants (CHANNELS,
+# ERROR_THRESHOLD) and is fine.
+[-ValuesAndExpressions::ProhibitConstantPragma]
+
+# Image processing is arithmetic on pixel values. 255 is the 8-bit maximum, 3
+# is the RGB channel count, 0.5 is the rounding bias in int($x + 0.5), 100 is
+# a percentage, and the resolution figures (333x480 and friends) are
+# documented in the tables that hold them. Naming each of these would add
+# indirection to formulae that are clearer as written.
+#
+# The one magic number that was genuinely opaque — ImageMagick's 400 severity
+# threshold, repeated at fourteen call sites — is now GlitchVape::Magick.
+[-ValuesAndExpressions::ProhibitMagicNumbers]
+
+# ============================================================================
+# Acted on rather than disabled
+# ============================================================================
+#
+#   RequireCheckedClose            close() on write handles now checked;
+#                                  a failure means buffered data was lost and
+#                                  the file is silently truncated.
+#   ProhibitComplexMappings        two-statement map blocks replaced by the
+#                                  existing clamp() helper.
+#   RequireLocalizedPunctuationVars  @ARGV decode annotated inline; the two
+#                                  scripts are program main bodies, so there
+#                                  is no enclosing scope to restore to.
+#   ProhibitReturnSort             names()/roles() materialise before
+#                                  returning; sort in scalar context is
+#                                  undefined behaviour.
+#   ProhibitStringyEval            --check-deps now requires a path, not a
+#                                  string eval of a loop variable.
+#   ProhibitBacktickOperators      all four sites route through
+#                                  Tools::capture, which takes an argv list
+#                                  and never involves a shell. This caught a
+#                                  real bug: \Q..\E inside qx{} escapes the
+#                                  path, so exiftool was being handed a
+#                                  mangled filename.
+#   ProhibitMixedBooleanOperators  `system(...) == 0 && -s $f or die` split
+#                                  into an explicit unless.
+#   ProhibitReusedNames            $workers shadowed between file scope and
+#                                  run_parallel's parameter — working only by
+#                                  coincidence.
+#   RequireBriefOpen               long heredoc hoisted out of the open/close
+#                                  window in t/11-cli.t.
+#   ProhibitUnlessBlocks (partial) compound negated conditions rewritten;
+#                                  simple guards kept.

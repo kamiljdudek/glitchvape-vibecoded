@@ -1,0 +1,64 @@
+name: anaglyph
+title: Red/cyan misregistration, a 3D comic read without the glasses
+
+# The look of the E72 phone shoot: heavy plate misregistration over a print
+# that has been photocopied one time too many.
+#
+# rgb_shift is the whole point here, and it is doing something chroma_shift
+# cannot -- red goes one way while green and blue travel together the other,
+# so the fringe is red against cyan rather than red against blue. The two
+# sides jitter independently and are redrawn every frame, which in an
+# animation gives the plate-flutter of a press run rather than one fixed
+# offset. Turn `jitter` down to 0 for a still, deliberate separation.
+#
+# Everything after it is restraint: the shift is loud enough that grading it
+# hard as well just makes mud.
+
+output:
+  max_dim: 1600
+
+effects:
+  downsample:
+    factor: 1.4
+    filter: triangle
+
+  grade:
+    brightness: 104
+    saturation: 118
+    contrast: 20
+    gamma: 0.95
+
+  rgb_shift:
+    amount: 20
+    mode: red_cyan
+    jitter: 0.45
+    angle: 0
+    pulse: 0
+    edge: smear
+
+  softness:
+    blur: 0.6
+    sharpen: 1.2
+
+  grain:
+    amount: 0.09
+    shadow_bias: 0.55
+    mono: 1
+
+  scanlines:
+    opacity: 0.14
+    spacing: 3
+
+  vignette:
+    strength: 0.42
+    size: 1.5
+
+  text:
+    string: 立体
+    font: cjk
+    size: 11
+    gravity: SouthEast
+    color: '#01CDFE'
+    shadow: '#FF3131'
+    shadow_offset: 5
+    opacity: 0.9

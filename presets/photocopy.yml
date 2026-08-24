@@ -1,0 +1,59 @@
+name: photocopy
+title: Faxed, photocopied, scanned back in
+
+# Print degradation rather than video degradation: a halftone screen, paper
+# tone, and the slight skew of a page that did not feed straight. No chroma
+# effects at all, because there is no chroma left by the time the halftone
+# has run.
+
+output:
+  max_dim: 1400
+
+effects:
+  downsample:
+    factor: 2.4
+    filter: triangle
+
+  grade:
+    saturation: 12
+    contrast: 40
+    gamma: 1.15
+
+  halftone:
+    map: h6x6a
+    levels: 3
+    strength: 0.9
+
+  gradient_map:
+    name: fax
+    strength: 0.75
+
+  static:
+    density: 0.008
+    intensity: 0.7
+    streak: 2
+
+  dropout:
+    count: 8
+    length: 200
+    thickness: 1
+    brightness: 0.9
+
+  grain:
+    amount: 0.06
+    shadow_bias: 0.2
+    mono: 1
+
+  softness:
+    blur: 0.5
+    sharpen: 2.2
+    radius: 1.5
+
+  vignette:
+    strength: 0.28
+    size: 1.7
+
+  letterbox:
+    ratio: ''
+    border: 0.04
+    color: '#EFE8D8'
