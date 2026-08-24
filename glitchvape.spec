@@ -142,8 +142,7 @@ make test
 
 %files
 %doc README.md
-# Requires a LICENSE file at the top of the tarball. About.pm still declares
-# gpl-3-0 via set_license_type(); both need to say MIT.
+# Requires a LICENSE file at the top of the tarball.
 %license LICENSE
 %{_bindir}/%{name}
 %{_bindir}/%{name}-batch

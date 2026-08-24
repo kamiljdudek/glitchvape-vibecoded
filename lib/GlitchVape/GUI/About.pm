@@ -60,7 +60,7 @@ sub show
     $about->set_copyright(
         'Vaporwave and glitch-art transformations for ' . 'photographs' );
 
-    $about->set_license_type( 'gpl-3-0' );
+    $about->set_license_type( 'mit-x11' );
     $about->set_website( 'https://github.com/' );
     $about->set_website_label( 'Source' );
 
