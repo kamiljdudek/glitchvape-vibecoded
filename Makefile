@@ -281,9 +281,16 @@ install-gui:
 	$(INSTALL_DATA) $(NAME).metainfo.xml \
 	    $(DESTDIR)$(METAINFODIR)/$(NAME).metainfo.xml
 
-# The logo is 215x185; an icon theme directory means a square of that size.
-# The padded copy is kept in the tree rather than generated here, so that
-# installing needs no image tooling at all -- see assets/artwork/icon-256.png.
+# The logo is 215x185 and an icon theme directory wants a square, so the icon
+# is the middle 185x185 of it enlarged to 256 -- cropped rather than padded,
+# because a launcher shows the icon at 48 pixels and white bars top and bottom
+# would spend a third of that on nothing.
+#
+# Enlarged with a nearest-neighbour filter, which is why the file is kept in
+# the tree rather than generated here: any smooth filter turns a 16-colour
+# pixel-art image into three and a half thousand blended ones and softens
+# every edge, and installing should need no image tooling at all. See
+# assets/artwork/icon-256.png; the command that made it is in the README.
 	$(INSTALL_DATA) assets/artwork/icon-256.png \
 	    $(DESTDIR)$(ICONDIR)/256x256/apps/$(NAME).png
 

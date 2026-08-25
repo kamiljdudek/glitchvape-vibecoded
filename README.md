@@ -1,5 +1,7 @@
 # GlitchVape
 
+![GlitchVape](assets/artwork/logo.png)
+
 # This is an entirely vibe-coded application. It is a tool for me, the author, aimed to simplify the application of filters and transformations
 
 
@@ -168,6 +170,22 @@ installed changes what `--check-fonts` resolves and nothing else.
 Manual pages are generated from the tools' own POD at install time rather than
 committed, so `man glitchvape` and `glitchvape --help` cannot document
 different flags — `pod2usage` reads the same block.
+
+The launcher icon is not. `assets/artwork/icon-256.png` is committed, because
+generating it needs ImageMagick and installing should not. It is the middle
+185×185 of the 215×185 logo, enlarged to 256 — cropped rather than padded,
+since a launcher draws it at 48 pixels and white bars top and bottom would
+spend a third of that on nothing:
+
+```bash
+magick assets/artwork/logo.png -gravity center -crop 185x185+0+0 +repage \
+    -filter point -resize 256x256! -strip assets/artwork/icon-256.png
+```
+
+`-filter point` is the part that matters. The logo is 16-colour pixel art, and
+any smooth filter resamples it into some three and a half thousand blended
+colours and softens every edge — which is exactly the character the thing is
+made of. The same reasoning is why the about window shows the logo unscaled.
 
 ### Optional fonts
 
