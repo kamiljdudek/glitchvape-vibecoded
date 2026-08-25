@@ -69,9 +69,26 @@ for, so a machine with GTK but no GStreamer runs the still interface normally.
 There is a spec file, so the shortest route is a package:
 
 ```bash
-make dist                     # or: tar czf glitchvape-0.01.tar.gz ...
-rpmbuild -ts glitchvape-0.01.tar.gz
+sudo dnf install -y rpm-build perl-macros
+sudo dnf builddep -y glitchvape.spec    # what the spec's BuildRequires name
+make rpm                                # the three binary packages
 ```
+
+`make srpm` builds only the source package, and `make rpms` builds both. All
+three go through the tarball rather than the spec in the tree, so a file
+`make dist` forgot is a build failure rather than a package quietly missing
+something.
+
+Output lands wherever `rpmbuild` would have put it, `~/rpmbuild/RPMS`.
+`RPMTOPDIR` moves it:
+
+```bash
+make rpm RPMTOPDIR=$PWD/build-rpm       # build without touching $HOME
+make rpm RPMFLAGS='--nodeps --nocheck'  # skip BuildRequires and the tests
+```
+
+The last one proves the packaging rather than the program: `--nocheck` skips
+the `%check` section, which is where the test suite runs.
 
 Or build straight out of a checkout:
 
@@ -91,9 +108,46 @@ why the spec asks for `/usr/bin/ffmpeg` rather than for either package by
 name. There is no Fedora package for Misaki, so the `pixel` role falls through
 to Terminus.
 
+### Debian and Ubuntu
+
+There is a `debian/` directory, so the shortest route is again a package:
+
+```bash
+sudo apt install -y build-essential debhelper devscripts
+make deb
+```
+
+Three come out, in the parent directory:
+
+| | |
+|---|---|
+| `glitchvape` | the library and the command-line tools |
+| `glitchvape-gui` | the Gtk3 window |
+| `glitchvape-fonts-extra` | one typeface, `non-free/fonts` |
+
+The third is separate because of what is written above about W95FA: its terms
+are a font aggregator's description rather than a document, which is not
+enough for a package that claims MIT and OFL on the tin. `glitchvape` only
+*suggests* it, and the `ui` role falls through to DejaVu without it.
+
+`debian/README.Debian` has the detail, including the one thing this packaging
+cannot do as it stands: a source package in main may not contain non-free
+content, and this one carries `assets/fonts-nonfree/`. Built locally or in a
+PPA it is fine; an upload to Debian proper would need either the licence
+settled — at which point the font moves up and the third package disappears —
+or the tarball repacked, for which `debian/copyright` already carries a
+commented-out `Files-Excluded` line.
+
+The packaging drives the same `Makefile` the RPM spec does, rather than
+restating where anything goes, and `debian/rules` installs one binary package
+at a time from the targets the Makefile already splits — which is why there
+are no `.install` files here. `make check-split`, `make check-licenses` and
+the test suite all run during the build.
+
 #### Packaging layout
 
-Installed, the modules go to `%{perl_vendorlib}` and the data to
+Installed, the modules go to `%{perl_vendorlib}` — `/usr/share/perl5` on
+Debian — and the data to
 `/usr/share/glitchvape`, which are nowhere near each other — so the walk-up
 from `__FILE__` that finds `assets/` and `presets/` in a checkout finds
 nothing. `GlitchVape::Paths` is the one constant naming the installed data
@@ -103,8 +157,17 @@ checkout behaves exactly as it did before that module existed.
 
 The window is a separate subpackage. `make check-split` asserts that nothing
 outside the GUI module set reaches for Gtk3, which is what makes
-`glitchvape` installable on a machine that will never open one — and the
-build runs that assertion rather than trusting it.
+`glitchvape` installable on a machine that will never open one — and both
+builds run that assertion rather than trusting it.
+
+Fonts are split the same way and for a licensing rather than a technical
+reason: `assets/fonts/` ships in the base package and `assets/fonts-nonfree/`
+in `glitchvape-fonts-extra`. Both are on the search path, so which package is
+installed changes what `--check-fonts` resolves and nothing else.
+
+Manual pages are generated from the tools' own POD at install time rather than
+committed, so `man glitchvape` and `glitchvape --help` cannot document
+different flags — `pod2usage` reads the same block.
 
 ### Optional fonts
 
@@ -125,14 +188,35 @@ ImageMagick cannot render from them — there is no reason to keep them here.
 | **VCR OSD Mono** | `vcr` | [dafont.com/vcr-osd-mono.font](https://www.dafont.com/vcr-osd-mono.font) | free, [including commercial use](https://www.dafont.com/font-comment.php?file=vcr_osd_mono) |
 | **Departure Mono** | `vcr`, `pixel` | [departuremono.com](https://departuremono.com) | OFL 1.1 |
 | **Fusion Pixel** | `pixel` | [github.com/TakWolf/fusion-pixel-font](https://github.com/TakWolf/fusion-pixel-font) | OFL 1.1 |
-| **W95FA** | `ui` | [dafont.com/w95fa.font](https://www.dafont.com/w95fa.font) | OFL — personal and commercial |
+| **W95FA** | `ui` | [dafont.com/w95fa.font](https://www.dafont.com/w95fa.font) | *unverified* — dafont says OFL; no licence text came with it |
 
-All four are free to use, and none of them is in the repository: they come to
-twenty-odd megabytes and their licences are their own rather than this
-project's, so `assets/fonts/` is gitignored and they are fetched per machine.
+Three of the four are in the repository, under `assets/fonts/`, each unpacked
+as its author published it with the statement of terms beside the font. That
+is not tidiness: `glitchvape --licenses` and the about window read those files
+off disk rather than quoting a copy pasted into Perl, which is how the OFL's
+"the licence travels with the font" is satisfied by the actual document.
 
-Nothing breaks without them. Every role falls through to whatever fontconfig
-can see — `pixel` finds Misaki, `vcr` and `mono` find Cascadia — and
+W95FA is the fourth, and it is in `assets/fonts-nonfree/` instead. dafont
+describes it as OFL and free for personal and commercial use, but the download
+carries no licence text and no statement by its author has been found that can
+be cited — a claim about the terms rather than the terms. So it is packaged on
+its own, as `glitchvape-fonts-extra`, and the base package can say *MIT and
+OFL-1.1 and VCR OSD Mono's grant* and mean it.
+
+Both directories are on the font search path, so a checkout finds every font
+either way and the split is invisible to everything but the packaging. Adding
+a font is a line in `.gitignore` plus its licence beside it; `make
+check-licenses` reports what the rule concluded and fails if a font arrived
+without one.
+
+VCR OSD Mono was in the second directory until its author was asked directly,
+in the font's own comment thread: *"Yes, the font is free even for commercial
+purposes."* That is an unconditional grant with no SPDX identifier, so both
+packagings name it as a `LicenseRef` pointing at the file that records it. It
+is the worked example of how a font gets promoted.
+
+Nothing breaks without any of them. Every role falls through to whatever
+fontconfig can see — `pixel` finds Misaki, `mono` finds Cascadia — and
 `--check-fonts` names the package or the download for anything still missing.
 
 Fusion Pixel is the one that ships as a multi-file release; only the `ja` and
@@ -160,8 +244,11 @@ glitchvape [options] <input>
 | `-e, --enable NAME` | switch an effect on with its defaults |
 | `-d, --disable NAME` | switch an effect off |
 | `--max-dim N` | downscale the source first (default 1920) |
+| `--fit WxH` | downscale to fit a box, e.g. `640x480` — see below |
+| `--colors N` | quantise a still to an N-entry palette |
 | `-a, --animate` | render a loop instead of a still |
 | `--frames N` / `--fps N` | loop length and rate (default 24 @ 12) |
+| `--codec NAME` | `h264`, `vp9` or `av1`; default from the extension |
 | `--audio PATH` | add a soundtrack; the loop repeats to cover it |
 | `--audio-start` / `--audio-end` | seconds; which part of the track |
 | `--audio-filter F=V` | vaporwave filter; repeatable |
@@ -172,6 +259,55 @@ glitchvape [options] <input>
 | `--dtmf-dial-tone` | lift the handset first: `eu` `us` `uk` `jp` |
 | `-n, --dry-run` | print the resolved pipeline, render nothing |
 | `-v, --verbose` | per-effect logging; twice for timings |
+
+#### `--fit` is a box; `--max-dim` is a number
+
+`--max-dim` caps the longer side and lets the other fall where the aspect
+ratio puts it, which is the right rule for *no bigger than this*. It cannot
+say *must land on a 640×480 screen*, because that is two numbers.
+
+`--fit` is those two numbers, and the box turns with the picture:
+
+```bash
+glitchvape --fit 640x480 photo.heic
+```
+
+| source | result |
+|---|---|
+| 4:3 landscape | 640×480 |
+| 3:4 portrait | 480×640 |
+| 16:9 | 640×360 |
+| already smaller | untouched — a box is a ceiling, never a floor |
+
+A portrait photograph gets 480×640 rather than 360×480 because a screen of
+that size filled its height with one. The box is applied to the source *and*
+to the result: `letterbox` and `border` add pixels, so constraining only the
+input would be a promise this makes and does not keep.
+
+`--colors` is the other half of a period-correct file. ImageMagick's BMP
+encoder given a truecolour image writes a 24-bit file with a `.bmp` on the
+end, which is not what asking for 256 colours meant, so the palette is built
+first and the image switched to palette type:
+
+```bash
+glitchvape -p gameboy --fit 640x480 --colors 256 -o out/1995.bmp photo.heic
+```
+
+#### `--codec` settles what the extension cannot
+
+`.mp4` means H.264 and `.gif` means GIF; `.webm` is genuinely ambiguous, since
+VP9 and AV1 both live in it. Without `--codec`, `.webm` is VP9 — the one every
+build of ffmpeg can write.
+
+| | |
+|---|---|
+| `h264` | common default |
+| `vp9` | smaller at the same quality; plays in browsers |
+| `av1` | smallest of the three, modern and demanding codec|
+
+AV1 needs an encoder not every ffmpeg has. That is checked *before* the first
+frame rather than discovered at the last step of a job whose first twenty-four
+steps are whole renders.
 
 Discovery:
 
@@ -207,14 +343,34 @@ glitchvape-gui -p vhs-decay Pictures/IMG_8111.HEIC
 Presets and their parameters on the left, the render on the right, Apply
 between them, Export to write the result at full size.
 
+The foot of the left pane is an action bar: **Add effect** opens the wizard,
+**Animate** decides whether the render is a loop or a still, and **Apply**
+renders it. All three sit outside the scrolled list, so none can be scrolled
+away by a long pipeline, and Apply keeps the accent colour that marks it as
+the one action the rest of the pane is leading up to. Apply becomes **Stop** while a render is in flight,
+icon and tooltip along with the word, and the button is pinned to the wider of
+the two so the bar does not twitch.
+
 It is a front end, not a second implementation. The controls are generated
 from the same `register()` declarations that produce the CLI flags and
 `--explain`, so an effect added to the registry gets a widget without anyone
 editing the GUI — a `num` with a range becomes a slider marked at its default,
-an `enum` becomes a combo, a colour gets a picker beside its entry. Export
-calls the same `GlitchVape::render` that `bin/glitchvape` calls, and the
-result is byte-identical to the equivalent command line; there is a test that
-asserts exactly that.
+an `enum` becomes a combo, a colour gets a picker beside its entry, and
+`osd.date` gets a calendar. Export calls the same `GlitchVape::render` that
+`bin/glitchvape` calls, and the result is byte-identical to the equivalent
+command line; there is a test that asserts exactly that.
+
+The two parameters with a second widget beside the entry — the colour picker
+and the calendar — keep the **entry** as the value, with the widget only a way
+of filling it in. Both have a meaning no picker can express: an empty colour
+means *no colour*, and an empty `osd.date` means *invent a plausible 1990s
+date, a different one per seed*, which is the effect's default and what most
+renders want. So the calendar writes `JAN 05 1995` into the field and offers
+an **Any 1990s date** button to empty it again, opening on whatever the field
+already says rather than on today — a present-day timestamp being exactly the
+anachronism the effect exists to avoid. A date it cannot parse is left alone:
+`osd.date` accepts any literal string, and somebody who typed `TUESDAY` meant
+it.
 
 ### The menu
 
@@ -226,8 +382,9 @@ belongs behind one:
 |---|---|
 | **Randomize** | a new seed — reshuffles every effect that draws on randomness, leaving the parameters alone |
 | **Animation settings…** | how many frames the loop is and how fast; it reports the resulting length |
+| **Export settings…** | what Export writes and at what size — a tab for video, a tab for stills |
 | **Save as preset…** | writes the current settings to `presets/`; it used to be an icon of a floppy disk beside the preset combo |
-| **Copy command line** | the `glitchvape` invocation that produces this render, on the clipboard |
+| **Copy command line…** | the `glitchvape` invocation that produces this export, to read and to copy |
 | **Check dependencies…** | what `--check-deps` and `--check-fonts` print, in a window — a graphical session being exactly where nobody has a terminal open |
 | **Clear preview cache** | empties the render store; nothing is lost but time |
 | **About GlitchVape** | version, licence, and how many effects and presets this copy can actually see |
@@ -239,14 +396,97 @@ reported in the status line after every render, and `Copy command line`
 carries it.
 
 Frames and rate went the same way: set once and then left, while the
-**Animate** checkbox they govern sits under **Apply**, because it changes what
-Apply *does* — twenty-four renders instead of one — rather than how the result
-is displayed, which is what everything in the preview bar is for.
+**Animate** toggle they govern sits beside **Apply**, because that is what it
+acts on. It changes what Apply *does* — twenty-four renders instead of one —
+and what Export then writes, rather than how the result is displayed. Put over
+with the preview controls it reads as another free adjustment like zoom, which
+it is not.
+
+A toggle rather than a checkbox because it is a mode the window is *in*, and a
+pressed button says that from across the room in a way a tick in a box does
+not.
+
+#### Export settings
+
+Export used to ask one question, in a file chooser: *where*. Everything else
+followed from the name typed there — the extension picked the encoder, the
+size was whatever the preset happened to say. A fine default and a poor only
+option, because the two things people actually change are the size and the
+format, and neither should require knowing that `.webm` means VP9.
+
+**Video**
+
+| | |
+|---|---|
+| Frame rate | the same setting as in Animation settings — see below |
+| Resolution | 512 / 720 / 900 / 1080 / 1440 / 1920 px, or **Native**. Default 720 |
+| Format | MP4 · H.264, WebM · VP9, WebM · AV1 |
+
+The sizes are the previewer's list extended upwards, and they mean what the
+previewer's mean: **a cap on the longer side**, aspect preserved, never
+enlarged. `720` is 720×540 for a 4:3 photograph and 540×720 for a portrait
+one. It is not the broadcast sense of 720p — nothing here pads a picture out
+to a frame it does not fill.
+
+**Native** is deliberately not the default. It means *no cap at all*, and on a
+modern phone photograph that is a 12-megapixel video, which is not what
+somebody who has not thought about it wants.
+
+The frame rate appears here *and* in Animation settings because it is
+genuinely both — how fast the loop plays, and the rate of the file. Rather
+than two numbers that can disagree, both dialogs read and write the same one.
+
+**Stills**
+
+| | |
+|---|---|
+| Same as the original | a JPEG in stays a JPEG out; a HEIC stays a HEIC |
+| PNG | lossless |
+| Windows Bitmap · 256 colours | an 8-bit `.bmp` with a dithered palette |
+| ☐ Keep retro-friendly dimensions | fit the result inside 640×480 |
+
+The retro box is `--fit 640x480` and turns with the photograph, so a portrait
+shot becomes 480×640 rather than being made tiny. It is applied to the
+*finished* picture, so a border or letterbox added by an effect is inside the
+box rather than pushing the result out of it.
+
+The chosen format also decides the filename Export opens with, so picking
+*Windows Bitmap* means `out/IMG_8111.gameboy.bmp` is already in the box rather
+than something to type over.
 
 #### Copy command line
 
 The interface claims to be a front end rather than a second implementation.
-This is that claim made portable — and it is diffed rather than dumped:
+This is that claim made legible — shown whole, in a monospaced box, with a
+Copy button:
+
+```
+glitchvape \
+    -p gameboy \
+    -s 7 \
+    --colors 256 \
+    --fit 640x480 \
+    -o out/IMG_8111.gameboy.bmp \
+    Pictures/IMG_8111.HEIC
+```
+
+Shown rather than only copied because the command is the one thing here worth
+reading: it names every effect that differs from the preset, so it doubles as
+a summary of what has been dialled in — and a clipboard is a poor place to
+read anything from.
+
+The breaks are not a column count. Each line is one flag and the value that
+belongs to it, so every line is a complete thought, the whole thing is still
+one command, and deleting a line removes exactly one setting rather than
+corrupting the syntax. Paste it into a shell and it runs.
+
+It carries the export settings too, and only the parts that apply to what is
+being written: a codec means nothing to a still and a palette means nothing to
+a video. `--max-dim` is absent when the size is Native, because the flag's
+absence is what leaves the preset's own limit standing — and `--codec` is
+absent for H.264 in an `.mp4`, because the extension already says it.
+
+It is also diffed rather than dumped:
 
 ```
 glitchvape -p hotline -s 4242 -e vgatext --set vgatext.runs=7 \
@@ -267,7 +507,7 @@ what is exported.
 
 ### Adding an effect is a wizard
 
-Thirty-nine effects is too many for one list, so `+ Add effect…` opens a
+Thirty-nine effects is too many for one list, so **Add effect…** opens a
 three-page assistant that asks the questions in the order a person has them.
 
 **What kind of thing am I after?** The nine stages under their presentable
@@ -281,6 +521,11 @@ who types `scanline` while standing in Colour meant the effect, not the
 category — and matches the presentable name, the summary *and* the identifier,
 so knowing either spelling is enough. A note under the list says which scope
 is in force.
+
+On both list pages a click **picks** a row; only a double click or Enter moves
+on. GtkListBox activates on a single click by default, which made touching a
+name indistinguishable from choosing it and pressing Continue — so nobody
+could look down the list.
 
 **How strong?** The declared parameters, built by the same code that builds
 them for the effects list, against a live preview.
@@ -334,7 +579,7 @@ been rendered before, so stepping back through history is a file lookup.
 
 ### Adding a track
 
-Ticking **Animate** slides out a soundtrack row. `Add audio track…` asks for a
+Switching **Animate** on slides out a soundtrack row. `Add audio track…` asks for a
 file and then opens a three-page wizard:
 
 1. **Crop.** The whole file as a waveform, drawn in the `vapor` palette, with

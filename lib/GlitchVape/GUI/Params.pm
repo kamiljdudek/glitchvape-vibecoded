@@ -29,11 +29,27 @@ to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
     list                  Gtk3::Entry       comma separated
     str                   Gtk3::Entry, or a combo where the accepted values
                           are known, or an entry paired with a colour picker
+                          or a calendar
 
-The three string cases are worth the special-casing: C<palette.name> takes one
+The four string cases are worth the special-casing: C<palette.name> takes one
 of twelve named palettes I<or> an inline list of hex colours, C<text.font>
-takes a font role rather than a font name, and a colour parameter typed by
-hand is the one most likely to be got wrong.
+takes a font role rather than a font name, a colour parameter typed by hand is
+the one most likely to be got wrong, and C<osd.date> is a date, which is a
+thing people pick rather than spell.
+
+=head1 THE ENTRY STAYS AUTHORITATIVE
+
+Two parameters get a second widget beside the entry -- a colour picker and a
+calendar -- and in both cases the entry is the value and the widget is a way
+of filling it in, never the other way round.
+
+That is not symmetry for its own sake. Both parameters have a meaning that no
+picker can express: an empty colour means "no colour", and an empty
+C<osd.date> means "invent a plausible 1990s date, a different one per seed",
+which is the effect's default and the thing most renders want. A calendar has
+no way to be set to nothing. So it writes into the entry and the entry is what
+the pipeline reads, which keeps the emptiable states reachable and keeps
+C<--set osd.date='JAN 05 1995'> and the window talking about the same string.
 
 =cut
 
@@ -59,8 +75,16 @@ my %SUGGESTED = (
     value     => current value
     on_change => sub { my ( $value ) = @_ }
 
-Returns C<< { label => $widget, control => $widget, get => $code } >>. The
-caller owns the layout; this only decides what the control is.
+Returns C<< { label => $widget, control => $widget, get => $code, stretch =>
+$bool } >>. The caller owns the layout; this only decides what the control is.
+
+C<stretch> is false for the one control that has a size of its own. A slider,
+a combo and an entry all say more the wider they are, so a caller giving the
+column a width is doing them a favour; a C<Gtk3::Switch> is a fixed-size
+picture of a lever, and widening it produces a lozenge the length of the
+dialog. The switch is the only such control today, but the flag is on the
+result rather than a list of exceptions in the caller, because the next
+fixed-size control should not have to find every layout that would stretch it.
 
 =cut
 
@@ -72,6 +96,7 @@ my %BUILDER = (
     enum      => \&_enum,
     numeric   => \&_numeric,
     colour    => \&_colour,
+    date      => \&_date,
     suggested => \&_suggested,
     font      => \&_font,
     text      => \&_text,
@@ -100,7 +125,9 @@ sub build
         $built->{ control }->set_tooltip_text( $doc );
     }
 
-    $built->{ label } = $label;
+    $built->{ label }   = $label;
+    $built->{ stretch } = 1 unless exists $built->{ stretch };
+
     return $built;
 }
 
@@ -116,6 +143,7 @@ sub _kind
     return $type       if $type eq 'bool' || $type eq 'enum';
     return 'numeric'   if $type eq 'int'  || $type eq 'num';
     return 'colour'    if _is_colour( $arg );
+    return 'date'      if $arg->{ name } eq 'date';
     return 'suggested' if $SUGGESTED{ "$arg->{effect}.$arg->{name}" };
     return 'font'      if $arg->{ name } eq 'font';
     return 'text';
@@ -139,7 +167,11 @@ sub _bool
         }
     );
 
-    return { control => $sw, get => sub { return $sw->get_active ? 1 : 0 } };
+    return {
+        control => $sw,
+        stretch => 0,
+        get     => sub { return $sw->get_active ? 1 : 0 },
+    };
 }
 
 sub _enum
@@ -381,6 +413,185 @@ sub _colour
     $box->pack_start( $button, 0, 0, 0 );
 
     return { control => $box, get => sub { return $entry->get_text } };
+}
+
+# The camcorder OSD format: three-letter month, zero-padded day, four-digit
+# year. Matches GlitchVape::Effect::Overlay's _fake_date, because a date
+# picked here and a date it invented have to be the same kind of string --
+# otherwise switching from one to the other changes the width of the overlay.
+my @MONTH = qw(JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC);
+
+# Where the calendar opens when the entry is empty or unreadable. Not today:
+# the effect exists to put a 1990s timestamp on a photograph, and opening on
+# the present date invites exactly the anachronism it avoids by default.
+use constant DEFAULT_YEAR  => 1995;
+use constant DEFAULT_MONTH => 5;      # zero-based, so June
+use constant DEFAULT_DAY   => 15;
+
+sub _date
+{
+    my ( $arg ) = @_;
+
+    my $box = Gtk3::Box->new( 'horizontal', 4 );
+
+    my $entry = Gtk3::Entry->new;
+    $entry->set_text( _as_text( $arg->{ value } ) );
+    $entry->set_hexpand( 1 );
+    $entry->set_placeholder_text( 'Any 1990s date' );
+
+    my $button = Gtk3::Button->new;
+    $button->set_image(
+        Gtk3::Image->new_from_icon_name(
+            'x-office-calendar-symbolic', 'button'
+        )
+    );
+    $button->set_tooltip_text( 'Pick a date' );
+
+    my $calendar = Gtk3::Calendar->new;
+
+    # Pointing the calendar at the entry's value is itself a day-selected --
+    # twice, in fact, since select_month and select_day each emit one -- and
+    # without this the act of opening the picker would write the date back
+    # over whatever was typed. That is not a cosmetic difference: 'TUESDAY' is
+    # a legal osd.date, and a picker that silently replaced it with JUN 15
+    # 1995 on the way past would be destroying the value it was opened to
+    # show. It would also fire on_change and cost a render nobody asked for.
+    my $seeking = 0;
+
+    # Writing into the entry is what commits the choice, and the entry's own
+    # changed handler is what tells the caller -- so this does not call
+    # on_change itself and cannot report a value twice.
+    $calendar->signal_connect(
+        'day-selected' => sub {
+            return if $seeking;
+
+            my ( $year, $month, $day ) = $calendar->get_date;
+            $entry->set_text(
+                sprintf '%s %02d %d',
+                $MONTH[ $month ],
+                $day, $year
+            );
+            return;
+        }
+    );
+
+    my $any = Gtk3::Button->new_with_label( 'Any 1990s date' );
+    $any->set_tooltip_text(
+              "Leave it to the seed: a different plausible date per render.\n"
+            . 'This is what an empty field means' );
+
+    my $popover = Gtk3::Popover->new( $button );
+    $popover->set_position( 'bottom' );
+
+    my $inner = Gtk3::Box->new( 'vertical', 6 );
+    $inner->set_border_width( 8 );
+    $inner->pack_start( $calendar, 1, 1, 0 );
+    $inner->pack_start( $any,      0, 0, 0 );
+    $popover->add( $inner );
+
+    $any->signal_connect(
+        clicked => sub {
+            $entry->set_text( q{} );
+            $popover->popdown;
+            return;
+        }
+    );
+
+    $button->signal_connect(
+        clicked => sub {
+
+            # Opened on whatever the entry says, so the calendar is showing
+            # the current value rather than wherever it was left last time.
+            $seeking = 1;
+            _seek_calendar( $calendar, $entry->get_text );
+            $seeking = 0;
+
+            $popover->show_all;
+            $popover->popup;
+            return;
+        }
+    );
+
+    $entry->signal_connect(
+        changed => sub {
+            $arg->{ on_change }->( $entry->get_text ) if $arg->{ on_change };
+            return;
+        }
+    );
+
+    $box->pack_start( $entry,  1, 1, 0 );
+    $box->pack_start( $button, 0, 0, 0 );
+
+    return { control => $box, get => sub { return $entry->get_text } };
+}
+
+# Point the calendar at what the entry holds. A string it cannot read is not
+# an error -- osd.date takes any literal text, and somebody who typed
+# 'TUESDAY' meant it -- so the calendar falls back to a 1990s day and leaves
+# the entry alone.
+sub _seek_calendar
+{
+    my ( $calendar, $text ) = @_;
+
+    my ( $year, $month, $day ) = _parse_date( $text );
+
+    $calendar->select_month( $month, $year );
+    $calendar->select_day( $day );
+
+    return;
+}
+
+sub _parse_date
+{
+    my ( $text ) = @_;
+
+    my @fallback = ( DEFAULT_YEAR, DEFAULT_MONTH, DEFAULT_DAY );
+
+    return @fallback unless defined $text;
+
+    my ( $name, $day, $year ) =
+        $text =~ /\A\s*([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})\s*\z/;
+
+    return @fallback unless defined $name;
+
+    my $month;
+    for my $n ( 0 .. $#MONTH )
+    {
+        $month = $n if lc $MONTH[ $n ] eq lc $name;
+    }
+
+    return @fallback unless defined $month;
+
+    # A day the month does not have -- FEB 31 -- is a string somebody typed,
+    # not a date to seek to.
+    return @fallback if $day < 1 || $day > _days_in( $month, $year );
+
+    # Numbers, not the strings the capture produced: a zero-padded '05' is
+    # the same day as 5 and every caller treats it as a number, so returning
+    # one that only compares equal numerically is a trap for the next reader.
+    return ( 0 + $year, $month, 0 + $day );
+}
+
+my @MONTH_LENGTH = ( 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 );
+
+sub _days_in
+{
+    my ( $month, $year ) = @_;
+
+    return 29 if $month == 1 && _is_leap( $year );
+
+    return $MONTH_LENGTH[ $month ];
+}
+
+sub _is_leap
+{
+    my ( $year ) = @_;
+
+    return 0 if $year % 4;
+    return 1 if $year % 100;
+    return 0 if $year % 400;
+
+    return 1;
 }
 
 sub _parse_colour

@@ -44,7 +44,10 @@ my %opt = (
     output   => undef,
     seed     => undef,
     max_dim  => undef,
+    fit      => undef,
     quality  => undef,
+    colors   => undef,
+    codec    => undef,
     set      => [],
     enable   => [],
     disable  => [],
@@ -87,7 +90,11 @@ GetOptions(
     'e|enable=s@'  => $opt{ enable },
     'd|disable=s@' => $opt{ disable },
     'max-dim=i'    => \$opt{ max_dim },
+    'fit=s'        => \&set_fit,
     'quality=i'    => \$opt{ quality },
+    'colors=i'     => \$opt{ colors },
+    'colours=i'    => \$opt{ colors },
+    'codec=s'      => \$opt{ codec },
     'optimise!'    => \$opt{ optimise },
     'optimize!'    => \$opt{ optimise },
 
@@ -212,7 +219,10 @@ my $result = eval {
         disable  => $opt{ disable },
         seed     => $opt{ seed },
         max_dim  => $opt{ max_dim },
+        fit      => $opt{ fit },
         quality  => $opt{ quality },
+        colors   => $opt{ colors },
+        codec    => $opt{ codec },
         optimise => $opt{ optimise },
         verbose  => $opt{ verbose },
         dry_run  => $opt{ dry_run },
@@ -362,6 +372,27 @@ sub build_audio_spec
     }
 
     return $spec;
+}
+
+# --fit 640x480. A pair rather than a number, because a box is the one thing
+# --max-dim cannot express: it caps the long edge and lets the short one fall
+# where the aspect ratio puts it.
+#
+# 'x' or ':' between them, since both are how people write a resolution, and
+# either order -- the box turns with the picture anyway, so 640x480 and
+# 480x640 mean the same thing. See GlitchVape::IO.
+sub set_fit
+{
+    my ( undef, $value ) = @_;
+
+    my ( $w, $h ) = $value =~ /\A(\d+)\s*[x:*]\s*(\d+)\z/i;
+
+    die "glitchvape: --fit wants two numbers, e.g. 640x480 (got '$value')\n"
+        unless $w && $h;
+
+    $opt{ fit } = [ $w, $h ];
+
+    return;
 }
 
 # --generate starts a track; every --gen after it belongs to that track.
@@ -823,12 +854,15 @@ glitchvape - apply vaporwave and glitch-art transformations to an image
    -e, --enable NAME       switch an effect on with its defaults; repeatable
    -d, --disable NAME      switch an effect off; repeatable
        --max-dim N         downscale the source first (default 1920)
+       --fit WxH           downscale to fit a box, e.g. 640x480
        --quality N         output quality for lossy formats
+       --colors N          quantise a still to an N-entry palette
        --optimise          post-process with pngquant/gifsicle
 
    -a, --animate           render a loop instead of a still
        --frames N          frames in the loop (default 24)
        --fps N             frame rate (default 12)
+       --codec NAME        h264, vp9 or av1; default from the extension
 
        --audio PATH        add a soundtrack; the loop repeats to cover it
        --audio-start SEC   where to start in the track (default 0)

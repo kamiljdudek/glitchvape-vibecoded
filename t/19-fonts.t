@@ -144,8 +144,7 @@ sub asset_tree
 
     my $user_fonts =
         File::Spec->catdir( "$home", '.local', 'share', 'glitchvape', 'fonts' );
-    my $system_fonts =
-        File::Spec->catdir( "$system", 'glitchvape', 'fonts' );
+    my $system_fonts = File::Spec->catdir( "$system", 'glitchvape', 'fonts' );
 
     File::Path::make_path( $user_fonts, $system_fonts );
 
@@ -159,14 +158,19 @@ sub asset_tree
 
     my @dirs = GlitchVape::Fonts::search_dirs();
 
-    is $dirs[ 0 ], "$env", 'GLITCHVAPE_FONTS is searched first';
-    is $dirs[ 1 ], $user_fonts, 'then the per-user drop-in directory';
+    is $dirs[ 0 ], "$env",        'GLITCHVAPE_FONTS is searched first';
+    is $dirs[ 1 ], $user_fonts,   'then the per-user drop-in directory';
     is $dirs[ 2 ], $system_fonts, 'then glitchvape/fonts under XDG_DATA_DIRS';
 
-    # The bundled directory is last, so that a font dropped into any of the
-    # above shadows one that shipped rather than losing to it.
-    like $dirs[ -1 ], qr/assets.fonts\z/,
-        'and the bundled directory is searched last';
+    # The bundled directories are last, so that a font dropped into any of
+    # the above shadows one that shipped rather than losing to it. There are
+    # two of them -- the fonts this project may hand on and the ones it may
+    # not, packaged separately -- and both are behind everything a user
+    # controls.
+    like $dirs[ -2 ], qr/assets.fonts\z/,
+        'the bundled directory is searched after everything droppable-into';
+    like $dirs[ -1 ], qr/assets.fonts-nonfree\z/,
+        'and the separately-packaged one last of all';
 
     # A directory that is not there is not searched, but naming it is not an
     # error either: the per-user one does not exist until somebody creates it.
@@ -177,7 +181,7 @@ sub asset_tree
     # XDG_DATA_HOME set explicitly, and the defaults still present in
     # XDG_DATA_DIRS -- a session that sets it to a narrower list must not
     # silently stop searching the documented system directory.
-    my $data = File::Temp->newdir( 'gv_xdg_XXXXXX', TMPDIR => 1 );
+    my $data  = File::Temp->newdir( 'gv_xdg_XXXXXX', TMPDIR => 1 );
     my $fonts = File::Spec->catdir( "$data", 'glitchvape', 'fonts' );
     File::Path::make_path( $fonts );
 

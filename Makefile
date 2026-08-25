@@ -27,24 +27,52 @@ INSTALL_DIR     = $(INSTALL) -d -m 755
 
 PERL      ?= perl
 PROVE     ?= prove
+POD2MAN   ?= pod2man
+
+# The manual pages are generated rather than written, because the POD they
+# come from is not documentation kept alongside the tools -- it is the
+# documentation the tools themselves print. `glitchvape --help` is pod2usage
+# over the same block, so a flag cannot be documented in one and missing from
+# the other.
+MAN1 = $(addsuffix .1,$(SCRIPTS))
 
 # ---------------------------------------------------------------------------
-# Which fonts are ours to hand on
+# Which fonts are ours to hand on, and in which package
 #
-# A font ships if its licence ships with it, and the way that is decided is
-# structural rather than a list to keep up to date: a release unpacked whole
-# into assets/fonts/ brings its LICENSE along, and those directories ship.
-# A file dropped loose into assets/fonts/ brings nothing with it, and does
-# not ship -- which today is exactly VCR OSD Mono and W95FA, free to use but
-# not yet established as free to redistribute inside somebody else's package.
+# Two questions, and they used to be answered by one rule. A font ships if its
+# licence ships with it -- decided structurally rather than by a list to keep
+# up to date: a release unpacked whole brings its LICENSE along and ships, a
+# file dropped in loose brings nothing with it and does not. But "has a
+# licence" is not "has a licence we may pass on in this package", and treating
+# them as the same thing meant a font could only be documented by being
+# distributed.
 #
-# The consequence is that adding a font to the distribution is unpacking a
-# release, and there is no way to add one that quietly leaves its licence
-# behind. `make check-licenses` states what the rule concluded.
+# So there are two directories, and which one a font is in is the answer to
+# the second question:
+#
+#   assets/fonts/          free to redistribute; ships in the base package,
+#                          whose License tag has to cover every one of them.
+#   assets/fonts-nonfree/  documented but restricted, or not established at
+#                          all; ships only in glitchvape-fonts-extra.
+#
+# Both are on GlitchVape::Fonts' search path, so a checkout finds every font
+# either way and the split is invisible to everything but the packaging.
+#
+# Restricted today: W95FA alone. VCR OSD Mono was here until its author
+# answered the question directly -- free for any purpose, commercial included
+# -- which is what moved it up. `make check-licenses` states what the rule
+# concluded for each directory.
 FONT_LICENCE_GLOB = LICENSE* LICENCE* COPYING* OFL*
+
 FONT_LICENCES = $(wildcard $(foreach g,$(FONT_LICENCE_GLOB),assets/fonts/*/$(g)))
 FONT_DIRS     = $(sort $(patsubst %/,%,$(dir $(FONT_LICENCES))))
 FONT_FILES    = $(if $(FONT_DIRS),$(shell find $(FONT_DIRS) -type f))
+
+EXTRA_LICENCES = \
+    $(wildcard $(foreach g,$(FONT_LICENCE_GLOB),assets/fonts-nonfree/*/$(g)))
+EXTRA_FONT_DIRS  = $(sort $(patsubst %/,%,$(dir $(EXTRA_LICENCES))))
+EXTRA_FONT_FILES = \
+    $(if $(EXTRA_FONT_DIRS),$(shell find $(EXTRA_FONT_DIRS) -type f))
 
 SCRIPTS   = glitchvape glitchvape-batch glitchvape-gui
 
@@ -55,13 +83,16 @@ SCRIPTS   = glitchvape glitchvape-batch glitchvape-gui
 GUI_MODULES = lib/GlitchVape/GUI.pm $(shell find lib/GlitchVape/GUI -name '*.pm')
 CLI_MODULES = $(filter-out $(GUI_MODULES), $(shell find lib -name '*.pm'))
 
-.PHONY: all test check check-split check-licenses tidy critic dist srpm \
-        install install-cli install-fonts install-gui uninstall clean
+.PHONY: all test check check-split check-licenses tidy critic dist deb \
+        srpm rpm rpms man install install-cli install-fonts \
+        install-fonts-extra install-gui uninstall clean
 
 all:
 	@echo "$(NAME) $(VERSION) -- nothing to build."
 	@echo "make test      run the test suite"
 	@echo "make install   PREFIX=$(PREFIX)"
+	@echo "make deb       build the Debian packages"
+	@echo "make rpm       build the RPM packages (make rpms for the srpm too)"
 
 test check:
 	$(PROVE) -Ilib -r t/
@@ -95,15 +126,40 @@ check-licenses:
 	        echo "check-licenses: $$d ships fonts but has no licence" >&2; \
 	        fail=1; \
 	    else \
-	        echo "  ship  $$d  ($$found)"; \
+	        echo "  base   $$d  ($$found)"; \
 	    fi; \
 	done; \
-	for f in $$(find assets/fonts -maxdepth 1 -type f 2>/dev/null); do \
-	    echo "  hold  $$f  (nothing beside it says it may be redistributed)"; \
+	for d in $(EXTRA_FONT_DIRS); do \
+	    found=$$(cd $$d && ls $(FONT_LICENCE_GLOB) 2>/dev/null | head -1); \
+	    if [ -z "$$found" ]; then \
+	        echo "check-licenses: $$d ships fonts but has no licence" >&2; \
+	        fail=1; \
+	    else \
+	        echo "  extra  $$d  ($$found)"; \
+	    fi; \
+	done; \
+	for f in $$(find assets/fonts assets/fonts-nonfree -maxdepth 1 -type f \
+	        2>/dev/null); do \
+	    echo "  hold   $$f  (nothing beside it says what its terms are)"; \
+	    fail=1; \
 	done; \
 	[ $$fail -eq 0 ] || exit 1; \
 	echo "check-licenses: $(words $(FONT_FILES)) files from \
-$(words $(FONT_DIRS)) font releases, each with its licence"
+$(words $(FONT_DIRS)) releases in the base package, \
+$(words $(EXTRA_FONT_FILES)) from $(words $(EXTRA_FONT_DIRS)) in \
+$(NAME)-fonts-extra, each with its licence"
+
+# ---------------------------------------------------------------------------
+# Manual pages
+
+# Section 1 with the project as the "source" and no date, so that two builds
+# of the same source produce byte-identical pages -- pod2man defaults the date
+# to the file's mtime, which makes the package unreproducible for no gain.
+man: $(MAN1)
+
+%.1: bin/%
+	$(POD2MAN) --section=1 --center="GlitchVape" --release="$(NAME) $(VERSION)" \
+	    --date="2026-08-25" $< $@
 
 tidy:
 	perltidy -b -bext='/' $(CLI_MODULES) $(GUI_MODULES) $(addprefix bin/,$(SCRIPTS))
@@ -111,6 +167,10 @@ tidy:
 critic:
 	perlcritic lib/ bin/ t/
 
+# install-fonts-extra is deliberately not here. The default install is what a
+# person gets from `sudo make install`, and it should put nothing on their
+# machine whose terms this project could not state -- the same rule the base
+# package follows. Ask for it by name, or install glitchvape-fonts-extra.
 install: install-cli install-fonts install-gui
 
 # ---------------------------------------------------------------------------
@@ -160,6 +220,8 @@ install-cli:
 	done
 	$(MAKE) fix-inc SCRIPT_LIST="glitchvape glitchvape-batch"
 
+	$(MAKE) install-man MAN_LIST="glitchvape glitchvape-batch"
+
 # ---------------------------------------------------------------------------
 # The fonts that are ours to hand on
 #
@@ -173,6 +235,24 @@ install-fonts: check-licenses
 	@set -e; for f in $(FONT_FILES); do \
 	    rel=$${f#assets/fonts/}; \
 	    d=$(DESTDIR)$(DATADIR)/assets/fonts/$$(dirname $$rel); \
+	    $(INSTALL_DIR) $$d; \
+	    echo "$(INSTALL_DATA) $$f $$d/"; \
+	    $(INSTALL_DATA) $$f $$d/; \
+	done
+
+# ---------------------------------------------------------------------------
+# The fonts that are not
+#
+# Same layout one directory over, which is what makes this a packaging
+# decision rather than a code one: GlitchVape::Fonts searches
+# assets/fonts-nonfree wherever it finds it, so a machine with this installed
+# and a machine with a checkout resolve the same roles.
+
+install-fonts-extra: check-licenses
+	$(INSTALL_DIR) $(DESTDIR)$(DATADIR)/assets/fonts-nonfree
+	@set -e; for f in $(EXTRA_FONT_FILES); do \
+	    rel=$${f#assets/fonts-nonfree/}; \
+	    d=$(DESTDIR)$(DATADIR)/assets/fonts-nonfree/$$(dirname $$rel); \
 	    $(INSTALL_DIR) $$d; \
 	    echo "$(INSTALL_DATA) $$f $$d/"; \
 	    $(INSTALL_DATA) $$f $$d/; \
@@ -195,6 +275,8 @@ install-gui:
 	$(INSTALL_PROGRAM) bin/glitchvape-gui $(DESTDIR)$(BINDIR)/glitchvape-gui
 	$(MAKE) fix-inc SCRIPT_LIST="glitchvape-gui"
 
+	$(MAKE) install-man MAN_LIST="glitchvape-gui"
+
 	$(INSTALL_DATA) $(NAME).desktop $(DESTDIR)$(APPDIR)/$(NAME).desktop
 	$(INSTALL_DATA) $(NAME).metainfo.xml \
 	    $(DESTDIR)$(METAINFODIR)/$(NAME).metainfo.xml
@@ -206,6 +288,17 @@ install-gui:
 	    $(DESTDIR)$(ICONDIR)/256x256/apps/$(NAME).png
 
 # ---------------------------------------------------------------------------
+
+# Generated at install time rather than committed, so that a page can never
+# disagree with the --help of the tool it documents.
+.PHONY: install-man
+install-man:
+	$(INSTALL_DIR) $(DESTDIR)$(MANDIR)/man1
+	for s in $(MAN_LIST); do \
+	    $(POD2MAN) --section=1 --center="GlitchVape" \
+	        --release="$(NAME) $(VERSION)" --date="2026-08-25" \
+	        bin/$$s $(DESTDIR)$(MANDIR)/man1/$$s.1; \
+	done
 
 # Installed scripts find the modules on @INC like anything else, so the
 # checkout's `use lib` has to go. Left in, it would put a directory that does
@@ -224,10 +317,19 @@ fix-inc:
 # needs and nothing it does not.
 #
 # assets/ is named a directory at a time rather than whole, so that the font
-# directories are exactly $(FONT_DIRS) -- the releases that brought a licence
-# with them. A font sitting loose in assets/fonts/ is a font somebody fetched
-# for their own machine and is not in the tarball, which is the same rule
-# .gitignore applies and the one check-licenses states.
+# directories are exactly $(FONT_DIRS) and $(EXTRA_FONT_DIRS) -- the releases
+# that brought a licence with them. A font sitting loose in either directory
+# is a font somebody fetched for their own machine and is not in the tarball,
+# which is the same rule .gitignore applies and the one check-licenses states.
+#
+# Both trees are in the one tarball because both packagings build every binary
+# package from it: which font ends up in which .rpm or .deb is decided by the
+# spec's %files lists and by debian/rules, not by what the source carries.
+#
+# debian/ goes in whole apart from what a previous build left in it. Those
+# excludes are the same set .gitignore names, for the same reason: a staging
+# tree from an earlier `make deb` is not source, and a tarball carrying one
+# would build a package containing the last build's output.
 DIST = $(NAME)-$(VERSION)
 
 dist: check-licenses
@@ -236,8 +338,14 @@ dist: check-licenses
 	tar -cf - \
 	    --exclude='*.bak' --exclude='*.tdy' \
 	    --exclude='*.ERR' --exclude='*.LOG' \
-	    bin lib presets t Makefile README.md LICENSE \
-	    assets/artwork assets/luts $(FONT_DIRS) \
+	    --exclude='debian/.debhelper' --exclude='debian/files' \
+	    --exclude='debian/tmp' --exclude='debian/*.substvars' \
+	    --exclude='debian/*.debhelper.log' \
+	    --exclude='debian/debhelper-build-stamp' \
+	    --exclude='debian/$(NAME)' --exclude='debian/$(NAME)-gui' \
+	    --exclude='debian/$(NAME)-fonts-extra' \
+	    bin lib presets t Makefile README.md LICENSE debian \
+	    assets/artwork assets/luts $(FONT_DIRS) $(EXTRA_FONT_DIRS) \
 	    $(NAME).spec $(NAME).desktop $(NAME).metainfo.xml \
 	    .perlcriticrc .perltidyrc \
 	  | tar -xf - -C $(DIST)
@@ -245,11 +353,121 @@ dist: check-licenses
 	rm -rf $(DIST)
 	@echo "$(DIST).tar.gz"
 
-srpm: dist
-	rpmbuild -ts $(DIST).tar.gz
+# ---------------------------------------------------------------------------
+# The RPM packages
+#
+# Both are built from the tarball with -t rather than from the spec in the
+# tree, which is not a detail: -t unpacks the tarball and builds what is
+# inside it, so a file `make dist` failed to include is a build failure here
+# rather than a package that is missing something nobody notices until it is
+# installed. It is the same reason `make deb` runs the test suite.
+#
+# Everything lands under $(RPMTOPDIR), which defaults to where rpmbuild would
+# have put it anyway. Overriding it is how to build without touching $$HOME:
+#
+#     make rpm RPMTOPDIR=$$PWD/build-rpm
+RPMTOPDIR ?= $(HOME)/rpmbuild
+RPMBUILD  ?= rpmbuild
+
+# Extra macro definitions, and extra rpmbuild flags. Two variables rather than
+# one because they do not go to the same places: the defines are also handed
+# to `rpm --eval` by the check below, and rpm rejects rpmbuild-only options
+# like --nocheck, so putting everything in one variable makes the check fail
+# on exactly the invocation that was trying to get past it.
+#
+#     make rpm RPMDEFINES='--define "foo bar"' RPMFLAGS='--nodeps --nocheck'
+RPMDEFINES ?=
+RPMFLAGS   ?=
+
+# --define rather than a bare -D so the value survives a path with a space in
+# it, and stated once so neither target depends on the other having run.
+RPM_DEFINES = --define "_topdir $(RPMTOPDIR)" $(RPMDEFINES)
+
+# Two things are checked, because two things go wrong and they look nothing
+# alike.
+#
+# rpmbuild missing is the obvious one. The second is subtler and cost an
+# afternoon: %{perl_vendorlib} is defined by Fedora's perl-macros package, and
+# without it every %files entry naming it expands to a literal
+# "%{perl_vendorlib}/..." and the build dies with `File must begin with "/"`,
+# which reads exactly like a bug in the spec and is not one. Debian's rpm
+# package installs rpmbuild without any of Fedora's macros, so this is
+# precisely what `make rpm` on the wrong machine looks like.
+#
+# Evaluated with the same defines the build will use, so supplying the value
+# through RPMDEFINES satisfies the check rather than running into it.
+.PHONY: rpm-tools
+rpm-tools:
+	@command -v $(RPMBUILD) >/dev/null || { \
+	    echo "rpm: $(RPMBUILD) is not installed." >&2; \
+	    echo "  Fedora/RHEL:  sudo dnf install rpm-build" >&2; \
+	    echo "  Debian:       run 'make deb' instead" >&2; \
+	    exit 1; \
+	}
+	@case "$$(rpm $(RPM_DEFINES) --eval '%{perl_vendorlib}' 2>/dev/null)" in \
+	    /*) : ;; \
+	    *) \
+	        echo "rpm: %{perl_vendorlib} does not resolve to a path." >&2; \
+	        echo "  The spec installs the modules there, so the build" >&2; \
+	        echo "  would fail with a misleading File-must-begin-with-/." >&2; \
+	        echo "  Fedora/RHEL:  sudo dnf install perl-macros" >&2; \
+	        echo "  Debian:       rpmbuild is here but Fedora's macros are" >&2; \
+	        echo "                not; run 'make deb' instead" >&2; \
+	        exit 1 ;; \
+	esac
+
+srpm: dist rpm-tools
+	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -ts $(DIST).tar.gz
+	@echo "Built:"
+	@ls -1 $(RPMTOPDIR)/SRPMS/$(NAME)-$(VERSION)-*.src.rpm 2>/dev/null \
+	    | sed 's/^/  /' || true
+
+# The binary packages: all three of them, from the one tarball, exactly as a
+# build service would do it.
+#
+# This needs every BuildRequires the spec names, which rpmbuild checks before
+# it starts. `sudo dnf builddep $(NAME).spec` installs them, and is not run
+# from here: a Makefile target that acquires root to install packages is not
+# something to have happen because somebody typed `make rpm`. For a quick
+# local build without them:
+#
+#     make rpm RPMFLAGS='--nodeps --nocheck'
+#
+# which skips the dependency check and the %check section -- and therefore
+# skips the test suite, so it proves the packaging and not the program.
+rpm: dist rpm-tools
+	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -tb $(DIST).tar.gz
+	@echo "Built:"
+	@find $(RPMTOPDIR)/RPMS -name '$(NAME)*-$(VERSION)-*.rpm' \
+	    -newer $(DIST).tar.gz -printf '  %p\n' 2>/dev/null || true
+
+# Both, which is what a release actually needs: the source package to hand to
+# a build service and the binaries to try before doing so.
+rpms: srpm rpm
+
+# ---------------------------------------------------------------------------
+# The Debian packages
+#
+# Built in place rather than from the tarball, because debian/ is in the tree
+# and dpkg-buildpackage wants to be run from the top of a source directory --
+# which this is. The .deb files land in the parent directory, which is where
+# dpkg-buildpackage puts them and not something worth arguing with.
+#
+# -b for binary only: there is no signed source upload to make here, and the
+# three .deb files are what anybody asking for `make deb` wants.
+deb:
+	@command -v dpkg-buildpackage >/dev/null \
+	    || { echo "deb: dpkg-dev is not installed" >&2; exit 1; }
+	@command -v dh >/dev/null \
+	    || { echo "deb: debhelper is not installed" >&2; exit 1; }
+	dpkg-buildpackage -us -uc -b
+	@echo
+	@echo "Built in $$(cd .. && pwd):"
+	@ls -1 ../$(NAME)*_$(VERSION)-*_all.deb 2>/dev/null || true
 
 uninstall:
 	rm -f  $(addprefix $(DESTDIR)$(BINDIR)/,$(SCRIPTS))
+	rm -f  $(addprefix $(DESTDIR)$(MANDIR)/man1/,$(MAN1))
 	rm -rf $(DESTDIR)$(DATADIR)
 	rm -rf $(DESTDIR)$(PERLDIR)/GlitchVape $(DESTDIR)$(PERLDIR)/GlitchVape.pm
 	rm -f  $(DESTDIR)$(APPDIR)/$(NAME).desktop
@@ -257,6 +475,7 @@ uninstall:
 	rm -f  $(DESTDIR)$(ICONDIR)/256x256/apps/$(NAME).png
 
 clean:
+	rm -f $(MAN1)
 	find . -name '*.bak' -o -name '*.tdy' -o -name '*.ERR' -o -name '*.LOG' \
 	    | xargs -r rm -f
 	rm -rf .prove $(DIST) $(DIST).tar.gz

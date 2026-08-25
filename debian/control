@@ -1,0 +1,115 @@
+Source: glitchvape
+Section: graphics
+Priority: optional
+Maintainer: Kamil J. Dudek <kamilek@localhost.localdomain>
+Rules-Requires-Root: no
+Build-Depends:
+ debhelper-compat (= 13),
+ perl,
+# The suite is Perl-only apart from the effects, which need ImageMagick both
+# as a library and as a binary -- GlitchVape::Tools shells out to `magick` for
+# the things PerlMagick cannot do in-process. The window tests skip themselves
+# when there is no display, so nothing here needs X.
+ imagemagick <!nocheck>,
+ libimage-magick-perl <!nocheck>,
+ libfile-which-perl <!nocheck>,
+Standards-Version: 4.7.0
+Homepage: https://github.com/kamiljdudek/glitchvape-vibecoded
+Vcs-Browser: https://github.com/kamiljdudek/glitchvape-vibecoded
+Vcs-Git: https://github.com/kamiljdudek/glitchvape-vibecoded.git
+
+Package: glitchvape
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${perl:Depends},
+ imagemagick,
+ libimage-magick-perl,
+ libfile-which-perl,
+# Named as a path rather than as a package because Debian ships ffmpeg and
+# some derivatives substitute their own build; a package name would pick a
+# side the user has already picked. Without it the animated writers are gone
+# and stills still render, which is why this is not a Depends.
+Recommends:
+ ffmpeg,
+ fonts-dejavu-core,
+ fonts-noto-cjk,
+ fonts-cascadia-code,
+# Every one of these is optional by design: GlitchVape::Tools probes for them
+# and the effects degrade rather than die. Without pngquant the quantiser
+# falls back to ImageMagick's, and without libheif-examples an iPhone HEIC is
+# only readable if ImageMagick has the delegate.
+Suggests:
+ glitchvape-gui,
+ glitchvape-fonts-extra,
+ pngquant,
+ gifsicle,
+ libimage-exiftool-perl,
+ libheif-examples,
+ fontconfig,
+ fonts-terminus,
+ fonts-ipafont-gothic,
+ fonts-hack,
+Description: apply VHS, CRT and databending effects to photographs
+ GlitchVape puts a photograph through a signal chain of thirty-nine effects:
+ tape wobble and tracking error, chromatic aberration, pixel sorting and
+ databending, film grain, scanlines and phosphor grilles, and the text and
+ furniture that sit over the top.
+ .
+ Order is not a free choice -- scanlines applied before a downsample get eaten
+ by the resample -- so each effect declares where in the chain it belongs and
+ the pipeline sorts by it. Presets bundle a whole look, and a render can be
+ reproduced exactly from its seed.
+ .
+ This package contains the command-line tools and the library. For the window,
+ install glitchvape-gui.
+ .
+ Departure Mono and Fusion Pixel are included under the SIL Open Font License
+ and VCR OSD Mono under its author's own grant; glitchvape --licenses prints
+ their terms along with this program's. Fonts of your own go in
+ ~/.local/share/glitchvape/fonts, or in /usr/share/glitchvape/fonts for every
+ account on the machine.
+
+Package: glitchvape-gui
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${perl:Depends},
+ glitchvape (= ${source:Version}),
+ libgtk3-perl,
+ libglib-perl,
+ libglib-object-introspection-perl,
+ libgtk3-imageview-perl,
+ hicolor-icon-theme,
+Description: graphical front end for GlitchVape
+ A Gtk3 window over the GlitchVape pipeline: presets and their parameters on
+ the left, the render on the right, an explicit Apply between them.
+ .
+ It is a front end rather than a second implementation. The controls are
+ generated from the same declarations that produce the command-line flags, so
+ an effect added to the registry gets a widget without anyone editing the
+ interface, and Export goes through the same code path as the command-line
+ tool -- the result is identical to the equivalent invocation.
+
+Package: glitchvape-fonts-extra
+Section: non-free/fonts
+Architecture: all
+Depends:
+ ${misc:Depends},
+ glitchvape (= ${source:Version}),
+Description: typefaces for GlitchVape whose terms are not established
+ The typefaces GlitchVape looks for that the base package will not
+ distribute, installed where it already searches for them. Nothing needs
+ configuring: the roles they satisfy start resolving as soon as this is
+ installed, and glitchvape --check-fonts says so.
+ .
+ W95FA today, which fills the 'ui' role -- the Windows 95 interface face the
+ mallsoft and dreamcore presets ask for. dafont describes it as SIL Open Font
+ License and free for personal and commercial use, but the release carries no
+ licence text and the author has not said so anywhere that can be cited, so
+ what is on disk is a font and a claim about it rather than a font and its
+ terms.
+ .
+ That is a lower bar than the base package holds itself to, which is why this
+ is a separate package you have to ask for. If you need certainty about what
+ you may do with this font, get it from its author rather than from here.

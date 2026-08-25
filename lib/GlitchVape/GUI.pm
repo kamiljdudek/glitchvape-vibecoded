@@ -27,6 +27,7 @@ use GlitchVape::GUI::About       ();
 use GlitchVape::GUI::Audio       ();
 use GlitchVape::GUI::CommandLine ();
 use GlitchVape::GUI::Cache       ();
+use GlitchVape::GUI::Export      ();
 use GlitchVape::GUI::Generated   ();
 use GlitchVape::GUI::Params      ();
 use GlitchVape::GUI::Preview     ();
@@ -65,12 +66,28 @@ fifty near-identical entries from dragging a slider.
 Previews render at a reduced size, chosen in the toolbar. Effects are
 pixel-scale dependent -- C<grain>, C<scanlines> and C<dither> all work in
 pixels rather than fractions of the frame -- so a small preview is an
-impression of the full-size render, not a crop of it. Export always renders at
-full size.
+impression of the render, not a crop of it.
+
+Export renders at the size the export settings ask for, which is the preset's
+own full size unless somebody has said otherwise -- see
+L<GlitchVape::GUI::Export>. The preview size is never that size: it is a
+property of the window, and changing it changes nothing about the file.
+
+=head2 What an export is, is settings
+
+Where it goes is asked in a file chooser, at the moment of exporting. What it
+is -- format, size, frame rate, palette -- is set once in a dialog behind the
+menu and then left, because those are the answers that stay the same across a
+session's worth of renders while the filename does not.
+
+Both halves are held here, in C<< $self->{ export } >>, and both reach the
+render through L<GlitchVape::GUI::Export/render_options> rather than being
+assembled twice: the export and the command line equivalent are built from
+the same hash, so they cannot come to disagree about what would be written.
 
 =head2 The soundtrack row
 
-Ticking Animate reveals a row for building a soundtrack. There is one cropped
+Switching Animate on reveals a row for building a soundtrack. There is one cropped
 file at most, through L<GlitchVape::GUI::Audio>, and any number of generated
 tracks through L<GlitchVape::GUI::Generated> -- static under a dialled phrase
 under a piece of music is an ordinary thing to want. Each gets its own line
@@ -89,6 +106,20 @@ encoded preview even though it changes no frame.
 
 # Longest edge for a preview, and roughly what each costs on a 12-megapixel
 # photograph. 'Full' resolves to the preset's own max_dim at render time.
+# Apply runs the pipeline and Stop interrupts it, so the button carries the
+# transport pair rather than a tick: what it does is start something that
+# takes time, and the icon that means "stop" is only obvious next to the icon
+# that means "start".
+use constant {
+    APPLY_ICON => 'media-playback-start-symbolic',
+    STOP_ICON  => 'media-playback-stop-symbolic',
+};
+
+# Room for the icon, the gap after it and the button's padding, added to the
+# width of the widest word the button can show. A constant because all three
+# are constant: only the word changes.
+use constant APPLY_EXTRA => 46;
+
 my @PREVIEW_SIZES = (
     [ 512, 'Fast (512 px)' ],
     [ 720, 'Balanced (720 px)' ],
@@ -118,6 +149,46 @@ sub _icon_button
     return $button;
 }
 
+# An icon beside a word, for the two buttons in the action bar. Both halves
+# are wanted: the icon is what the eye finds after the first day and the word
+# is what makes it findable on the first, and a bar with room for two buttons
+# has room for both.
+#
+# The child is built by hand rather than with set_image plus
+# set_always_show_image, because set_label on such a button rebuilds the child
+# and drops the image -- and Apply changes its label every time a render
+# starts. Owning the box means the icon and the word can be swapped together.
+sub _action_button
+{
+    my ( $icon, $label, $tooltip ) = @_;
+
+    return _dress_button( Gtk3::Button->new, $icon, $label, $tooltip );
+}
+
+# The same for a button that already exists, which is how a Gtk3::ToggleButton
+# gets one: the two classes differ in what pressing them means and not at all
+# in what they look like.
+sub _dress_button
+{
+    my ( $button, $icon, $label, $tooltip ) = @_;
+
+    $button->set_tooltip_text( $tooltip ) if defined $tooltip;
+
+    my $image = Gtk3::Image->new_from_icon_name( $icon, 'button' );
+
+    my $text = Gtk3::Label->new_with_mnemonic( $label );
+    $text->set_mnemonic_widget( $button );
+
+    my $box = Gtk3::Box->new( 'horizontal', 6 );
+    $box->set_halign( 'center' );
+    $box->pack_start( $image, 0, 0, 0 );
+    $box->pack_start( $text,  0, 0, 0 );
+
+    $button->add( $box );
+
+    return ( $button, $image, $text );
+}
+
 sub new
 {
     my ( $class, %arg ) = @_;
@@ -137,7 +208,13 @@ sub new
         fps          => 12,
         audio        => undef,
         muted        => 0,
+        export       => GlitchVape::GUI::Export::defaults(),
     }, $class;
+
+    # The frame rate belongs to both dialogs -- see
+    # GlitchVape::GUI::Export/Frame rate is one setting, shown twice -- and
+    # this is the copy either of them edits.
+    $self->{ fps } = $self->{ export }{ fps };
 
     $self->_build_window;
 
@@ -284,11 +361,15 @@ sub _build_menu
     my $menu = Gtk3::Menu->new;
 
     for my $item (
-        [ 'Randomize', sub { return $self->_randomize }, 'seed' ],
+        [ 'Randomize',           sub { return $self->_randomize }, 'seed' ],
         [ 'Animation settings…', sub { return $self->_animation_settings } ],
+        [ 'Export settings…',    sub { return $self->_export_settings } ],
         undef,
-        [ 'Save as preset…',   sub { return $self->_save_preset },  'preset' ],
-        [ 'Copy command line', sub { return $self->_copy_command }, 'command' ],
+        [ 'Save as preset…', sub { return $self->_save_preset }, 'preset' ],
+        [
+            'Copy command line…', sub { return $self->_copy_command },
+            'command'
+        ],
         undef,
         [ 'Check dependencies…', sub { return $self->_show_deps } ],
         [ 'Clear preview cache', sub { return $self->_clear_cache } ],
@@ -350,27 +431,55 @@ sub _build_left
     $self->{ effect_box } = Gtk3::Box->new( 'vertical', 6 );
     $box->pack_start( $self->{ effect_box }, 0, 0, 0 );
 
-    my $add = Gtk3::Button->new_with_label( '+  Add effect…' );
+    $scroll->add( $box );
+    $outer->pack_start( $scroll, 1, 1, 0 );
+
+    $outer->pack_start( $self->_build_left_actions, 0, 0, 0 );
+
+    return $outer;
+}
+
+# The two things done to a pipeline -- add something to it, render it -- at
+# the foot of the pane that holds it, in a Gtk3::ActionBar.
+#
+# An action bar rather than a box of buttons because that is what it is: the
+# platform's container for the actions belonging to the view above it, with
+# the separator, the padding and the start/end split already decided. Add
+# effect used to sit inside the scrolled list, where it moved down the screen
+# as the pipeline grew and could be scrolled out of sight entirely; Apply sat
+# below in a hand-built box. Both are outside the scroll now and neither can
+# be scrolled away.
+#
+# Apply keeps its accent colour. A GtkActionBar imposes nothing on the buttons
+# inside it -- it is a container, not a style -- so suggested-action works
+# there exactly as it did before, and the one destination action stays
+# distinguishable from the one that opens a dialog.
+sub _build_left_actions
+{
+    my ( $self ) = @_;
+
+    my $bar = Gtk3::ActionBar->new;
+
+    # Alt+D. Not Alt+A, which Apply has had since there was a window, and not
+    # Alt+E, which Export has in the header bar -- two controls answering one
+    # key is worse than either of them having no key at all.
+    my ( $add ) = _action_button( 'list-add-symbolic', 'A_dd effect…',
+        'Choose another effect to add to the pipeline' );
     $add->signal_connect(
         clicked => sub {
             $self->_choose_effect;
             return;
         }
     );
-    $box->pack_start( $add, 0, 0, 0 );
-    $self->{ b_add } = $add;
+    $bar->pack_start( $add );
 
-    $scroll->add( $box );
-    $outer->pack_start( $scroll, 1, 1, 0 );
-
-    # Apply sits outside the scrolled area: it is the one control that must
-    # never be scrolled off the screen.
-    my $bottom = Gtk3::Box->new( 'horizontal', 6 );
-    $bottom->set_border_width( 10 );
-
-    my $apply = Gtk3::Button->new_with_mnemonic( '_Apply' );
+    my ( $apply, $apply_icon, $apply_label ) = _action_button(
+        APPLY_ICON,
+        '_Apply',
+        'Render the pipeline and show the result. '
+            . 'Nothing on the left takes effect until this is pressed'
+    );
     $apply->get_style_context->add_class( 'suggested-action' );
-    $apply->set_hexpand( 1 );
     $apply->signal_connect(
         clicked => sub {
             $self->_apply;
@@ -382,7 +491,8 @@ sub _build_left
     # two words are not the same width. Pin it to the wider of the two,
     # measured rather than guessed so a theme with a different font does not
     # reintroduce the problem.
-    $apply->set_size_request( _widest_label( $apply, '_Apply', '_Stop' ), -1 );
+    $apply->set_size_request( _widest_label( $apply_label, '_Apply', '_Stop' ),
+        -1 );
 
     # The spinner keeps its place in the layout at all times and is faded in
     # and out rather than shown and hidden: appearing would take 22 pixels off
@@ -393,21 +503,27 @@ sub _build_left
     $spinner->set_valign( 'center' );
     $spinner->set_opacity( 0 );
 
-    $bottom->pack_start( $apply,   1, 1, 0 );
-    $bottom->pack_start( $spinner, 0, 0, 0 );
-
-    # Animate belongs with Apply rather than over by the preview: it changes
-    # what Apply does -- twenty-four renders instead of one -- rather than how
-    # the result is displayed, which is what everything in the preview bar is
-    # for. How many frames and how fast are settings behind the menu; whether
-    # to do it at all is the decision worth having in front of you.
-    my $animate = Gtk3::CheckButton->new_with_mnemonic( 'A_nimate' );
-    $animate->set_tooltip_text(
-              "Render a looping animation instead of a still.\n"
-            . 'Costs one render per frame. Frames and rate are in the menu' );
-    $animate->set_margin_start( 10 );
-    $animate->set_margin_end( 10 );
-    $animate->set_margin_bottom( 10 );
+    # Whether to render a loop instead of a still. A toggle rather than a
+    # checkbox because it is a mode the window is in and stays in, and a
+    # pressed button says that at a glance from across the room in a way a
+    # tick in a box does not.
+    #
+    # Beside Apply, and that is the point of where it is. It does not change
+    # how the result is displayed; it changes what Apply *does* -- twenty-four
+    # renders instead of one -- and what Export then writes. Among the preview
+    # controls it read as another free adjustment like zoom, and the cost was
+    # discoverable only by hovering.
+    #
+    # Labelled, unlike the icon-only zoom and mute buttons on the other side.
+    # Those are asides about this playback; this one has a render bill behind
+    # it. It keeps the Alt+N it had as a checkbox.
+    my ( $animate ) = _dress_button(
+        Gtk3::ToggleButton->new,
+        'camera-video-symbolic',
+        'A_nimate',
+        "Render a looping animation instead of a still.\n"
+            . 'Costs one render per frame. Length and rate are in the menu'
+    );
     $animate->signal_connect(
         toggled => sub {
             $self->{ animate } = $animate->get_active;
@@ -416,36 +532,51 @@ sub _build_left
         }
     );
 
-    $outer->pack_start( Gtk3::Separator->new( 'horizontal' ), 0, 0, 0 );
-    $outer->pack_start( $bottom,                              0, 0, 0 );
-    $outer->pack_start( $animate,                             0, 0, 0 );
+    # pack_end fills from the right, so these go in reverse of how they read:
+    # Apply at the end, the spinner that belongs to it next, and the toggle
+    # that decides what pressing it will cost before them both.
+    $bar->pack_end( $apply );
+    $bar->pack_end( $spinner );
+    $bar->pack_end( $animate );
 
-    $self->{ b_apply }   = $apply;
-    $self->{ spinner }   = $spinner;
-    $self->{ b_animate } = $animate;
+    $self->{ b_animate }   = $animate;
+    $self->{ b_add }       = $add;
+    $self->{ b_apply }     = $apply;
+    $self->{ apply_icon }  = $apply_icon;
+    $self->{ apply_label } = $apply_label;
+    $self->{ spinner }     = $spinner;
 
-    return $outer;
+    return $bar;
 }
 
-# Natural width of the widest of several labels on one button. The label is
-# put back before returning, so this is only a measurement.
+# Natural width of the widest of several words, measured on the label that
+# will hold them. The text is put back before returning, so this is only a
+# measurement.
+#
+# Measured on the label rather than on the button because the button's child
+# is a box holding an icon as well, and set_label on such a button would
+# replace the box -- see _action_button. The icon's width is constant, so the
+# widest label still gives the widest button once the caller adds the
+# button's own padding by asking it for a size request.
 sub _widest_label
 {
-    my ( $button, @labels ) = @_;
+    my ( $label, @words ) = @_;
 
-    my $original = $button->get_label;
+    my $original = $label->get_label;
     my $widest   = 0;
 
-    for my $text ( @labels )
+    for my $text ( @words )
     {
-        $button->set_label( $text );
-        my ( undef, $natural ) = $button->get_preferred_width;
+        $label->set_text_with_mnemonic( $text );
+        my ( undef, $natural ) = $label->get_preferred_width;
         $widest = $natural if $natural > $widest;
     }
 
-    $button->set_label( $original );
+    $label->set_text_with_mnemonic( $original );
 
-    return $widest;
+    # The icon, the box spacing and the button's own padding sit either side
+    # of the text and are not in that number.
+    return $widest + APPLY_EXTRA;
 }
 
 sub _build_preset_section
@@ -1205,18 +1336,7 @@ sub _choose_output
 
     return unless $self->{ state };
 
-    my $format = 'png';
-    if ( $self->{ animate } )
-    {
-        $format = 'mp4';
-    }
-
-    my $suggested = GlitchVape::IO::derive_output_path(
-        $self->{ state }->source,
-        dir    => 'out',
-        format => $format,
-        preset => $self->{ state }->preset,
-    );
+    my $suggested = $self->_suggested_output;
 
     my $dialog = Gtk3::FileChooserDialog->new(
         'Export render',
@@ -1239,6 +1359,40 @@ sub _choose_output
     return;
 }
 
+# Where an export would go if nobody moved it: the name the file chooser opens
+# with, and the '-o' in the command line equivalent. One derivation for both,
+# so that what the command says is where the button would have written.
+#
+# The extension comes from the export settings rather than from the mode
+# alone, which is what makes 'Windows Bitmap' or 'WebM' show up as a filename
+# rather than as something that has to be typed over.
+sub _suggested_output
+{
+    my ( $self ) = @_;
+
+    return undef unless $self->{ state };
+
+    my $format;
+
+    if ( $self->{ animate } )
+    {
+        my %target = GlitchVape::GUI::Export::video_target( $self->{ export } );
+        $format = $target{ ext };
+    }
+    else
+    {
+        $format = GlitchVape::GUI::Export::still_extension( $self->{ export },
+            $self->{ state }->source );
+    }
+
+    return GlitchVape::IO::derive_output_path(
+        $self->{ state }->source,
+        dir    => 'out',
+        format => $format,
+        preset => $self->{ state }->preset,
+    );
+}
+
 sub _export
 {
     my ( $self, $path ) = @_;
@@ -1258,12 +1412,20 @@ sub _export
                 . 'not be in this file. Export as .mp4 or .webm for sound.' );
     }
 
-    $self->_busy( 1, "Exporting to $path…" );
+    $self->_busy( 1, sprintf 'Exporting to %s  ·  %s',
+        $path, GlitchVape::GUI::Export::describe( $self->{ export }, $spec ) );
 
     $self->{ render }->export(
         state   => $self->{ state },
         output  => $path,
         animate => $spec,
+
+        # Size, codec, palette and the retro box, whichever of them apply to
+        # what is being written. The settings decide; this only passes them
+        # on, which is what keeps the export and the command line equivalent
+        # unable to disagree.
+        GlitchVape::GUI::Export::render_options( $self->{ export }, $spec ),
+
         on_done => sub {
             my ( $written ) = @_;
             $self->_busy( 0 );
@@ -1954,8 +2116,8 @@ sub _randomize
 
 # Frames and rate. Behind the menu because they are set once and then left --
 # the default two-second loop is what almost every render uses -- while the
-# checkbox they govern is beside Apply, where the decision to animate at all
-# actually gets made.
+# toggle they govern is in the preview bar, where the decision to animate at
+# all actually gets made.
 sub _animation_settings
 {
     my ( $self ) = @_;
@@ -2034,25 +2196,73 @@ sub _animation_settings
     return;
 }
 
+# What Export writes and at what size. Behind the menu for the same reason the
+# animation settings are: set once, then left, while the button they govern is
+# in the header bar where the decision to export at all gets made.
+sub _export_settings
+{
+    my ( $self ) = @_;
+
+    GlitchVape::GUI::Export->run(
+        parent => $self->{ window },
+
+        # The frame rate lives in one place and two dialogs edit it, so the
+        # current value goes in rather than whatever this hash was last saved
+        # with -- Animation settings may have changed it since.
+        settings => { %{ $self->{ export } }, fps => $self->{ fps } },
+
+        on_done => sub {
+            my ( $settings ) = @_;
+
+            $self->{ export } = $settings;
+            $self->{ fps }    = $settings->{ fps };
+
+            $self->_status(
+                'Export settings: '
+                    . GlitchVape::GUI::Export::describe(
+                    $settings, $self->{ animate }
+                    )
+            );
+            return;
+        },
+    );
+
+    return;
+}
+
 # The interface claims to be a front end rather than a second implementation.
-# This is that claim made portable: the same settings as a command somebody
-# can paste into a terminal, on the clipboard.
+# This is that claim made legible: the same settings as a command somebody can
+# paste into a terminal, shown whole and copied on request.
+#
+# Shown rather than only copied because the command is the one thing here that
+# is worth reading. It names every effect that differs from the preset, so it
+# doubles as a summary of what has been dialled in -- and a clipboard is a
+# poor place to read anything from.
 sub _copy_command
 {
     my ( $self ) = @_;
 
     return unless $self->{ state };
 
-    my $command = GlitchVape::GUI::CommandLine::format(
+    my %arg = (
         state   => $self->{ state },
         animate => $self->_animate_spec,
+        export  => $self->{ export },
+        output  => $self->_suggested_output,
     );
 
-    my $clipboard =
-        Gtk3::Clipboard::get( Gtk3::Gdk::Atom::intern( 'CLIPBOARD', 0 ) );
-    $clipboard->set_text( $command, -1 );
+    # Two shapes of one command: the wrapped one is what is on screen, and it
+    # is also what is copied. Backslash continuations paste into a shell as
+    # readily as one long line, and stay readable afterwards.
+    my $shown = GlitchVape::GUI::CommandLine::format( %arg, wrap => 1 );
 
-    $self->_status( "Copied: $command" );
+    $self->_show_report(
+        'Command line equivalent',
+        $shown,
+        copy => $shown,
+        lead => 'The command that produces this export. The output path is '
+            . 'where Export would have put it.',
+    );
 
     return;
 }
@@ -2122,35 +2332,98 @@ sub _show_about
     return;
 }
 
+# A response id of this program's own. Positive, so that it cannot collide
+# with any GtkResponseType -- those are all negative -- and comes back from
+# gtk_dialog_run as the number rather than as a nickname.
+use constant COPY_RESPONSE => 1;
+
 # A monospaced, selectable, scrolling block of text. Selectable because the
 # entire point of a dependency report is to be pasted somewhere else.
+#
+#     lead => text     a sentence above the box, in the window's own font
+#     copy => text     adds a Copy button that puts this on the clipboard
+#
+# The box scrolls both ways and the dialog has a size of its own, so a line
+# longer than the window scrolls rather than widening it -- which is what a
+# command line full of --set flags would otherwise do.
 sub _show_report
 {
-    my ( $self, $title, $text ) = @_;
+    my ( $self, $title, $text, %arg ) = @_;
 
     my $dialog = Gtk3::Dialog->new_with_buttons( $title, $self->{ window },
         'modal', 'Close', 'close' );
-    $dialog->set_default_size( 560, 460 );
+    $dialog->set_default_size( 620, 460 );
+
+    my $box = Gtk3::Box->new( 'vertical', 8 );
+    $box->set_border_width( 12 );
+
+    if ( defined $arg{ lead } && length $arg{ lead } )
+    {
+        my $lead = Gtk3::Label->new( $arg{ lead } );
+        $lead->set_xalign( 0 );
+        $lead->set_line_wrap( 1 );
+        $lead->get_style_context->add_class( 'dim-label' );
+        $box->pack_start( $lead, 0, 0, 0 );
+    }
 
     my $label = Gtk3::Label->new( $text );
     $label->set_xalign( 0 );
     $label->set_yalign( 0 );
     $label->set_selectable( 1 );
-    $label->set_margin_start( 14 );
-    $label->set_margin_end( 14 );
-    $label->set_margin_top( 12 );
-    $label->set_margin_bottom( 12 );
+    $label->set_margin_start( 8 );
+    $label->set_margin_end( 8 );
+    $label->set_margin_top( 6 );
+    $label->set_margin_bottom( 6 );
 
-    $label->override_font( Pango::FontDescription->from_string( 'monospace' ) );
+    # Called as a function, not as a method. Pango::FontDescription::from_string
+    # takes one argument, so the arrow form hands it the class name as well and
+    # the binding drops the excess -- leaving a description of a font family
+    # literally called 'Pango::FontDescription', which resolves to the default
+    # UI font. It looked like it worked, because a fallback always does.
+    $label->override_font( Pango::FontDescription::from_string( 'monospace' ) );
 
     my $scroll = Gtk3::ScrolledWindow->new;
+    $scroll->set_policy( 'automatic', 'automatic' );
+    $scroll->set_shadow_type( 'in' );
     $scroll->set_vexpand( 1 );
     $scroll->add( $label );
 
-    $dialog->get_content_area->add( $scroll );
+    $box->pack_start( $scroll, 1, 1, 0 );
+
+    # In the action area beside Close rather than over the text: it acts on the
+    # whole box, and a button inside the box would suggest it acts on the
+    # selection.
+    $dialog->add_button( '_Copy', COPY_RESPONSE ) if defined $arg{ copy };
+
+    $dialog->get_content_area->add( $box );
     $dialog->show_all;
-    $dialog->run;
+
+    # Every response ends gtk_dialog_run, Copy included, so it has to be run
+    # again afterwards -- otherwise copying closes the window, which is the
+    # one thing a Copy button must not do.
+    while ( 1 )
+    {
+        my $answer = $dialog->run;
+
+        last unless defined $answer && "$answer" eq COPY_RESPONSE;
+
+        $self->_to_clipboard( $arg{ copy } );
+    }
+
     $dialog->destroy;
+
+    return;
+}
+
+sub _to_clipboard
+{
+    my ( $self, $text ) = @_;
+
+    my $clipboard =
+        Gtk3::Clipboard::get( Gtk3::Gdk::Atom::intern( 'CLIPBOARD', 0 ) );
+    $clipboard->set_text( $text, -1 );
+
+    $self->_status( 'Copied to the clipboard.' );
 
     return;
 }
@@ -2166,17 +2439,34 @@ sub _busy
     {
         $self->{ spinner }->start;
         $self->{ spinner }->set_opacity( 1 );
-        $self->{ b_apply }->set_label( '_Stop' );
+        $self->_set_apply( STOP_ICON, '_Stop',
+            'Abandon this render. The settings are untouched' );
         $self->_status( $message ) if defined $message;
     }
     else
     {
         $self->{ spinner }->stop;
         $self->{ spinner }->set_opacity( 0 );
-        $self->{ b_apply }->set_label( '_Apply' );
+        $self->_set_apply( APPLY_ICON, '_Apply',
+                  'Render the pipeline and show the result. '
+                . 'Nothing on the left takes effect until this is pressed' );
     }
 
     $self->_sync_actions;
+    return;
+}
+
+# Apply and Stop are one button wearing two hats, so all three things that
+# say which hat it has on change together. The tooltip is included because a
+# button labelled Stop that still explains how to start is worse than none.
+sub _set_apply
+{
+    my ( $self, $icon, $label, $tooltip ) = @_;
+
+    $self->{ apply_icon }->set_from_icon_name( $icon, 'button' );
+    $self->{ apply_label }->set_text_with_mnemonic( $label );
+    $self->{ b_apply }->set_tooltip_text( $tooltip );
+
     return;
 }
 

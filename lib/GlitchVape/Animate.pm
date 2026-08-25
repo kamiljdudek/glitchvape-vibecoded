@@ -11,7 +11,7 @@ our $VERSION = '0.01';
 
 =head1 NAME
 
-GlitchVape::Animate - encode rendered frame sequences to MP4 or GIF
+GlitchVape::Animate - encode rendered frame sequences to MP4, WebM or GIF
 
 =head1 DESCRIPTION
 
@@ -32,7 +32,131 @@ That is C<-stream_loop -1> on the image sequence with C<-shortest>, and the
 track's own measured duration as a C<-t> as well: an infinite input needs more
 than one thing telling it where to stop.
 
+=head1 THE CONTAINER USUALLY PICKS THE CODEC, BUT NOT ALWAYS
+
+F<.mp4> means H.264 and F<.gif> means GIF, and for those the extension is the
+whole decision. F<.webm> is the one that is genuinely ambiguous: VP9 and AV1
+both live in it, and the file name cannot say which was wanted. So C<codec>
+exists, and where it is not given the extension still decides -- C<.webm>
+defaulting to VP9, which is what every build of ffmpeg can write.
+
+AV1 is smaller than VP9 at the same quality and slower to encode by a wide
+margin. It also needs an encoder that not every ffmpeg has, which is checked
+before the first frame rather than discovered at the last step -- see
+L<GlitchVape::Tools/ffmpeg_encoder>.
+
 =cut
+
+# Container plus codec to the ffmpeg arguments that write it. Video first,
+# then the audio codec that container takes, which is only added when there is
+# a track to put in it.
+#
+# A table rather than branches because the three differ in every field and
+# share no defaults worth expressing as a fall-through.
+my %CODEC = (
+    h264 => {
+        encoder => 'libx264',
+        label   => 'H.264',
+        video   => sub {
+            my ( $crf ) = @_;
+
+            # yuv420p and even dimensions are what makes the file play in
+            # browsers and phone galleries rather than only in VLC.
+            return ( '-c:v', 'libx264', '-crf', $crf, '-preset', 'slow',
+                '-pix_fmt', 'yuv420p', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2' );
+        },
+        audio => [ '-c:a', 'aac', '-b:a', '192k' ],
+    },
+
+    vp9 => {
+        encoder => 'libvpx-vp9',
+        label   => 'VP9',
+        video   => sub {
+            my ( $crf ) = @_;
+
+            # -b:v 0 is what puts libvpx into constant-quality mode; without
+            # it the CRF is a ceiling on a bitrate-targeted encode.
+            return ( '-c:v', 'libvpx-vp9', '-crf', $crf, '-b:v', '0' );
+        },
+        audio => [ '-c:a', 'libopus', '-b:a', '160k' ],
+    },
+
+    av1 => {
+        encoder => 'libsvtav1',
+        label   => 'AV1',
+        video   => sub {
+            my ( $crf ) = @_;
+
+            # preset 6 is SVT-AV1's middle: 4 and below spend minutes per
+            # frame on material this small, and 10 gives up most of the size
+            # advantage that is the reason to choose AV1 at all.
+            return ( '-c:v', 'libsvtav1', '-crf', $crf, '-preset', '6',
+                '-pix_fmt', 'yuv420p' );
+        },
+        audio => [ '-c:a', 'libopus', '-b:a', '160k' ],
+    },
+);
+
+# What an extension means when nothing said otherwise.
+my %DEFAULT_CODEC = (
+    mp4  => 'h264',
+    m4v  => 'h264',
+    mov  => 'h264',
+    webm => 'vp9',
+);
+
+=head2 codecs()
+
+The codec names C<encode> accepts, in the order a chooser should offer them.
+
+=cut
+
+sub codecs { return qw(h264 vp9 av1) }
+
+=head2 codec_available( $name )
+
+Whether this ffmpeg can write that codec. An unknown name is not available.
+
+=cut
+
+sub codec_available
+{
+    my ( $name ) = @_;
+
+    my $spec = $CODEC{ $name // q{} } or return 0;
+
+    return GlitchVape::Tools::ffmpeg_encoder( $spec->{ encoder } );
+}
+
+=head2 require_codec( $name )
+
+Dies unless C<$name> is a codec this ffmpeg can write. Returns its spec.
+
+Two failures, told apart because the fixes are nothing alike: a name this
+program does not know is a typo, and a name it knows but cannot write is a
+build of ffmpeg without that encoder.
+
+=cut
+
+sub require_codec
+{
+    my ( $name ) = @_;
+
+    my $spec = $CODEC{ $name // q{} };
+
+    die "GlitchVape::Animate: unknown codec '"
+        . ( $name // q{} ) . "'\n"
+        . '  Known: '
+        . join( ', ', codecs() ) . "\n"
+        unless $spec;
+
+    die "GlitchVape::Animate: this ffmpeg cannot write "
+        . "$spec->{ label }: no $spec->{ encoder } encoder.\n"
+        . "  Check with:  ffmpeg -encoders | grep $spec->{ encoder }\n"
+        unless GlitchVape::Tools::ffmpeg_encoder( $spec->{ encoder } );
+
+    return $spec;
+}
 
 =head2 encode( %arg )
 
@@ -40,7 +164,8 @@ than one thing telling it where to stop.
     output  => path        .mp4, .webm, .gif or .apng
     fps     => 12          frame rate
     loop    => 0           GIF loop count (0 = forever)
-    quality => 20          H.264 CRF; lower is better
+    quality => 20          CRF; lower is better
+    codec   => 'av1'       h264, vp9 or av1; default from the extension
     audio   => { ... }     a GlitchVape::Audio spec to mux in
 
 =cut
@@ -102,10 +227,14 @@ sub _encode_video
 
     my $ffmpeg = GlitchVape::Tools::require_tool( 'ffmpeg', 'to write video' );
 
+    my $spec = require_codec( codec_for( $output, $arg->{ codec } ) );
+
     my $dir = _frame_dir( $frames );
     my $fps = $arg->{ fps } || 12;
 
-    # CRF 20 is a reasonable default for H.264; lower is better quality.
+    # CRF 20 is a reasonable default across all three; lower is better
+    # quality. The scales are not identical between codecs, but they are
+    # close enough that one number does not need three defaults.
     my $crf = 20;
     if ( defined $arg->{ quality } )
     {
@@ -124,24 +253,8 @@ sub _encode_video
     push @argv, '-framerate', $fps, '-i', frame_pattern( $dir );
     push @argv, '-i', $track->{ path } if $track;
 
-    if ( $output =~ /\.webm$/i )
-    {
-        push @argv, '-c:v', 'libvpx-vp9', '-crf', $crf, '-b:v', '0';
-        push @argv, '-c:a', 'libopus', '-b:a', '160k' if $track;
-    }
-    else
-    {
-        # yuv420p and even dimensions are what makes the file play in browsers
-        # and phone galleries rather than only in VLC.
-        push @argv,
-            '-c:v',     'libx264',
-            '-crf',     $crf,
-            '-preset',  'slow',
-            '-pix_fmt', 'yuv420p',
-            '-vf',      'pad=ceil(iw/2)*2:ceil(ih/2)*2';
-
-        push @argv, '-c:a', 'aac', '-b:a', '192k' if $track;
-    }
+    push @argv, $spec->{ video }->( $crf );
+    push @argv, @{ $spec->{ audio } } if $track;
 
     if ( $track )
     {
@@ -158,11 +271,34 @@ sub _encode_video
     push @argv, $output;
 
     my $rc = system( @argv );
-    die "GlitchVape::Animate: ffmpeg failed encoding $output (exit "
+    die "GlitchVape::Animate: ffmpeg failed encoding $output as "
+        . "$spec->{ label } (exit "
         . ( $rc >> 8 ) . ")\n"
         unless $rc == 0 && -s $output;
 
     return $output;
+}
+
+=head2 codec_for( $output, $asked )
+
+The codec that would be used for an output path, given what was asked for.
+
+An explicit codec wins, then the extension's default, then H.264 -- which is
+what an unrecognised extension in an MP4-shaped world most likely meant. The
+name is returned whether or not this ffmpeg can write it; see
+L</require_codec> for that question.
+
+=cut
+
+sub codec_for
+{
+    my ( $output, $asked ) = @_;
+
+    return lc $asked if defined $asked && length $asked;
+
+    my ( $ext ) = lc( $output ) =~ /\.([^.]+)$/;
+
+    return $DEFAULT_CODEC{ $ext // q{} } // 'h264';
 }
 
 # Cut and filter the added track into the frame directory, which is already a

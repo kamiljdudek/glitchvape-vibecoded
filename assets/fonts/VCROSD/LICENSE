@@ -1,0 +1,19 @@
+VCR OSD Mono font
+
+The author (Riciery Leal) [1] has mentioned that the font is free for
+non-commercial use [2] as well, with no additional remarks.
+
+Asked directly whether commercial use was permitted, the author answered in
+the font's own comment thread [2]:
+
+    mrmanet  author of VCR OSD Mono   Feb 24, 2017
+    Yes, the font is free even for commercial purposes.
+
+So the grant is for any purpose, commercial and non-commercial alike, with no
+conditions attached. There is no separate licence document to quote: this file
+is the record of the terms, and the sources below are where they were stated.
+
+
+Sources
+1. https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=ttf-vcr-osd-mono
+2. https://www.dafont.com/font-comment.php?file=vcr_osd_mono

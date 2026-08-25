@@ -11,6 +11,11 @@ use GlitchVape::Config    ();
 use GlitchVape::Generator ();
 use GlitchVape::Registry  ();
 
+# A GUI module like this one, so loading it here costs nothing the interface
+# was not going to pay anyway -- and loading it lazily instead would pull Gtk3
+# in after INIT, which Glib's introspection complains about.
+use GlitchVape::GUI::Export ();
+
 our $VERSION = '0.01';
 
 =head1 NAME
@@ -45,15 +50,33 @@ The preview size, which is not a property of the render, and the mute button,
 which is a property of the player. Both are deliberately absent: the command
 is what produces the B<export>, and neither of those changes it.
 
+=head2 Two shapes of the same command
+
+C<format> returns one line, which is what goes on the clipboard. C<< wrap => 1
+>> returns the same words broken across lines with a backslash at the end of
+each, which is what a dialog can show without a horizontal scrollbar.
+
+The break points are not a column count. Each line is one flag and the value
+that belongs to it, so every line is a complete thought and the whole thing is
+still one command -- pasting it into a shell runs it, and deleting a line from
+the middle removes exactly one setting rather than corrupting the syntax.
+
 =cut
+
+# How a wrapped command is indented under its own first line. Four spaces:
+# enough to see that the continuations belong to the line above, not so much
+# that a long --set runs out of room.
+use constant INDENT => '    ';
 
 =head2 format( %arg )
 
     state   => GlitchVape::GUI::State
     animate => { frames, fps, audio }   or undef
+    export  => GlitchVape::GUI::Export settings   or undef
     output  => path                     or undef
+    wrap    => 1                        break across lines
 
-One line of shell.
+One line of shell, or several joined by backslashes.
 
 =cut
 
@@ -61,23 +84,51 @@ sub format
 {
     my ( %arg ) = @_;
 
-    my $state = $arg{ state } or return q{};
+    my @groups = _groups( %arg ) or return q{};
 
-    my @argv = ( 'glitchvape' );
+    my @lines = map {
+        join q{ },
+            map { _quote( $_ ) }
+            @$_
+    } @groups;
+
+    return join q{ }, @lines unless $arg{ wrap };
+
+    my $first = shift @lines;
+
+    return join " \\\n" . INDENT, $first, @lines;
+}
+
+# The command as a list of groups, one per line of the wrapped form. A group
+# is a flag with its value, so that neither shape has to know how the other
+# breaks: the one-line form joins them all with spaces and the wrapped form
+# joins them with backslashes.
+sub _groups
+{
+    my ( %arg ) = @_;
+
+    my $state = $arg{ state } or return ();
+
+    my @groups = ( [ 'glitchvape' ] );
 
     my $preset = $state->preset;
-    push @argv, '-p', $preset if defined $preset && length $preset;
+    push @groups, [ '-p', $preset ] if defined $preset && length $preset;
 
     my $seed = $state->seed;
-    push @argv, '-s', $seed if defined $seed && length $seed;
+    push @groups, [ '-s', $seed ] if defined $seed && length $seed;
 
-    push @argv, _effect_args( $state );
-    push @argv, _animate_args( $arg{ animate } );
+    push @groups, _effect_args( $state );
+    push @groups, _animate_args( $arg{ animate } );
+    push @groups, _export_args( $arg{ export }, $arg{ animate } );
 
-    push @argv, '-o', $arg{ output } if defined $arg{ output };
-    push @argv, $state->source;
+    push @groups, [ '-o', $arg{ output } ] if defined $arg{ output };
 
-    return join q{ }, map { _quote( $_ ) } @argv;
+    # The source is a positional and has to be last, which is also why it is a
+    # group of its own: appended to whatever came before, it would read as
+    # that flag's argument.
+    push @groups, [ $state->source ];
+
+    return @groups;
 }
 
 # The effects, as the difference between the state and the preset it started
@@ -89,7 +140,7 @@ sub _effect_args
     my $baseline = _baseline( $state->preset );
     my $effects  = $state->effects;
 
-    my @argv;
+    my @groups;
     my %present;
 
     for my $name ( $state->effect_names )
@@ -101,7 +152,7 @@ sub _effect_args
         unless ( $entry->{ enabled } )
         {
             # Only worth switching off something the preset switched on.
-            push @argv, '-d', $name if $baseline->{ $name };
+            push @groups, [ '-d', $name ] if $baseline->{ $name };
             next;
         }
 
@@ -112,7 +163,7 @@ sub _effect_args
 
         unless ( $from )
         {
-            push @argv, '-e', $name;
+            push @groups, [ '-e', $name ];
             $from = GlitchVape::Registry->resolve_params( $name, {} );
         }
 
@@ -123,7 +174,7 @@ sub _effect_args
 
             next if $now eq $was;
 
-            push @argv, '--set', "$name.$key=$now";
+            push @groups, [ '--set', "$name.$key=$now" ];
         }
     }
 
@@ -131,10 +182,10 @@ sub _effect_args
     # state at all, so it has to be found from the other side.
     for my $name ( sort keys %$baseline )
     {
-        push @argv, '-d', $name unless $present{ $name };
+        push @groups, [ '-d', $name ] unless $present{ $name };
     }
 
-    return @argv;
+    return @groups;
 }
 
 # What -p PRESET alone would give, resolved through the registry so that it is
@@ -175,14 +226,43 @@ sub _animate_args
 
     return () unless $spec;
 
-    my @argv = ( '--animate' );
+    my @groups = ( [ '--animate' ] );
 
-    push @argv, '--frames', $spec->{ frames } if $spec->{ frames };
-    push @argv, '--fps',    $spec->{ fps }    if $spec->{ fps };
+    push @groups, [ '--frames', $spec->{ frames } ] if $spec->{ frames };
+    push @groups, [ '--fps',    $spec->{ fps } ]    if $spec->{ fps };
 
-    push @argv, _audio_args( $spec->{ audio } );
+    push @groups, _audio_args( $spec->{ audio } );
 
-    return @argv;
+    return @groups;
+}
+
+# What the export settings add. Only the ones that apply to what is actually
+# being written: a codec means nothing to a still and a palette means nothing
+# to a video, and printing either where it does not belong would be a command
+# that says more than it does.
+#
+# Native size prints no --max-dim at all, which is the honest spelling of it:
+# the flag's absence is what leaves the preset's own limit standing.
+sub _export_args
+{
+    my ( $settings, $animate ) = @_;
+
+    return () unless $settings;
+
+    my %opt = GlitchVape::GUI::Export::render_options( $settings, $animate );
+
+    my @groups;
+
+    push @groups, [ '--max-dim', $opt{ max_dim } ] if $opt{ max_dim };
+    push @groups, [ '--colors',  $opt{ colors } ]  if $opt{ colors };
+    push @groups, [ '--fit', join 'x', @{ $opt{ fit } } ] if $opt{ fit };
+
+    # H.264 in an .mp4 is what the extension already says, so naming it would
+    # be noise. The others are exactly what the extension cannot say.
+    push @groups, [ '--codec', $opt{ codec } ]
+        if $opt{ codec } && $opt{ codec } ne 'h264';
+
+    return @groups;
 }
 
 sub _audio_args
@@ -191,35 +271,35 @@ sub _audio_args
 
     return () unless $audio;
 
-    my @argv;
+    my @groups;
 
     if ( GlitchVape::Audio::has_file( $audio ) )
     {
-        push @argv, '--audio', $audio->{ path };
+        push @groups, [ '--audio', $audio->{ path } ];
 
-        push @argv, '--audio-start', _number( $audio->{ start } )
+        push @groups, [ '--audio-start', _number( $audio->{ start } ) ]
             if $audio->{ start };
-        push @argv, '--audio-end', _number( $audio->{ end } )
+        push @groups, [ '--audio-end', _number( $audio->{ end } ) ]
             if defined $audio->{ end };
 
         my $filters = $audio->{ filters } || {};
         for my $name ( GlitchVape::Audio::filter_names() )
         {
             next unless defined $filters->{ $name };
-            push @argv, '--audio-filter',
-                "$name=" . _number( $filters->{ $name } );
+            push @groups,
+                [ '--audio-filter', "$name=" . _number( $filters->{ $name } ) ];
         }
 
-        push @argv, '--audio-gain', _number( $audio->{ gain } )
+        push @groups, [ '--audio-gain', _number( $audio->{ gain } ) ]
             if defined $audio->{ gain } && $audio->{ gain } != 1;
     }
 
     for my $track ( GlitchVape::Audio::generated( $audio ) )
     {
-        push @argv, _generated_args( $track );
+        push @groups, _generated_args( $track );
     }
 
-    return @argv;
+    return @groups;
 }
 
 # One generated track, diffed against its kind's declared defaults for the
@@ -232,7 +312,7 @@ sub _generated_args
 
     my $declared = GlitchVape::Generator::get( $kind ) or return ();
 
-    my @argv = ( '--generate', $kind );
+    my @groups = ( [ '--generate', $kind ] );
 
     for my $name ( @{ $declared->{ order } } )
     {
@@ -242,10 +322,10 @@ sub _generated_args
         my $default = $declared->{ params }{ $name }{ default };
         next if defined $default && "$value" eq "$default";
 
-        push @argv, '--gen', "$name=$value";
+        push @groups, [ '--gen', "$name=$value" ];
     }
 
-    return @argv;
+    return @groups;
 }
 
 # ---------------------------------------------------------------------------

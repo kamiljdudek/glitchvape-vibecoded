@@ -47,9 +47,30 @@ my %READABLE_EXT = map { $_ => 1 }
 
 Returns an L<Image::Magick> object. Options:
 
-    max_dim   => N    downscale so neither side exceeds N (0 = no limit)
-    orient    => 0    skip EXIF auto-rotation
-    frame     => N    which frame of a multi-image file (default 0)
+    max_dim   => N       downscale so neither side exceeds N (0 = no limit)
+    fit       => [W,H]   downscale to fit inside a box; see below
+    orient    => 0       skip EXIF auto-rotation
+    frame     => N       which frame of a multi-image file (default 0)
+
+=head3 fit is a box, and the box turns with the picture
+
+C<max_dim> is one number and cannot say "640 by 480": a 4:3 photograph capped
+at 640 comes out 640x480, but a 16:9 one comes out 640x360, and a panorama
+comes out 640x137. That is the right rule for "no bigger than this", and the
+wrong one for "must land on a screen that is 640 by 480".
+
+So C<fit> takes both numbers and shrinks to fit inside them, aspect preserved,
+never enlarging. The box is applied along the picture's own long edge rather
+than along x: C<< fit => [ 640, 480 ] >> gives 640x480 for a landscape
+photograph and 480x640 for a portrait one, because a portrait photograph on a
+VGA screen filled its height, not 360 pixels of its width.
+
+Both may be given, and then both apply.
+
+Fitting the source is not on its own enough to promise that the I<result>
+fits: C<letterbox> and C<border> add pixels, so a 640x480 load can leave 668x508
+on disk. C<save> takes the same option for that reason, and the two together
+are what makes the promise true -- see L</save>.
 
 =cut
 
@@ -111,6 +132,11 @@ sub load
         }
     }
 
+    if ( my $box = $opt{ fit } )
+    {
+        _fit_box( $out, $box );
+    }
+
     # Effects assume 8-bit sRGB with a predictable channel order.
     $out->Set( colorspace => 'sRGB' )
         if lc( $out->Get( 'colorspace' ) // '' ) ne 'srgb';
@@ -124,9 +150,28 @@ sub load
 
 Writes, choosing an encoder from the extension. Options:
 
-    quality  => N     JPEG/HEIC quality (default 92)
-    strip    => 1     drop all metadata (default: on)
-    optimise => 1     run pngquant/gifsicle where applicable
+    quality  => N       JPEG/HEIC quality (default 92)
+    fit      => [W,H]   shrink to fit a box before writing
+    colors   => N       quantise to an N-entry palette before writing
+    strip    => 1       drop all metadata (default: on)
+    optimise => 1       run pngquant/gifsicle where applicable
+
+C<fit> here is the same box as L</load>'s and is what actually guarantees the
+size of the file: the pipeline is free to make the picture bigger than what it
+was given -- C<letterbox> and C<border> both do -- so the box has to be
+applied again on the way out. Given to both, the source is fetched at roughly
+the final size, which is what makes the pixel-scale effects look right, and
+the last few pixels of growth are taken off here.
+
+Applied before C<colors>, so the palette is built from the pixels that will be
+written rather than from ones about to be resampled away.
+
+C<colors> is what makes a 256-colour Windows bitmap a 256-colour Windows
+bitmap. Quantising is not something the BMP encoder does on its own -- given a
+truecolour image it writes a 24-bit file with a .bmp on the end, which is not
+what anybody asking for 256 colours meant -- so the palette is built here and
+the image is switched to palette type before the write, which is what makes
+the encoder choose its 8-bit form.
 
 =cut
 
@@ -157,6 +202,9 @@ sub save
 
     $img->Strip if $strip;
     $img->Set( quality => $quality );
+
+    _fit_box( $img, $opt{ fit } )     if $opt{ fit };
+    _quantise( $img, $opt{ colors } ) if $opt{ colors };
 
     if ( $ext =~ /^(heic|heif)$/ && !_can_write_heic() )
     {
@@ -240,6 +288,54 @@ sub orientation
     }
 
     return $out;
+}
+
+# The long side of the box against the long side of the picture. '>' on the
+# geometry is what makes this a shrink rather than a resize: an image already
+# inside the box is left exactly as it was, which matters because upscaling a
+# small source to 640x480 would invent detail nobody asked for.
+# Floyd-Steinberg is left on, which is ImageMagick's default: 256 colours
+# without dithering bands a sky into stripes, and a dithered VGA-era palette
+# is the look this is for in the first place.
+sub _quantise
+{
+    my ( $img, $colors ) = @_;
+
+    GlitchVape::Magick::check(
+        $img->Quantize( colors => $colors ),
+        "cannot quantise to $colors colours"
+    );
+
+    # Quantize alone leaves a truecolour image that happens to use few
+    # colours. The encoder decides its bit depth from the type.
+    $img->Set( type  => 'Palette' );
+    $img->Set( depth => 8 );
+
+    return;
+}
+
+sub _fit_box
+{
+    my ( $img, $box ) = @_;
+
+    my ( $bw, $bh ) = @$box;
+    return unless $bw && $bh;
+
+    my ( $long, $short ) = $bw >= $bh ? ( $bw, $bh ) : ( $bh, $bw );
+
+    my ( $w, $h ) = $img->Get( 'width', 'height' );
+    return unless $w && $h;
+
+    # A square picture is neither, and gets the short side: it has to fit
+    # both ways round.
+    my ( $limit_w, $limit_h ) =
+        $w > $h ? ( $long, $short ) : ( $short, $long );
+
+    return if $w <= $limit_w && $h <= $limit_h;
+
+    $img->Resize( geometry => "${limit_w}x${limit_h}>" );
+
+    return;
 }
 
 sub _heic_to_png

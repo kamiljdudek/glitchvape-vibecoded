@@ -259,4 +259,146 @@ sub command_for
     unlike command_for( $state ), qr/-o /, 'and left out when there is not';
 }
 
+# ---------------------------------------------------------------------------
+# The wrapped form
+#
+# What the dialog shows. It has to be the same command as the one line -- a
+# second rendering of the same words, not a second opinion about them -- and
+# it has to still be one command after the line breaks.
+
+{
+    my $state = state_for( preset => 'vhs-decay' );
+    $state->param( 'scanlines', 'opacity', 0.42 );
+
+    my %arg = ( animate => { frames => 24, fps => 12 } );
+
+    my $flat    = command_for( $state, %arg );
+    my $wrapped = command_for( $state, %arg, wrap => 1 );
+
+    isnt $wrapped, $flat, 'wrapping produces something different';
+
+    like $wrapped, qr/\n/, 'and it has line breaks in it';
+    unlike $flat,  qr/\n/, 'while the flat form still has none';
+
+    # Every line but the last ends in a backslash, which is what makes the
+    # whole thing one command rather than several broken ones.
+    my @lines = split /\n/, $wrapped;
+
+    cmp_ok scalar @lines, '>', 3, 'the command is broken over several lines';
+
+    my $tail = pop @lines;
+
+    is scalar( grep { /\\\z/ } @lines ), scalar @lines,
+        'every line but the last ends in a backslash';
+    unlike $tail, qr/\\\z/, 'and the last one does not';
+
+    # Undoing the wrapping has to give back exactly the flat command: if it
+    # does not, the dialog is showing something other than what Copy copies.
+    my @unwrapped = split /\n/, $wrapped;
+
+    for my $line ( @unwrapped )
+    {
+        $line =~ s/\s*\\\z//;    # the continuation marker
+        $line =~ s/^\s+//;       # and the indent under it
+    }
+
+    is join( q{ }, @unwrapped ), $flat,
+        'unwrapping it gives back the one-line form exactly';
+}
+
+# The source is a positional argument, so it has to be last and it has to be
+# alone on its line -- appended to the line above it would read as that
+# flag's value.
+{
+    my $state = state_for( source => 'photo.png' );
+
+    my $wrapped = command_for( $state, wrap => 1, output => 'out/x.png' );
+
+    my @lines = split /\n/, $wrapped;
+
+    like $lines[ -1 ], qr/\A\s*photo[.]png\z/,
+        'the source is alone on the final line';
+}
+
+# ---------------------------------------------------------------------------
+# The export settings
+
+# The command is what produces the export, so what the export settings decided
+# has to be in it -- and only the parts of it that apply to what is being
+# written.
+
+SKIP:
+{
+    eval { require GlitchVape::GUI::Export; 1 }
+        or skip 'GlitchVape::GUI::Export needs Gtk3', 8;
+
+    my $state = state_for();
+
+    my $export = {
+        %{ GlitchVape::GUI::Export::defaults() },
+        video_size   => 900,
+        video_format => 'webm-av1',
+        still_format => 'bmp256',
+        retro        => 1,
+    };
+
+    my $video = command_for(
+        $state,
+        export  => $export,
+        animate => { frames => 24, fps => 12 }
+    );
+
+    like $video,   qr/--max-dim 900/, 'a video export carries its size limit';
+    like $video,   qr/--codec av1/,   'and its codec';
+    unlike $video, qr/--colors/,      'and says nothing about a palette';
+    unlike $video, qr/--fit/,         'nor about a retro screen';
+
+    my $still = command_for( $state, export => $export );
+
+    like $still,   qr/--colors 256/,  'a still export carries its palette';
+    like $still,   qr/--fit 640x480/, 'and the box it must fit inside';
+    unlike $still, qr/--codec/,       'and says nothing about a codec';
+}
+
+# H.264 in an .mp4 is what the extension already says, so naming it would be
+# noise -- but a codec the extension cannot imply has to be named.
+SKIP:
+{
+    eval { require GlitchVape::GUI::Export; 1 }
+        or skip 'GlitchVape::GUI::Export needs Gtk3', 3;
+
+    my $state    = state_for();
+    my $defaults = GlitchVape::GUI::Export::defaults();
+
+    my $animate = { frames => 24, fps => 12 };
+
+    unlike command_for( $state, export => $defaults, animate => $animate ),
+        qr/--codec/, 'the default H.264 needs no --codec';
+
+    for my $format ( qw(webm webm-av1) )
+    {
+        my $settings = { %$defaults, video_format => $format };
+
+        like command_for( $state, export => $settings, animate => $animate ),
+            qr/--codec (?:vp9|av1)/, "but '$format' does";
+    }
+}
+
+# Native size means the absence of a limit, which is the absence of a flag.
+SKIP:
+{
+    eval { require GlitchVape::GUI::Export; 1 }
+        or skip 'GlitchVape::GUI::Export needs Gtk3', 1;
+
+    my $settings =
+        { %{ GlitchVape::GUI::Export::defaults() }, video_size => 0, };
+
+    unlike command_for(
+        state_for(),
+        export  => $settings,
+        animate => { frames => 24, fps => 12 }
+        ),
+        qr/--max-dim/, 'Native prints no --max-dim at all';
+}
+
 done_testing;

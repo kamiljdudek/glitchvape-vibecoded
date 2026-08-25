@@ -65,10 +65,27 @@ format.
     disable   => [ names ]         switch effects off
     seed      => scalar            any string or number; omit for random
     max_dim   => N                 downscale the source first (default 1920)
+    fit       => [ W, H ]          downscale to fit a box; see below
     quality   => N                 output quality for lossy formats
+    colors    => N                 quantise the still to an N-entry palette
+    codec     => name              h264, vp9 or av1; default from the extension
     animate   => { frames, fps }   render a loop instead of a still
     verbose   => bool
     dry_run   => bool              resolve and describe, render nothing
+
+C<fit> is the two-number form of C<max_dim>, applied along the picture's own
+long edge, and is how "must land on a 640x480 screen" is said -- which one
+number cannot say. See L<GlitchVape::IO/fit is a box, and the box turns with
+the picture>. Both may be given.
+
+It is applied to the source I<and> to the result, because effects that add
+furniture -- C<letterbox>, C<border> -- make the picture bigger than the one
+they were handed, and a box that only constrained the input would be a promise
+this makes and does not keep.
+
+C<colors> and C<codec> are each about one output: C<colors> quantises a still
+before it is written, which is what makes a 256-colour bitmap 256 colours, and
+C<codec> settles the F<.webm> question that the extension leaves open.
 
 An C<audio> key inside C<animate> adds a soundtrack, and changes what the
 length of the result means: see L<GlitchVape::Animate/AUDIO DECIDES THE
@@ -166,8 +183,11 @@ sub _render_still
     my $arg    = $job->{ opt };
     my $config = $job->{ config };
 
-    my $img =
-        GlitchVape::IO::load( $job->{ input }, max_dim => $job->{ max_dim } );
+    my $img = GlitchVape::IO::load(
+        $job->{ input },
+        max_dim => $job->{ max_dim },
+        fit     => $arg->{ fit },
+    );
 
     my $ctx = GlitchVape::Context->new(
         image   => $img,
@@ -178,13 +198,17 @@ sub _render_still
 
     $job->{ pipeline }->run( $ctx );
 
-    my ( $w, $h ) = $ctx->dims;
-
     GlitchVape::IO::save(
         $ctx->image, $job->{ output },
         quality  => $arg->{ quality }  // $config->{ output }{ quality }  // 92,
         optimise => $arg->{ optimise } // $config->{ output }{ optimise } // 0,
+        fit      => $arg->{ fit },
+        colors   => $arg->{ colors },
     );
+
+    # Read after the write, not before it: save may shrink the image to fit
+    # the box, and what this reports is meant to be the size of the file.
+    my ( $w, $h ) = $ctx->dims;
 
     return {
         output  => $job->{ output },
@@ -208,12 +232,23 @@ sub _render_animation
     die "GlitchVape: animate.frames must be at least 2, got $frames\n"
         if $frames < 2;
 
+    # Before the loop rather than after it. Encoding is the last step of a job
+    # whose first twenty-four steps are whole renders, and finding out then
+    # that the codec is a typo -- or that this ffmpeg cannot write it -- would
+    # waste every one of them.
+    my $codec = $arg->{ codec } // $spec->{ codec };
+    GlitchVape::Animate::require_codec( lc $codec )
+        if defined $codec && length $codec;
+
     my $dir = File::Temp->newdir( 'glitchvape_frames_XXXXXX', TMPDIR => 1 );
 
     # The source is decoded once and cloned per frame. Re-reading a 3 MB HEIC
     # twenty-four times is the slowest thing this program could plausibly do.
-    my $source =
-        GlitchVape::IO::load( $job->{ input }, max_dim => $job->{ max_dim } );
+    my $source = GlitchVape::IO::load(
+        $job->{ input },
+        max_dim => $job->{ max_dim },
+        fit     => $arg->{ fit },
+    );
 
     my @paths;
     my @timings;
@@ -232,7 +267,12 @@ sub _render_animation
         $job->{ pipeline }->run( $ctx );
 
         my $path = GlitchVape::Animate::frame_path( "$dir", $n );
-        GlitchVape::IO::save( $ctx->image, $path, quality => 100, strip => 1 );
+        GlitchVape::IO::save(
+            $ctx->image, $path,
+            quality => 100,
+            strip   => 1,
+            fit     => $arg->{ fit },
+        );
         push @paths,   $path;
         push @timings, [ $ctx->timings ];
 
@@ -245,6 +285,7 @@ sub _render_animation
         fps     => $fps,
         loop    => $spec->{ loop },
         quality => $spec->{ quality },
+        codec   => $arg->{ codec } // $spec->{ codec },
         audio   => $spec->{ audio },
     );
 

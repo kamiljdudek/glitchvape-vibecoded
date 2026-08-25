@@ -1,0 +1,3 @@
+# perltidy and perlcritic leave these beside the files they were run on, and
+# a .bak that survived into the tree is a diff against a file nobody edited.
+extend-diff-ignore = "(^|/)(.*\.(bak|tdy|ERR|LOG))$"

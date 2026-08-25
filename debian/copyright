@@ -1,0 +1,123 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: glitchvape
+Upstream-Contact: Kamil J. Dudek <kamilek@localhost.localdomain>
+Source: https://github.com/kamiljdudek/glitchvape-vibecoded
+Comment:
+ The program is MIT. Everything else here is a typeface that came with the
+ source, and each is under whatever its author released it under -- which is
+ not the same licence for any two of them, and in one case is not a licence
+ document at all but the author's answer to the question.
+ .
+ GlitchVape does not paraphrase any of them. The file each author shipped is
+ installed beside the font it covers, and `glitchvape --licenses` and the
+ about window read those files off disk rather than quoting a copy pasted
+ into Perl. The stanzas below say where each one came from.
+ .
+ W95FA is the exception and is why glitchvape-fonts-extra exists. See the
+ stanza for it, and README.Debian.
+Files-Excluded-Comment:
+ Uncommenting the line below repacks the upstream tarball without the font
+ whose terms are unverified, which is what an upload to Debian proper would
+ need -- a source package in main may not carry it. It is left commented
+ because it also removes the only thing glitchvape-fonts-extra installs.
+ See README.Debian.
+ .
+ Files-Excluded: assets/fonts-nonfree
+
+Files: *
+Copyright: 2026 Kamil J. Dudek <kamilek@localhost.localdomain>
+License: Expat
+
+Files: debian/*
+Copyright: 2026 Kamil J. Dudek <kamilek@localhost.localdomain>
+License: Expat
+
+Files: assets/fonts/DepartureMono-1.500/*
+Copyright: 2024 Helena Zhang
+License: OFL-1.1
+Comment:
+ https://departuremono.com/ -- the release is installed as published, with
+ the author's LICENSE and README beside the font, which is what the OFL asks
+ for.
+
+Files: assets/fonts/fusion-pixel-font-12px-monospaced-otf-v2026.08.11/*
+Copyright: TakWolf and the Fusion Pixel Font contributors
+License: OFL-1.1
+Comment:
+ https://github.com/TakWolf/fusion-pixel-font -- a composite of several
+ pixel fonts, each under its own copy of the OFL. The release carries a
+ LICENSES/ directory with one per component and an OFL.txt for the whole;
+ all of them are installed.
+
+Files: assets/fonts/VCROSD/*
+Copyright: 2015 Riciery Leal
+License: LicenseRef-VCR-OSD-Mono
+Comment:
+ There is no licence document for this font. What there is instead is the
+ author answering the question directly in the font's own comment thread at
+ https://www.dafont.com/font-comment.php?file=vcr_osd_mono :
+ .
+ "mrmanet, author of VCR OSD Mono, Feb 24, 2017: Yes, the font is free even
+ for commercial purposes."
+ .
+ That is an unconditional grant, and it is what assets/fonts/VCROSD/LICENSE
+ records. It has no SPDX identifier, so it is named as a LicenseRef rather
+ than being filed under a licence it is not.
+
+Files: assets/fonts-nonfree/W95FA/*
+Copyright: unknown
+License: LicenseRef-Unverified
+Comment:
+ Packaged in glitchvape-fonts-extra and in nothing else. dafont lists this
+ font as SIL Open Font License and as free for personal and commercial use,
+ but the download carries no licence text and no statement by the author has
+ been found that can be cited. A font aggregator's summary of terms is not
+ the terms, so this is not filed as OFL-1.1: doing so would assert a licence
+ whose text nobody here has seen.
+ .
+ assets/fonts-nonfree/W95FA/LICENSE records what is known and what would
+ settle it.
+
+License: Expat
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
+License: OFL-1.1
+ This Font Software is licensed under the SIL Open Font License, Version 1.1.
+ .
+ The full text is installed with each font it covers, under
+ /usr/share/glitchvape/assets/fonts/, and on Debian systems a copy is also at
+ /usr/share/common-licenses/OFL-1.1 where the base-files version provides one.
+ `glitchvape --licenses` prints the installed copies.
+
+License: LicenseRef-VCR-OSD-Mono
+ The author has granted use of this font for any purpose, commercial and
+ non-commercial alike, with no conditions attached. There is no licence
+ document; the grant and its source are recorded in
+ /usr/share/glitchvape/assets/fonts/VCROSD/LICENSE, which is installed with
+ the font and which `glitchvape --licenses` prints.
+
+License: LicenseRef-Unverified
+ The terms of this font have not been established. It is redistributed here
+ on the strength of a font aggregator's description of it, which is not a
+ licence, and it is packaged separately from everything else for that reason.
+ /usr/share/glitchvape/assets/fonts-nonfree/W95FA/LICENSE records what is
+ known, what is missing, and what would settle it.
+ .
+ If you need certainty about what you may do with this font, obtain it from
+ its author rather than from this package.

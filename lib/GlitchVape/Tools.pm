@@ -205,6 +205,44 @@ sub supports_format
     return $ok;
 }
 
+=head2 ffmpeg_encoder( $name )
+
+Whether this ffmpeg was built with a named encoder, e.g. C<libsvtav1>.
+Cached.
+
+An encoder is not a tool: C<ffmpeg> being on the path says nothing about
+whether it can write AV1, and the two builds Fedora offers differ in exactly
+this way. Asked before the encode rather than after, so that an unavailable
+codec is a sentence in a dialog instead of twenty renders followed by an
+ffmpeg error.
+
+=cut
+
+sub ffmpeg_encoder
+{
+    my ( $name ) = @_;
+
+    my $key = "_enc_$name";
+    return $CACHE{ $key } if exists $CACHE{ $key };
+
+    my $path = find( 'ffmpeg' ) or return $CACHE{ $key } = 0;
+
+    # -hide_banner because the build configuration is several hundred lines
+    # that would otherwise be scanned for every probe.
+    my $out = capture( $path, '-hide_banner', '-encoders' );
+
+    # Lines look like " V....D libsvtav1  SVT-AV1 ... (codec av1)"; the name
+    # is the second field, and matching it whole avoids libaom-av1 answering
+    # for av1_nvenc.
+    my $ok = 0;
+    if ( ( $out // q{} ) =~ /^\s*\S+\s+\Q$name\E\s/m )
+    {
+        $ok = 1;
+    }
+
+    return $CACHE{ $key } = $ok;
+}
+
 =head2 font_path( @names )
 
 Resolve the first available font from a preference list, via fontconfig and

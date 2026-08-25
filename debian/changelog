@@ -1,0 +1,12 @@
+glitchvape (0.01-1) unstable; urgency=medium
+
+  * Initial Debian packaging.
+  * Split the typefaces across two binary packages: those whose terms this
+    project can state ship in glitchvape, and W95FA -- whose licence is a
+    font aggregator's description rather than a document -- ships in
+    glitchvape-fonts-extra. See README.Debian for what an upload to Debian
+    proper would need.
+  * Bundle Departure Mono and Fusion Pixel under the OFL and VCR OSD Mono
+    under its author's own grant, each with its licence text beside it.
+
+ -- Kamil J. Dudek <kamilek@localhost.localdomain>  Tue, 25 Aug 2026 23:00:00 +0200

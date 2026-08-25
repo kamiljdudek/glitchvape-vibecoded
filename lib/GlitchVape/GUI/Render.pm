@@ -356,11 +356,18 @@ sub _serve_cached
     state    => GlitchVape::GUI::State
     output   => path
     max_dim  => N                    full-size limit, default from the preset
+    fit      => [ W, H ]             box the result must land inside
+    colors   => N                    palette size for a still
+    codec    => name                 h264, vp9 or av1
     animate  => { frames, fps }
     quality  => N
     optimise => bool
     on_done  => sub { my ( $path ) = @_ }
     on_error => sub { my ( $message ) = @_ }
+
+The four in the middle are what L<GlitchVape::GUI::Export> decided; each is
+passed on only when it was set, so an export nobody has configured behaves
+exactly as it did before that dialog existed.
 
 Renders at full size to a file the user chose. Goes through
 L<GlitchVape/render>, reading the source from disk exactly as the command-line
@@ -383,9 +390,13 @@ sub export
         optimise => $arg{ optimise },
     );
 
-    if ( defined $arg{ max_dim } )
+    # What the export settings decided, where they decided anything. Passed
+    # through by name rather than merged wholesale so that this stays a list
+    # of what an export can be told, and a typo in a caller is a missing flag
+    # here rather than a key GlitchVape::render silently ignores.
+    for my $key ( qw(max_dim fit colors codec) )
     {
-        $render{ max_dim } = $arg{ max_dim };
+        $render{ $key } = $arg{ $key } if defined $arg{ $key };
     }
 
     $self->_spawn(

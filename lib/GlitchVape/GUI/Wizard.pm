@@ -268,7 +268,11 @@ sub _category_page
     );
 
     # Double-click or Enter should go straight on rather than making the user
-    # find Continue: picking is the whole purpose of the page.
+    # find Continue. A single click must not: it is how the row gets selected
+    # in the first place, and a page that leaves as soon as it is touched
+    # gives nobody a chance to look at what else is on it. GtkListBox
+    # activates on single click by default, so this has to be said.
+    $list->set_activate_on_single_click( 0 );
     $list->signal_connect( 'row-activated' => sub { $self->_next; return } );
 
     # GtkListBox selects its first row as soon as it takes focus, so the page
@@ -369,6 +373,9 @@ sub _effect_page
         }
     );
 
+    # As on the first page: clicking a name picks it, and only a double click
+    # or Enter moves on.
+    $list->set_activate_on_single_click( 0 );
     $list->signal_connect( 'row-activated' => sub { $self->_next; return } );
 
     $scroll->add( $list );
@@ -644,7 +651,18 @@ sub _fill_settings
         # sharing what is left with a scrolled viewport that would otherwise
         # shrink every slider to its minimum -- about a centimetre of track,
         # which is not a control anybody can set a value with.
-        $built->{ control }->set_size_request( 220, -1 );
+        #
+        # Only the ones a width helps. A switch has a size of its own, and
+        # asking for 220 pixels of it is how the first release of this page
+        # ended up with levers stretched right across the column.
+        if ( $built->{ stretch } )
+        {
+            $built->{ control }->set_size_request( 220, -1 );
+        }
+        else
+        {
+            $built->{ control }->set_halign( 'start' );
+        }
 
         $grid->attach( $built->{ label },   0, $row, 1, 1 );
         $grid->attach( $built->{ control }, 1, $row, 1, 1 );

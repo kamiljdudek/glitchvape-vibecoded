@@ -1,0 +1,45 @@
+W95FA font
+
+STATUS: NOT ESTABLISHED. Do not move this font to assets/fonts/ until the
+paragraph below can be replaced with the licence text itself.
+
+What is known
+-------------
+
+The font was obtained from dafont, which lists it as "SIL Open Font License"
+and as free for personal and commercial use:
+
+    https://www.dafont.com/w95fa.font
+
+That is a third party's summary of the terms, not the terms. The SIL Open
+Font License asks that its text travel with the font, and no copy of it
+arrived with this download -- so what is on disk here is a font file and a
+claim about it, which is not the same thing as a licence.
+
+Why that matters here
+---------------------
+
+GlitchVape ships two typefaces under the OFL, and it does it by including the
+licence file each author published beside their font, so that the about window
+and `glitchvape --licenses` quote the real document rather than a paraphrase
+somebody maintains in Perl. This font cannot be shipped that way yet, because
+there is no document to quote.
+
+So it is packaged in glitchvape-fonts-extra rather than in the base package,
+which exists precisely so that the base package can state one honest licence
+-- MIT AND OFL-1.1 AND LicenseRef-VCR-OSD-Mono -- and carry nothing whose
+terms are unverified.
+
+Note that "no licence text" is not by itself what puts a font here. VCR OSD
+Mono has no licence document either, and it ships in the base package, because
+its author was asked and answered: see ../../fonts/VCROSD/LICENSE. What is
+missing for W95FA is not the paperwork but the answer.
+
+What would settle it
+--------------------
+
+Either the upstream release containing OFL.txt, from the author rather than
+from a font aggregator, or the author saying so where it can be cited -- which
+is exactly how VCR OSD Mono stopped being a question. With that in hand, W95FA
+is an ordinary bundled font and the directory moves to assets/fonts/, at which
+point the Makefile ships it without anyone editing a list.

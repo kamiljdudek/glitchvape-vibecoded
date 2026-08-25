@@ -1,0 +1,49 @@
+#!/usr/bin/make -f
+
+# GlitchVape has nothing to compile, so this is almost entirely a matter of
+# telling the Makefile where things go. The Makefile is the one definition of
+# that -- it is what `make install` and the RPM spec both use -- so nothing
+# here restates a path.
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# The two the Makefile cannot guess. /usr/share/perl5 is Debian's vendor
+# directory for architecture-independent modules, which is what these are:
+# the suite is pure Perl and the effects shell out to ImageMagick.
+WHERE = PREFIX=/usr PERLDIR=/usr/share/perl5
+
+%:
+	dh $@
+
+# The default target only prints what the targets are, which would be noise
+# in a build log and is not a build.
+override_dh_auto_build:
+
+# Installed a package at a time rather than into debian/tmp and split back
+# out with .install files, because the split already exists: the Makefile has
+# a target per package, and `make check-split` asserts that the division is
+# honest by proving no module outside the GUI set reaches for Gtk3.
+#
+# Doing it with globs would mean listing the CLI modules somewhere -- a list
+# to keep up to date, which is exactly what the Makefile avoids -- or writing
+# an exclusion that .install files cannot express anyway.
+override_dh_auto_install:
+	$(MAKE) install-cli install-fonts DESTDIR=$(CURDIR)/debian/glitchvape \
+	    $(WHERE)
+	$(MAKE) install-gui DESTDIR=$(CURDIR)/debian/glitchvape-gui $(WHERE)
+	$(MAKE) install-fonts-extra \
+	    DESTDIR=$(CURDIR)/debian/glitchvape-fonts-extra $(WHERE)
+
+# The suite's own checks, in the order the RPM spec runs them: that the GUI
+# split is real, and that every font in the tree arrived with the licence it
+# is under. The window tests skip themselves when there is no display, so
+# this needs no X on a buildd.
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	$(MAKE) check-split
+	$(MAKE) check-licenses
+	$(MAKE) test
+endif
+
+# Nothing is compiled and nothing is stripped, but dh_auto_clean would run the
+# Makefile's clean, which is what removes perltidy's leavings. Keep it.

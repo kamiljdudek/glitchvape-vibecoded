@@ -1,0 +1,67 @@
+GlitchVape for Debian
+=====================
+
+Three binary packages come out of this source, and one of them is not in
+main. That is the only thing about this packaging that needs explaining.
+
+  glitchvape              the library and the command-line tools
+  glitchvape-gui          the Gtk3 window
+  glitchvape-fonts-extra  one typeface, non-free/fonts
+
+Why the third package exists
+----------------------------
+
+GlitchVape asks for fonts by *role* -- vcr, pixel, ui, cjk -- rather than by
+name, and falls through a list of candidates per role to whatever fontconfig
+can see. So a missing font is a different-looking render, never an error.
+
+Three of the fonts it wants ship in the base package because their terms are
+known and permit it. W95FA does not: dafont describes it as SIL Open Font
+License and free for personal and commercial use, but the download carries no
+licence text and no statement by its author has been found that can be cited.
+That is a claim about the terms rather than the terms, and it is not enough
+for a package that says "MIT and OFL-1.1" on the tin.
+
+Rather than drop the font or overstate what is known about it, it is packaged
+on its own, so that installing it is a decision somebody makes rather than
+one made for them.
+
+What an upload to Debian proper would need
+------------------------------------------
+
+A source package in main may not contain non-free content, and this one does:
+assets/fonts-nonfree/ is in the upstream tarball. So this source cannot go to
+main as it stands, whatever the Section fields on the individual binaries say.
+Built locally, or in a PPA, or in any repository that does not enforce archive
+areas, it works exactly as intended.
+
+Two ways forward, in order of preference:
+
+  1. Settle the licence. If W95FA's author says publicly what its terms are,
+     or the upstream release turns up with its OFL text, the font moves from
+     assets/fonts-nonfree/ to assets/fonts/ and this package disappears --
+     `make check-licenses` promotes it without anyone editing a list. This is
+     how VCR OSD Mono stopped being a question: its author was asked, and
+     answered.
+
+  2. Repack and split. debian/copyright carries a commented-out
+     Files-Excluded line that strips assets/fonts-nonfree from the tarball;
+     uncommenting it makes this source main-suitable and drops the third
+     binary package. The font would then need a source package of its own in
+     non-free, which is a separate piece of work and not worth doing while
+     option 1 is open.
+
+Where the fonts end up
+----------------------
+
+  /usr/share/glitchvape/assets/fonts/           base package
+  /usr/share/glitchvape/assets/fonts-nonfree/   glitchvape-fonts-extra
+  /usr/share/glitchvape/fonts/                  yours, system-wide
+  ~/.local/share/glitchvape/fonts/              yours, per-account
+
+The last two are searched first and are never touched by an upgrade, so a
+newer release of any bundled font can be dropped in without being fought over.
+`glitchvape --check-fonts` prints which file each role resolved to and names
+the directory to put a missing one in.
+
+ -- Kamil J. Dudek <kamilek@localhost.localdomain>  Tue, 25 Aug 2026 23:00:00 +0200

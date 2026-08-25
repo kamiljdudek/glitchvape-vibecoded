@@ -2,8 +2,8 @@
 Type=Application
 Version=1.0
 Name=GlitchVape
-GenericName=Image Glitch Editor
-Comment=Apply VHS, CRT and databending effects to photographs
+GenericName=Glitch and Vaporewave Photograph Editor
+Comment=Vaporwave Art image distortion editor
 Exec=glitchvape-gui %f
 TryExec=glitchvape-gui
 Icon=glitchvape

@@ -1,0 +1,45 @@
+# GlitchVape's fonts are application assets, not system fonts.
+#
+# The program draws text into a raster with them -- a camcorder timestamp, a
+# VGA text block, a Japanese caption -- and finds them by walking its own
+# search path, which it also lets the user extend. It never asks fontconfig
+# to serve them to anything else.
+#
+# Installing them into /usr/share/fonts would put a 1990s camcorder face and
+# five pixel fonts in front of every application on the machine, in every font
+# chooser, for the benefit of one program that does not look there. So they
+# stay under /usr/share/glitchvape/assets/fonts, and this package is not a
+# fonts-* package because it is not offering fonts to the system.
+glitchvape: font-in-non-font-package [usr/share/glitchvape/assets/fonts/*]
+glitchvape: font-outside-font-dir [usr/share/glitchvape/assets/fonts/*]
+
+# The embedding bits are the font authors' own settings, in files installed
+# exactly as published. Changing them would mean altering someone else's font
+# binary to quieten a check, and the restriction is about embedding a face in
+# a PDF or a document -- which is not what happens here. GlitchVape rasterises
+# glyphs into pixels; no font data reaches the output file.
+glitchvape: opentype-font-prohibits-installable-embedding *
+glitchvape: truetype-font-prohibits-installable-embedding *
+
+# Every licence file here is one the program itself opens and prints.
+# `glitchvape --licenses` and the about window read them off disk rather than
+# quoting a copy pasted into Perl, which is what keeps the OFL's "the licence
+# travels with the font" satisfied by the actual document. Moving them under
+# /usr/share/doc would separate each licence from the font it covers, which is
+# the one thing the arrangement exists to prevent. debian/copyright names all
+# of them.
+glitchvape: extra-license-file [usr/share/glitchvape/*]
+glitchvape: package-contains-documentation-outside-usr-share-doc [usr/share/glitchvape/*]
+
+# Both of these are shipped empty on purpose, and staying empty is the point.
+#
+# fonts/ is the system-wide drop-in directory: it is on GlitchVape's search
+# path ahead of the bundled fonts, so a file dropped in wins, and because no
+# package writes to it nothing here will ever overwrite what somebody put
+# there. `glitchvape --check-fonts` names it when a role cannot be satisfied,
+# and a directory that only exists once you have guessed its name is not a
+# thing to name in an error message.
+#
+# luts/ is the same arrangement for colour lookup tables.
+glitchvape: package-contains-empty-directory [usr/share/glitchvape/fonts/]
+glitchvape: package-contains-empty-directory [usr/share/glitchvape/assets/luts/]

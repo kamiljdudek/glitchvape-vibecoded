@@ -47,10 +47,32 @@ F</usr/share/glitchvape/fonts> -- the system-wide equivalent, for a font
 every account should see.
 
 =item * The bundled F<assets/fonts>, which is the checkout in a checkout and
-the installed data directory in a package. Last, so that anything dropped in
-above shadows a bundled font of the same name rather than fighting it.
+the installed data directory in a package.
+
+=item * F<assets/fonts-nonfree> beside it, which holds the typefaces this
+project may not hand on in its base package -- see L</TWO BUNDLED
+DIRECTORIES>. Last, so that anything dropped in above shadows a bundled font
+of the same name rather than fighting it.
 
 =back
+
+=head1 TWO BUNDLED DIRECTORIES
+
+Whether a font can be found and whether it can be redistributed are different
+questions, and answering them with one directory meant answering them the
+same way. F<assets/fonts-nonfree> is the second answer: a font whose terms are
+narrower than the base package's licence, or not established at all, lives
+there and is packaged separately as C<glitchvape-fonts-extra>.
+
+The search path does not care about the distinction -- both directories are on
+it, and a font in either is a font -- so a checkout behaves as though the
+split were not there. What the split buys is that the base package can state
+one honest licence and mean it, while the font is still one C<apt install>
+away for anyone who wants it.
+
+Nothing is there today but W95FA, whose licence arrived as a font
+aggregator's summary rather than as a document. VCR OSD Mono was there until
+its author was asked directly and said it was free for any purpose.
 
 Subdirectories are searched too, so an upstream release can be unpacked whole
 -- licence, README and all -- rather than having its font files picked out of
@@ -154,6 +176,20 @@ sub asset_dir
     return GlitchVape::Assets::dir( 'fonts' );
 }
 
+=head2 extra_dir()
+
+The bundled directory for typefaces that are not the base package's to hand
+on. Present in a checkout and in an install of C<glitchvape-fonts-extra>;
+absent otherwise, which L</search_dirs> treats as an empty directory rather
+than as a problem. See L</TWO BUNDLED DIRECTORIES>.
+
+=cut
+
+sub extra_dir
+{
+    return GlitchVape::Assets::dir( 'fonts-nonfree' );
+}
+
 =head2 user_dir()
 
 F<$XDG_DATA_HOME/glitchvape/fonts>, whether or not it exists yet -- the
@@ -198,10 +234,10 @@ sub search_dirs
         push @dirs, $user;
     }
 
-    push @dirs, map { File::Spec->catdir( $_, 'glitchvape', 'fonts' ) }
-        _data_dirs();
+    push @dirs,
+        map { File::Spec->catdir( $_, 'glitchvape', 'fonts' ) } _data_dirs();
 
-    push @dirs, asset_dir();
+    push @dirs, asset_dir(), extra_dir();
 
     my %seen;
     return grep { -d $_ && !$seen{ $_ }++ } @dirs;

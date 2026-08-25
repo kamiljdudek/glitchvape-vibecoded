@@ -1,0 +1,8 @@
+# Same reasoning as the base package's overrides, which see: this is an
+# application asset that GlitchVape finds on its own search path, not a font
+# offered to the system, and its LICENSE is a file the program reads and
+# prints rather than documentation about the package.
+glitchvape-fonts-extra: font-in-non-font-package [usr/share/glitchvape/assets/fonts-nonfree/*]
+glitchvape-fonts-extra: font-outside-font-dir [usr/share/glitchvape/assets/fonts-nonfree/*]
+glitchvape-fonts-extra: extra-license-file [usr/share/glitchvape/assets/fonts-nonfree/*]
+glitchvape-fonts-extra: package-contains-documentation-outside-usr-share-doc [usr/share/glitchvape/assets/fonts-nonfree/*]

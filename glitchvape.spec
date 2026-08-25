@@ -1,21 +1,30 @@
 Name:           glitchvape
 Version:        0.01
 Release:        1%{?dist}
-Summary:        Apply VHS, CRT and databending effects to photographs
+Summary:        Vaporwave Art image distortion editor
 
-# The program is MIT. The binary package also carries two typefaces that are
-# not the program's: Departure Mono and Fusion Pixel, both under the SIL Open
-# Font License 1.1, each installed as its author published it with the licence
-# text beside the font -- which is what the OFL asks for and what
-# `glitchvape --licenses` and the about window quote.
+# The program is MIT. This package also carries three typefaces that are not
+# the program's, each installed as its author published it with whatever
+# statement of terms came with it beside the font -- which is what the OFL
+# asks for and what `glitchvape --licenses` and the about window quote:
 #
-# VCR OSD Mono and W95FA are *not* here. They are free to use, their
-# redistribution terms are still being established, and until that is settled
-# the Makefile refuses to put them in the tarball; see `make check-licenses`.
-# Anyone who has them puts them in one of the drop-in directories below.
-License:        MIT AND OFL-1.1
+#   Departure Mono   OFL-1.1
+#   Fusion Pixel     OFL-1.1
+#   VCR OSD Mono     LicenseRef-VCR-OSD-Mono
+#
+# VCR OSD Mono has no licence document, only its author's word. Asked in the
+# font's comment thread whether commercial use was permitted, he answered
+# "Yes, the font is free even for commercial purposes" -- an unconditional
+# grant, but not one of the licences SPDX has an identifier for, so it is
+# named as a LicenseRef and the text it refers to ships beside the font.
+#
+# W95FA is *not* here. It came from a font aggregator that describes it as
+# OFL, without the OFL text and without the author saying so anywhere
+# citeable, and a summary of terms is not terms. It is in
+# %%{name}-fonts-extra, which exists so that this line can be true.
+License:        MIT AND OFL-1.1 AND LicenseRef-VCR-OSD-Mono
 # TODO: point both of these at the repository once it is on a forge.
-URL:            https://example.invalid/glitchvape
+URL:            https://github.com/kamiljdudek/glitchvape-vibecoded
 Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
@@ -27,6 +36,10 @@ BuildRequires:  perl-interpreter
 BuildRequires:  perl-macros
 BuildRequires:  perl(strict)
 BuildRequires:  perl(warnings)
+# The manual pages are generated from the tools' own POD at install time, so
+# that `man glitchvape` and `glitchvape --help` cannot document different
+# flags -- pod2usage reads the same block.
+BuildRequires:  perl(Pod::Man)
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 
@@ -98,12 +111,43 @@ reproduced exactly from its seed.
 This package contains the command-line tools and the library. For the window,
 install %{name}-gui.
 
-Departure Mono and Fusion Pixel are included under the SIL Open Font License;
-%{name} --licenses prints their terms along with this program's. Fonts of your
-own go in ~/.local/share/glitchvape/fonts, or in
-%{_datadir}/%{name}/fonts for every account on the machine -- both are
-searched ahead of what is installed here, so neither is disturbed by an
-upgrade.
+Departure Mono and Fusion Pixel are included under the SIL Open Font License
+and VCR OSD Mono under its author's own grant; %{name} --licenses prints their
+terms along with this program's. Fonts of your own go in
+~/.local/share/glitchvape/fonts, or in %{_datadir}/%{name}/fonts for every
+account on the machine -- both are searched ahead of what is installed here,
+so neither is disturbed by an upgrade.
+
+Typefaces whose terms this package cannot state are in
+%{name}-fonts-extra.
+
+
+%package fonts-extra
+Summary:        Typefaces for GlitchVape whose terms are not established
+# No SPDX identifier exists for "a font aggregator says it is OFL", which is
+# all that is known, so this is a LicenseRef pointing at the file that says
+# so. It is deliberately not OFL-1.1: claiming a licence whose text nobody
+# has is exactly the thing this subpackage was split off to avoid.
+License:        LicenseRef-Unverified
+BuildArch:      noarch
+Requires:       %{name} = %{version}-%{release}
+
+%description fonts-extra
+The typefaces GlitchVape looks for that the base package will not distribute,
+installed where it already searches for them. Nothing needs configuring: the
+roles they satisfy start resolving as soon as this is installed, and
+`glitchvape --check-fonts` says so.
+
+W95FA today, which fills the 'ui' role -- the Windows 95 interface face the
+mallsoft and dreamcore presets ask for. dafont describes it as SIL Open Font
+License and free for personal and commercial use, but the release carries no
+licence text and the author has not said so anywhere that can be cited, so
+what is on disk is a font and a claim about it rather than a font and its
+terms.
+
+That is a lower bar than the base package holds itself to, which is why this
+is a separate package you have to ask for. If you need certainty about what
+you may do with this font, get it from its author rather than from here.
 
 
 %package gui
@@ -147,6 +191,18 @@ tool -- the result is identical to the equivalent invocation.
     PREFIX=%{_prefix} \
     PERLDIR=%{perl_vendorlib}
 
+# Not part of the default install target -- see the note above it in the
+# Makefile -- so it is asked for by name here. Both packages are built from
+# one tree; which font lands in which is decided by the %%files lists below.
+#
+# Spelled out rather than as `%%make_install install-fonts-extra`, which would
+# expand to `make install ... install-fonts-extra` and run the whole install a
+# second time for the sake of two font files.
+%{__make} install-fonts-extra \
+    DESTDIR=%{buildroot} \
+    PREFIX=%{_prefix} \
+    PERLDIR=%{perl_vendorlib}
+
 desktop-file-validate %{buildroot}%{_datadir}/applications/%{name}.desktop
 appstream-util validate-relax --nonet \
     %{buildroot}%{_datadir}/metainfo/%{name}.metainfo.xml
@@ -166,10 +222,12 @@ make test
 # Tagged where the Makefile installed it rather than copied into
 # %%{_licensedir}, because this is the copy the program itself reads: the
 # about window and --licenses quote this file instead of restating it in Perl,
-# so there is one LICENSE on disk and `rpm -qL %{name}` still finds it.
+# so there is one LICENSE on disk and `rpm -qL %%{name}` still finds it.
 %license %{_datadir}/%{name}/LICENSE
 %{_bindir}/%{name}
 %{_bindir}/%{name}-batch
+%{_mandir}/man1/%{name}.1*
+%{_mandir}/man1/%{name}-batch.1*
 %dir %{_datadir}/%{name}
 %dir %{_datadir}/%{name}/assets
 %dir %{_datadir}/%{name}/assets/artwork
@@ -190,11 +248,15 @@ make test
 # where GlitchVape::Licenses looks.
 %{_datadir}/%{name}/assets/fonts/
 
-# Shipped empty, and stays empty: the drop-in directory for fonts this package
-# may not distribute -- VCR OSD Mono and W95FA today. It is on the search path
-# ahead of the bundled fonts above, so a file dropped here wins and survives
-# every upgrade of this package. Per-user, the same thing is
+# Shipped empty, and stays empty: the drop-in directory for a font of your
+# own, or for a newer release of one of the bundled ones. It is on the search
+# path ahead of the bundled fonts above, so a file dropped here wins and
+# survives every upgrade of this package. Per-user, the same thing is
 # ~/.local/share/glitchvape/fonts and needs no packaging at all.
+#
+# What this is *not* is where %%{name}-fonts-extra installs: that owns
+# assets/fonts-nonfree/ beside the bundled fonts, so that a directory the user
+# was invited to put files in is never also one that rpm rewrites.
 %dir %{_datadir}/%{name}/fonts
 # GUI.pm and GUI/ belong to the subpackage; everything else is here.
 %{perl_vendorlib}/GlitchVape.pm
@@ -203,8 +265,16 @@ make test
 %exclude %{perl_vendorlib}/GlitchVape/GUI/
 
 
+%files fonts-extra
+# Owned whole, like the bundled fonts in the base package and for the same
+# reason: a font's licence lives beside it, so the directory is the unit.
+# GlitchVape::Fonts searches this path whether or not it exists, so the base
+# package needs to know nothing about whether this one is installed.
+%{_datadir}/%{name}/assets/fonts-nonfree/
+
 %files gui
 %{_bindir}/%{name}-gui
+%{_mandir}/man1/%{name}-gui.1*
 %{perl_vendorlib}/GlitchVape/GUI.pm
 %{perl_vendorlib}/GlitchVape/GUI/
 %{_datadir}/applications/%{name}.desktop
@@ -213,7 +283,7 @@ make test
 
 
 %changelog
-* Mon Aug 24 2026 Kamil Dudek <kamiljdudek@localhost.localdomain> - 0.01-1
+* Mon Aug 24 2026 Kamil Dudek <kamilek@localhost.localdomain> - 0.01-1
 - Initial package.
 - Bundle Departure Mono and Fusion Pixel under the OFL, licence text included.
 - Add a drop-in font directory under %{_datadir}/%{name} for the typefaces
