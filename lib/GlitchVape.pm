@@ -70,6 +70,8 @@ format.
     colors    => N                 quantise the still to an N-entry palette
     codec     => name              h264, vp9 or av1; default from the extension
     animate   => { frames, fps }   render a loop instead of a still
+    on_frame  => sub { my ( $done, $total ) = @_ }   after each frame
+    on_encode => sub { }                             frames done, encoding
     verbose   => bool
     dry_run   => bool              resolve and describe, render nothing
 
@@ -82,6 +84,16 @@ It is applied to the source I<and> to the result, because effects that add
 furniture -- C<letterbox>, C<border> -- make the picture bigger than the one
 they were handed, and a box that only constrained the input would be a promise
 this makes and does not keep.
+
+C<on_frame> and C<on_encode> are for a caller that wants to show progress. A
+still calls neither -- there is one step and it is the whole thing -- and a
+loop calls C<on_frame> once per rendered frame and then C<on_encode> once,
+because after the last frame there is still an ffmpeg run to wait through and
+a bar that sat at full while it happened would be lying.
+
+Nothing is reported from inside a frame: a frame is a chain of ImageMagick
+calls, none of which reports progress, so the frame is the smallest honest
+unit there is.
 
 C<colors> and C<codec> are each about one output: C<colors> quantises a still
 before it is written, which is what makes a 256-colour bitmap 256 colours, and
@@ -277,7 +289,15 @@ sub _render_animation
         push @timings, [ $ctx->timings ];
 
         warn sprintf( "  frame %d/%d\n", $n + 1, $frames ) if $arg->{ verbose };
+
+        # A loop is the one thing this program does that takes long enough to
+        # want watching, and the frame is the only unit of it worth counting:
+        # everything inside one is a chain of ImageMagick calls with no
+        # progress of their own to report.
+        $arg->{ on_frame }->( $n + 1, $frames ) if $arg->{ on_frame };
     }
+
+    $arg->{ on_encode }->() if $arg->{ on_encode };
 
     GlitchVape::Animate::encode(
         frames  => \@paths,

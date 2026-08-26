@@ -318,14 +318,42 @@ my %claimed;
     $gui->{ b_animate }->set_active( 1 );
 
     ok $gui->{ animate }, 'switching the toggle on turns animation on';
-    is $gui->{ audio_stack }->get_visible_child_name, 'ready',
-        'and the soundtrack page offers its controls';
+    is $gui->{ audio_stack }->get_visible_child_name, 'empty',
+        'and with nothing in the mix the page says how to fill it';
 
+    # Three faces, not two: without an animation the page explains what it is
+    # waiting for, with one and nothing in it how to fill it, and only with
+    # something in it does it show the list. The middle one is easy to lose --
+    # it is the state a person is in for the whole time they are deciding.
+    $gui->{ audio } = { generated => [ { kind => 'heart', bpm => 70 } ] };
+    $gui->_sync_actions;
+
+    is $gui->{ audio_stack }->get_visible_child_name, 'ready',
+        'and once there is a track it shows the mix';
+
+    $gui->{ audio } = undef;
     $gui->{ b_animate }->set_active( 0 );
 
     ok !$gui->{ animate }, 'and switching it off turns it off again';
     is $gui->{ audio_stack }->get_visible_child_name, 'needs-animation',
         'and the page goes back to explaining itself';
+}
+
+# ---------------------------------------------------------------------------
+# The effect page says how to fill itself while it is empty
+
+# A pane holding a heading over nothing does not say whether there is
+# something to do or something wrong.
+{
+    ok !$gui->{ state }, 'no image is open in this file';
+    is $gui->{ effect_stack }->get_visible_child_name, 'empty',
+        'so the effect page is showing its empty state';
+
+    my ( $label ) =
+        grep { ( $_->get_label // q{} ) =~ /\+/ }
+        descendants( $gui->{ effect_stack }, 'Gtk3::Label' );
+
+    ok $label, 'which names the button that would fill it';
 }
 
 # ---------------------------------------------------------------------------

@@ -961,6 +961,7 @@ inputs it has:
 glitchvape -p anaglyph --animate \
     --generate static --gen tone=0.5 --gen seconds=20 \
     --generate dtmf --gen 'text=call me maybe' --gen dial_tone=eu \
+    --generate heart --gen bpm=105 --gen sway=15 \
     photo.heic
 ```
 
@@ -1020,6 +1021,74 @@ Synthesised at 16 kHz rather than CD rate, because a television's audio has
 nothing above 8 kHz in it. That makes the buffer a third of the size and hands
 the final band limit to ffmpeg's resampler on the way into the mix, which is a
 better low-pass than the one-pole it would otherwise need, and free.
+
+#### `geiger` — a counter ticking
+
+| | | |
+|---|---|---|
+| `seconds` | 20 | length, when nothing else sets it |
+| `strength` | 60 | clicks per second at closest approach |
+| `baseline` | 2 | clicks per second with nothing nearby |
+| `speed` | 0.3 | how quickly you drift towards and away from the source |
+| `tone` | 0.5 | how bright each click is |
+| `gain` | 0.7 | level |
+| `seed` | 1 | the same seed gives the same clicks |
+
+The clicks are the easy half. The **timing** is what makes it recognisable,
+and the physically correct model is also the shortest code: radioactive decay
+has no memory, so the gap between clicks is exponentially distributed and is
+drawn as `-log(rand) / rate`. That is why the clicks *clump* — a burst, a
+pause, a double-tap — which is the whole character of the sound. Jittering
+around a fixed interval, the intuitive alternative, gives something that
+sounds like a failing metronome instead.
+
+A real tube is insensitive for a moment after each discharge, so it undercounts
+as the rate climbs. That is modelled too, which is why a strong source fuses
+into a buzz rather than merely ticking faster: the observed rate follows the
+standard `n / (1 + n·τ)` and there is a test pinning it against that formula.
+
+The distance to the source is a bounded random walk, and intensity follows the
+inverse square law, so the rate rises and falls on a Lorentzian — a sharp peak
+with long tails, which is far better to listen to than a sine sweep because a
+sine spends most of its travel doing nothing. Nothing repeats, and a track
+asked to cover three minutes simply wanders for three minutes.
+
+Synthesised at 44.1 kHz, unlike the static: the sharpness of a click *is* its
+content, and band-limiting one to 8 kHz turns a tick into a thud.
+
+#### `heart` — a heartbeat
+
+| | | |
+|---|---|---|
+| `seconds` | 20 | length, when nothing else sets it |
+| `bpm` | 70 | beats per minute, before any wandering |
+| `sway` | 8 | how far the rate may wander either side of that, in bpm |
+| `sway_rate` | 0.3 | how quickly it wanders within that ceiling |
+| `depth` | 0.5 | how much chest is around it |
+| `gain` | 0.8 | level |
+| `seed` | 1 | the same seed gives the same wandering |
+
+Two valve closures a beat — S1, the *lub*, and S2, the *dub*. **The two gaps
+are not equal**, and that is the whole thing: S1 to S2 is the beat itself,
+S2 to the next S1 is the heart refilling, and at rest the split is roughly a
+third and two thirds. Space them evenly and what comes out is a drum loop.
+
+The ratio is not fixed either. As the rate rises it is the *pause* that gets
+squeezed out, not the beat — the contraction takes about as long as it takes.
+At 60 bpm the pause is more than twice the beat; by 150 it has all but gone.
+That is why a racing heart sounds urgent rather than merely quick, so systole
+is scaled by the square root of the cycle length and the suite measures the
+ratio across the range.
+
+The rate wanders, because a heart held at exactly N beats a minute reads as a
+loop within about four beats. `sway` is a ceiling it never passes and
+`sway_rate` is how briskly it moves inside it; the wandering stays irregular
+at either setting, since what those shape is a random walk and not a waveform.
+
+Each thud is a burst of noise through a low-pass tuned low, not a sine: a
+valve closing is a broadband thud and a sine burst gives a synthesised kick
+drum. Almost none of it is above 200 Hz, so 16 kHz is generous rather than a
+compromise.
 
 ### Mixing, and which one is in charge
 

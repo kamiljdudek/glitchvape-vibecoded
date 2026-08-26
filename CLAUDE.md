@@ -276,6 +276,38 @@ says what it does and this says what else was tried.
   actually change are the size and the format and neither should require
   knowing that `.webm` means VP9.
 
+## Generated soundtracks
+
+`GlitchVape::Generator` is a registry in the same sense `Registry` is: one
+`register()` call produces the `--generate`/`--gen` validation, the
+`--list-generators` entry, the widgets in the wizard and the row in the Add
+popover. Four kinds so far — `dtmf`, `static`, `geiger`, `heart` — each a
+module beside it exposing `params`, `param_order`, `duration`, `pcm`, `render`
+and `describe`.
+
+**Adding a kind must not require editing the GUI.** The icon is part of the
+declaration for exactly that reason: it used to be a mapping keyed on kind
+inside `GUI.pm`, in two copies that had drifted apart.
+
+Two of them are about timing rather than timbre, and the timing is the part
+worth protecting:
+
+- **`geiger`** draws inter-click gaps from the exponential distribution
+  radioactive decay actually has. That is what makes the clicks clump, which
+  is the whole character of the sound; jittering around a fixed interval gives
+  a broken metronome. Dead time is modelled too, so the observed rate follows
+  `n / (1 + n·τ)` — `t/28-generators.t` checks it against that formula rather
+  than against a recorded number.
+- **`heart`** puts S1 and S2 closer together than S2 and the next S1, and
+  scales systole by the square root of the cycle so it is the *pause* that
+  disappears as the rate rises. Equal gaps would be a drum loop.
+
+Those tests read the click schedule by replacing `Geiger::_click`, because
+once the rate is high enough for dead time to bind the clicks overlap and no
+onset detector can separate them. The real sub is put back before the
+reproducibility checks — with the recorder in place `pcm()` writes silence,
+and two silent buffers compare equal whatever the seed was.
+
 ## Things that have cost time before
 
 - **`Pango::FontDescription->from_string(...)` silently does nothing useful.**
@@ -301,6 +333,13 @@ says what it does and this says what else was tried.
   that add furniture (`letterbox`, `border`) make the picture bigger than the
   one they were handed, so constraining only the source is a promise the code
   does not keep.
+- **No sound on WSL is usually WSLg, not the program.** `/mnt/wslg/pulseaudio.log`
+  is the place to look: `module-rdp-sink.c: data_send: send failed` followed by
+  a reconnect means PulseAudio is accepting the stream and the bridge to
+  Windows is dropping it. Everything inside the program looks healthy in that
+  state — the pipeline prerolls, the position advances at real time, and
+  `pulsesink` connects without error — so it is worth checking the log before
+  suspecting the player.
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first
   frame rather than after twenty-four renders.

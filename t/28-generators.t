@@ -54,13 +54,36 @@ use GlitchVape::Wav       ();
 # no onset detector can separate them -- which would make the test measure the
 # detector rather than the generator.
 my @CLICKS;
+
+# Reaching into another package's private sub on purpose: the point of this
+# file is when the clicks are scheduled, and the only alternative -- detecting
+# them in the audio -- stops working at exactly the rates the dead-time tests
+# are about.
+## no critic (Variables::ProtectPrivateVars)
+my $REAL_CLICK = \&GlitchVape::Geiger::_click;
+
+# Kept so it can be put back: with the recorder in place pcm() writes silence,
+# which would make the reproducibility checks at the foot of this file pass
+# for the wrong reason -- two empty buffers are equal whatever the seed was.
+sub record_clicks
 {
     no warnings 'redefine';    ## no critic (TestingAndDebugging::ProhibitNoWarnings)
     *GlitchVape::Geiger::_click = sub {
         push @CLICKS, $_[ 1 ] / GlitchVape::Geiger::RATE;
         return;
     };
+    return;
 }
+
+sub real_clicks
+{
+    no warnings 'redefine';    ## no critic (TestingAndDebugging::ProhibitNoWarnings)
+    *GlitchVape::Geiger::_click = $REAL_CLICK;
+    return;
+}
+## use critic
+
+record_clicks();
 
 sub click_times
 {
@@ -73,7 +96,8 @@ sub click_times
 }
 
 {
-    my @t = click_times( seconds => 60, strength => 8, baseline => 8, speed => 0 );
+    my @t =
+        click_times( seconds => 60, strength => 8, baseline => 8, speed => 0 );
 
     cmp_ok scalar @t, '>', 100, 'a minute at eight a second produces clicks';
 
@@ -149,18 +173,22 @@ sub click_times
     my $count_in_halves = sub {
         my ( @t ) = @_;
 
-        my ( $first, $second ) = ( 0, 0 );
+        my ( $early, $later ) = ( 0, 0 );
         for my $x ( @t )
         {
-            if ( $x < 10 ) { $first++ }
-            else           { $second++ }
+            if   ( $x < 10 ) { $early++ }
+            else             { $later++ }
         }
-        return ( $first, $second );
+        return ( $early, $later );
     };
 
     # Speed 0 is a fixed distance, so the two halves should agree closely.
-    my @still =
-        click_times( seconds => 20, strength => 40, baseline => 40, speed => 0 );
+    my @still = click_times(
+        seconds  => 20,
+        strength => 40,
+        baseline => 40,
+        speed    => 0
+    );
     my ( $a, $b ) = $count_in_halves->( @still );
 
     cmp_ok abs( $a - $b ) / ( ( $a + $b ) / 2 ), '<', 0.2,
@@ -226,7 +254,7 @@ sub thud_times
 
     my @at;
     my $armed = 1;
-    my $last  = -$rearm;
+    my $fired = -$rearm;
 
     for my $i ( 0 .. $#s )
     {
@@ -234,9 +262,9 @@ sub thud_times
         {
             push @at, $i / $rate;
             $armed = 0;
-            $last  = $i;
+            $fired = $i;
         }
-        $armed = 1 if !$armed && $i - $last > $rearm;
+        $armed = 1 if !$armed && $i - $fired > $rearm;
     }
 
     return @at;
@@ -247,18 +275,18 @@ sub split_gaps
 {
     my ( @at ) = @_;
 
-    my @gap = map { $at[ $_ + 1 ] - $at[ $_ ] } 0 .. $#at - 1;
+    my @gap    = map  { $at[ $_ + 1 ] - $at[ $_ ] } 0 .. $#at - 1;
     my @sorted = sort { $a <=> $b } @gap;
     my $median = $sorted[ int( @sorted / 2 ) ];
 
     my ( $short, $ns, $long, $nl ) = ( 0, 0, 0, 0 );
     for my $g ( @gap )
     {
-        if ( $g < $median ) { $short += $g; $ns++ }
-        else                { $long  += $g; $nl++ }
+        if   ( $g < $median ) { $short += $g; $ns++ }
+        else                  { $long  += $g; $nl++ }
     }
 
-    return ( 0, 0 ) unless $ns && $nl;
+    return ( 0,            0 ) unless $ns && $nl;
     return ( $short / $ns, $long / $nl );
 }
 
@@ -289,7 +317,8 @@ sub split_gaps
 # would carry no more alarm than a metronome does.
 
 {
-    my ( $slow_s, $slow_d ) = split_gaps( thud_times( seconds => 12, bpm => 60 ) );
+    my ( $slow_s, $slow_d ) =
+        split_gaps( thud_times( seconds => 12, bpm => 60 ) );
     my ( $fast_s, $fast_d ) =
         split_gaps( thud_times( seconds => 12, bpm => 150 ) );
 
@@ -310,6 +339,9 @@ sub split_gaps
 # Both are reproducible, and both cover whatever length they are asked for
 
 {
+    # Clicks are written again from here on; see record_clicks above.
+    real_clicks();
+
     for my $mod ( 'GlitchVape::Geiger', 'GlitchVape::Heart' )
     {
         my $pcm = $mod->can( 'pcm' );

@@ -70,15 +70,11 @@ use constant RATE => 16_000;
 # urgent>.
 use constant SYSTOLE_AT_60 => 0.30;
 
-# How long each sound rings. S2 is the shorter, which is most of what
-# distinguishes the two on their own.
-use constant S1_S => 0.14;
-use constant S2_S => 0.10;
-
-# The resonances the two thuds sit on. Low, and a fifth or so apart, which is
-# roughly where the real ones land.
-use constant S1_HZ => 40;
-use constant S2_HZ => 58;
+# The two closures, each described in one place: the resonance it sits on, how
+# long it rings, and how hard it hits. S2 is the higher, shorter and quieter
+# of the two, which between them is what tells the "dub" from the "lub".
+use constant S1 => { hz => 40, seconds => 0.14, level => 1.00 };
+use constant S2 => { hz => 58, seconds => 0.10, level => 0.75 };
 
 # How often the wandering rate is redrawn. Slower than a beat, because it is
 # meant to be heard across beats rather than within one.
@@ -241,9 +237,9 @@ sub pcm
 
     my @sample = ( 0 ) x $count;
 
-    my $now     = 0;
-    my $swayed  = 0;
-    my $offset  = 0;
+    my $now    = 0;
+    my $swayed = 0;
+    my $offset = 0;
 
     while ( $now < $seconds )
     {
@@ -259,11 +255,8 @@ sub pcm
         my $systole = SYSTOLE_AT_60 * sqrt( $cycle );
         $systole = $cycle * 0.9 if $systole > $cycle * 0.9;
 
-        _thud( \@sample, int( $now * RATE ), S1_HZ, S1_S, 1.0, $depth, $rng );
-        _thud(
-            \@sample, int( ( $now + $systole ) * RATE ),
-            S2_HZ, S2_S, 0.75, $depth, $rng
-        );
+        _thud( \@sample, int( $now * RATE ),                S1, $depth, $rng );
+        _thud( \@sample, int( ( $now + $systole ) * RATE ), S2, $depth, $rng );
 
         $now += $cycle;
 
@@ -289,9 +282,13 @@ sub pcm
 # distance through a chest actually does.
 sub _thud
 {
-    my ( $sample, $at, $hz, $length_s, $level, $depth, $rng ) = @_;
+    my ( $sample, $at, $sound, $depth, $rng ) = @_;
 
     return if $at < 0 || $at >= @$sample;
+
+    my $hz       = $sound->{ hz };
+    my $level    = $sound->{ level };
+    my $length_s = $sound->{ seconds };
 
     my $length = int( RATE * $length_s * ( 1 + $depth * 0.5 ) );
 

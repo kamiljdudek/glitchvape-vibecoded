@@ -45,6 +45,23 @@ it reads the source from disk through C<GlitchVape::IO::load> at the preview
 size, which is the same call the command-line tool makes, so a preview differs
 from the export only in the size it was rendered at.
 
+=head1 PROGRESS IS COUNTED IN FRAMES
+
+A still is one step and the step is the whole render, so there is nothing to
+report. A loop is twenty-four of them and takes long enough to be worth
+watching, so the child counts frames down a pipe opened before the fork.
+
+The frame is the smallest honest unit. Inside one is a chain of ImageMagick
+calls, none of which reports progress, so anything finer would be invented.
+
+The count runs to C<frames + 1> rather than to C<frames>, because after the
+last frame there is still an ffmpeg run -- and with a soundtrack, an audio
+render before it. A bar that reached full and then sat there would be saying
+the render had finished when it had not.
+
+Nothing about this reaches ImageMagick in the parent: the parent reads bytes
+off a pipe, which is the same thing it does for the error file.
+
 =head1 TWO PATHS, DELIBERATELY
 
 =over 4
@@ -163,6 +180,8 @@ sub cancel
     $self->{ job }      = undef;
     $job->{ cancelled } = 1;
 
+    _end_progress( $job );
+
     kill 'TERM', $job->{ pid };
 
     return 1;
@@ -229,18 +248,22 @@ sub preview
     my $staged = $self->{ cache }->scratch( $suffix );
 
     $self->_spawn(
-        key      => $key,
-        suffix   => $suffix,
-        staged   => $staged,
-        on_done  => $arg{ on_done },
-        on_error => $arg{ on_error },
-        work     => sub {
+        key         => $key,
+        suffix      => $suffix,
+        staged      => $staged,
+        on_done     => $arg{ on_done },
+        on_error    => $arg{ on_error },
+        on_progress => $arg{ on_progress },
+        work        => sub {
+            my ( $report ) = @_;
+
             $self->_render_preview(
                 pipeline => $pipeline,
                 seed     => $state->seed,
                 size     => $size,
                 animate  => $spec,
                 output   => $staged,
+                report   => $report,
             );
         },
     );
@@ -287,12 +310,13 @@ sub source_preview
     my $pipeline = GlitchVape::Pipeline->new( effects => {} );
 
     $self->_spawn(
-        key      => $key,
-        suffix   => '.png',
-        staged   => $staged,
-        on_done  => $arg{ on_done },
-        on_error => $arg{ on_error },
-        work     => sub {
+        key         => $key,
+        suffix      => '.png',
+        staged      => $staged,
+        on_done     => $arg{ on_done },
+        on_error    => $arg{ on_error },
+        on_progress => $arg{ on_progress },
+        work        => sub {
             $self->_render_preview(
                 pipeline => $pipeline,
                 seed     => 0,
@@ -364,6 +388,7 @@ sub _serve_cached
     optimise => bool
     on_done  => sub { my ( $path ) = @_ }
     on_error => sub { my ( $message ) = @_ }
+    on_progress => sub { my ( $done, $total ) = @_ }
 
 The four in the middle are what L<GlitchVape::GUI::Export> decided; each is
 passed on only when it was set, so an export nobody has configured behaves
@@ -400,12 +425,25 @@ sub export
     }
 
     $self->_spawn(
-        key      => undef,
-        final    => $output,
-        on_done  => $arg{ on_done },
-        on_error => $arg{ on_error },
-        work     => sub {
-            GlitchVape::render( %render );
+        key         => undef,
+        final       => $output,
+        on_done     => $arg{ on_done },
+        on_error    => $arg{ on_error },
+        on_progress => $arg{ on_progress },
+        work        => sub {
+            my ( $report ) = @_;
+
+            GlitchVape::render(
+                %render,
+                (
+                    $report
+                    ? (
+                        on_frame  => sub { $report->( $_[ 0 ], $_[ 1 ] + 1 ) },
+                        on_encode => sub { },
+                        )
+                    : ()
+                ),
+            );
         },
     );
 
@@ -474,6 +512,13 @@ sub _render_preview_loop
         my $path = GlitchVape::Animate::frame_path( $dir, $n );
         GlitchVape::IO::save( $ctx->image, $path, quality => 100, strip => 1 );
         push @paths, $path;
+
+        # The total counts one past the frames, for the encode still to come:
+        # a bar that reached full and then sat through an ffmpeg run would be
+        # saying the render had finished when it had not. Every report in this
+        # sub uses the same total, or the bar would jump when the last one
+        # changed the denominator under it.
+        $arg{ report }->( $n + 1, $frames + 1 ) if $arg{ report };
     }
 
     # The track goes into the preview as well as into the export. It is the
@@ -499,6 +544,19 @@ sub _spawn
 
     my $errfile = $self->{ cache }->scratch( '.err' );
 
+    # A pipe for progress, opened before the fork so both halves have an end
+    # of it. Only the frame count goes down it -- see L</PROGRESS IS COUNTED
+    # IN FRAMES>.
+    #
+    # Failing to open one is not worth abandoning a render over: without it
+    # the caller simply hears nothing until the child is reaped, which is what
+    # every render did before this existed.
+    my ( $read, $write );
+    unless ( pipe $read, $write )
+    {
+        ( $read, $write ) = ( undef, undef );
+    }
+
     my $pid = fork;
 
     unless ( defined $pid )
@@ -515,15 +573,37 @@ sub _spawn
 
     unless ( $pid )
     {
+        close $read if $read;
+
+        if ( $write )
+        {
+            # Line-buffered would still hold a line back until the buffer
+            # filled, and the whole point is that the parent hears about each
+            # frame as it lands.
+            my $old = select $write;    ## no critic (InputOutput::ProhibitOneArgSelect)
+            $| = 1;                     ## no critic (Variables::RequireLocalizedPunctuationVars)
+            select $old;                ## no critic (InputOutput::ProhibitOneArgSelect)
+
+            $job{ report } = sub {
+                my ( $done, $total ) = @_;
+                print { $write } "$done $total\n";
+                return;
+            };
+        }
+
         _child( \%job, $errfile );
 
         # Not reached: _child never returns.
         POSIX::_exit( 70 );
     }
 
+    close $write if $write;
+
     $job{ pid }     = $pid;
     $job{ errfile } = $errfile;
     $self->{ job }  = \%job;
+
+    $self->_watch_progress( \%job, $read ) if $read;
 
     my $watch;
     $watch = Glib::Child->watch_add(
@@ -539,6 +619,81 @@ sub _spawn
     return $pid;
 }
 
+# Read the child's frame counter and hand it to the caller on the main loop.
+#
+# A watch rather than a timer: the child writes one short line per frame, and
+# polling for something that announces itself is work done for nothing.
+#
+# The buffer matters. A pipe hands over whatever has arrived, which on a fast
+# render is several lines at once and can be half of one -- so only complete
+# lines are consumed and the remainder is kept for the next wake-up.
+sub _watch_progress
+{
+    my ( $self, $job, $read ) = @_;
+
+    my $buffer = q{};
+
+    $job->{ progress_fh }    = $read;
+    $job->{ progress_watch } = Glib::IO->add_watch(
+        fileno $read,
+        [ 'in', 'hup' ],
+        sub {
+            my $chunk = q{};
+            my $got   = sysread $read, $chunk, 4096;
+
+            # 0 is the child closing its end, undef is an error; either way
+            # there is nothing further to hear.
+            #
+            # Returning 0 removes the source, so the handle is forgotten here
+            # as well: _end_progress runs on every path that finishes with a
+            # child, and removing an already-removed source is a GLib-CRITICAL.
+            unless ( $got )
+            {
+                delete $job->{ progress_watch };
+                return 0;
+            }
+
+            $buffer .= $chunk;
+
+            while ( $buffer =~ s/^([^\n]*)\n// )
+            {
+                my $line = $1;
+                next unless $line =~ /^(\d+)\s+(\d+)\z/;
+
+                # A cancelled job's callbacks never fire, which includes this
+                # one: the bar belongs to a render nobody is waiting for.
+                next if $job->{ cancelled };
+
+                $job->{ on_progress }->( $1, $2 ) if $job->{ on_progress };
+            }
+
+            return 1;
+        }
+    );
+
+    return;
+}
+
+# The read end and its watch, released together. Called from every path that
+# finishes with a child -- reaped, cancelled or failed -- because a watch left
+# on a closed descriptor is a wake-up per iteration of the main loop.
+sub _end_progress
+{
+    my ( $job ) = @_;
+
+    if ( my $watch = delete $job->{ progress_watch } )
+    {
+        Glib::Source->remove( $watch );
+    }
+
+    if ( my $fh = delete $job->{ progress_fh } )
+    {
+        close $fh;
+    }
+
+    return;
+}
+
 sub _child
 {
     my ( $job, $errfile ) = @_;
@@ -552,7 +707,7 @@ sub _child
 
     local $@;
     my $ok = eval {
-        $job->{ work }->();
+        $job->{ work }->( $job->{ report } );
         1;
     };
 
@@ -582,6 +737,8 @@ sub _reaped
 
     my $err = _slurp_error( $job->{ errfile } );
     unlink $job->{ errfile };
+
+    _end_progress( $job );
 
     return if $job->{ cancelled };
 

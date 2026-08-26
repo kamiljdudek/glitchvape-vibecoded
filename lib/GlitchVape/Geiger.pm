@@ -261,8 +261,8 @@ sub pcm
     # samples, because a Poisson gap is a length of time and turning it into
     # an index once at the end is cheaper than counting samples between
     # arrivals.
-    my $now  = 0;
-    my $last = -DEAD_S;
+    my $now        = 0;
+    my $last_click = -DEAD_S;
 
     # The distance to the source, as a bounded random walk. At speed 0 it
     # never moves, which is a fixed rate rather than a special case.
@@ -283,10 +283,10 @@ sub pcm
 
         # The tube is still recovering, so this particle went uncounted. Not
         # `next` on the walk: time has still passed.
-        if ( $now - $last >= DEAD_S )
+        if ( $now - $last_click >= DEAD_S )
         {
             _click( \@sample, int( $now * RATE ), $ring, $rng );
-            $last = $now;
+            $last_click = $now;
         }
 
         # Move, at most once per STEP_S however many clicks went by.
@@ -398,8 +398,7 @@ sub describe
     $character = 'busy'    if $strength >= 80;
     $character = 'hot'     if $strength >= 200;
 
-    my $line =
-        sprintf 'geiger  %s  %s', $character, _mmss( duration( $spec ) );
+    my $line = sprintf 'geiger  %s  %s', $character, _mmss( duration( $spec ) );
 
     $line .= '  wandering' if ( $spec->{ speed } // 0.3 ) > 0.02;
 

@@ -379,6 +379,7 @@ sub _build_header
             return;
         }
     );
+
     # pack_end fills from the right, so the first packed sits outermost: the
     # menu is hard against the window controls and Export is inboard of it.
     $bar->pack_end( $self->_build_menu );
@@ -872,8 +873,20 @@ sub _build_preview_overlay
 
     my $label = Gtk3::Label->new( 'Rendering…' );
 
+    # The bar only appears for a render that has frames to count -- see
+    # _progress. A still is one step, and a bar with one step in it says
+    # nothing a spinner has not already said.
+    my $bar = Gtk3::ProgressBar->new;
+    $bar->set_size_request( 160, -1 );
+    $bar->set_valign( 'center' );
+    $bar->set_no_show_all( 1 );
+
+    my $text = Gtk3::Box->new( 'vertical', 4 );
+    $text->pack_start( $label, 0, 0, 0 );
+    $text->pack_start( $bar,   0, 0, 0 );
+
     $badge->pack_start( $spinner, 0, 0, 0 );
-    $badge->pack_start( $label,   0, 0, 0 );
+    $badge->pack_start( $text,    0, 0, 0 );
 
     # Hidden rather than faded: it is over the picture now, not in a row of
     # buttons whose widths it would disturb, so there is nothing to hold a
@@ -884,6 +897,7 @@ sub _build_preview_overlay
     # itself and the two widgets inside it are already visible.
     $spinner->show;
     $label->show;
+    $text->show;
     $badge->set_no_show_all( 1 );
 
     $overlay->add_overlay( $badge );
@@ -892,6 +906,7 @@ sub _build_preview_overlay
     $self->{ spinner }       = $spinner;
     $self->{ spinner_badge } = $badge;
     $self->{ spinner_label } = $label;
+    $self->{ spinner_bar }   = $bar;
 
     return $overlay;
 }
@@ -1779,6 +1794,13 @@ sub _export
         # unable to disagree.
         GlitchVape::GUI::Export::render_options( $self->{ export }, $spec ),
 
+        # An export is the long one: full size rather than preview size, so
+        # the frames it counts are the slowest this program renders.
+        on_progress => sub {
+            $self->_progress( @_ );
+            return;
+        },
+
         on_done => sub {
             my ( $written ) = @_;
             $self->_busy( 0 );
@@ -2495,9 +2517,13 @@ sub _render
     $self->_busy( 1, 'Rendering…' );
 
     $self->{ render }->preview(
-        state   => $self->{ state },
-        size    => $size,
-        animate => $spec,
+        state       => $self->{ state },
+        size        => $size,
+        animate     => $spec,
+        on_progress => sub {
+            $self->_progress( @_ );
+            return;
+        },
         on_done => sub {
             my ( $path, $cached ) = @_;
             $self->_busy( 0 );
@@ -2951,6 +2977,14 @@ sub _busy
     {
         $self->{ spinner }->start;
         $self->{ spinner_label }->set_text( $message // 'Rendering…' );
+
+        # Cleared per render rather than per frame: the bar and the timings
+        # behind the estimate both belong to one render, and a still leaves
+        # the bar hidden entirely because nothing will ever call _progress.
+        $self->{ progress_seen } = [];
+        $self->{ spinner_bar }->set_fraction( 0 );
+        $self->{ spinner_bar }->hide;
+
         $self->{ spinner_badge }->show;
         $self->_set_apply( STOP_ICON, '_Stop',
             'Abandon this render. The settings are untouched' );
@@ -2959,6 +2993,7 @@ sub _busy
     else
     {
         $self->{ spinner }->stop;
+        $self->{ spinner_bar }->hide;
         $self->{ spinner_badge }->hide;
         $self->_set_apply( APPLY_ICON, '_Apply',
                   'Render the pipeline and show the result. '
@@ -2967,6 +3002,78 @@ sub _busy
 
     $self->_sync_actions;
     return;
+}
+
+# One frame of a loop has landed.
+#
+# The estimate is deliberately not shown for the first couple of frames. The
+# first is slower than the rest -- it pays for decoding the source, which the
+# others reuse -- so extrapolating from it alone promises a wait half again as
+# long as the one that follows, and a figure that then falls steadily is worse
+# than no figure at all.
+#
+# $total counts one past the frames, for the encode; see
+# GlitchVape::GUI::Render/PROGRESS IS COUNTED IN FRAMES. That last step has no
+# duration anybody can predict, so the wait is only estimated while frames
+# remain.
+sub _progress
+{
+    my ( $self, $done, $total ) = @_;
+
+    return unless $total > 1;
+
+    my $bar = $self->{ spinner_bar };
+    $bar->set_fraction( $done / $total );
+    $bar->show;
+
+    $self->{ progress_seen } ||= [];
+    push @{ $self->{ progress_seen } }, time;
+
+    my $frames = $total - 1;
+
+    if ( $done >= $frames )
+    {
+        $self->{ spinner_label }->set_text( 'Encoding…' );
+        $self->_status( 'Encoding…' );
+        return;
+    }
+
+    my $text = sprintf 'Frame %d of %d', $done, $frames;
+
+    if ( my $left = $self->_estimate( $done, $frames ) )
+    {
+        $text .= sprintf ' · about %s left', $left;
+    }
+
+    $self->{ spinner_label }->set_text( $text );
+    $self->_status( $text );
+
+    return;
+}
+
+# Roughly how much longer, or undef while there is not enough to say.
+#
+# Measured from the second frame onwards for the reason above, and reported in
+# whole units: a countdown that reads "about 12s left" is doing its job, and
+# one that reads "11.6s" is claiming a precision the next frame will disprove.
+sub _estimate
+{
+    my ( $self, $done, $frames ) = @_;
+
+    my $seen = $self->{ progress_seen } or return undef;
+    return undef if @$seen < 3;
+
+    my $elapsed = $seen->[ -1 ] - $seen->[ 1 ];
+    my $counted = @$seen - 2;
+    return undef unless $counted > 0 && $elapsed > 0;
+
+    my $each = $elapsed / $counted;
+    my $left = int( $each * ( $frames - $done ) + 0.5 );
+
+    return undef if $left < 1;
+    return sprintf '%ds', $left if $left < 60;
+
+    return sprintf '%dm %02ds', int( $left / 60 ), $left % 60;
 }
 
 # Apply and Stop are one button wearing two hats, so all three things that
@@ -3062,8 +3169,7 @@ sub _sync_actions
     # Nothing is cleared here -- $self->{audio} is untouched -- so a mix put
     # together with Animate on is still there after switching it off and on
     # again, and the page goes straight back to 'ready'.
-    my $has_tracks =
-        GlitchVape::Audio::has_file( $self->{ audio } )
+    my $has_tracks = GlitchVape::Audio::has_file( $self->{ audio } )
         || scalar GlitchVape::Audio::generated( $self->{ audio } );
 
     my $page = 'needs-animation';
