@@ -233,9 +233,19 @@ sub _category_page
     my $lead = Gtk3::Label->new;
     $lead->set_markup(
               'Effects are grouped by where they run in the chain, '
-            . 'which is also what they are for.' );
+            . 'which is also what they are for. The chain always runs in '
+            . 'the same order, and that order changes the picture — '
+            . 'scanlines added before the frame is shrunk get shrunk away '
+            . 'with it. So choose the part of the chain you want to change, '
+            . 'then the effect.' );
     $lead->set_xalign( 0 );
     $lead->set_line_wrap( 1 );
+
+    # Wrapped, but a wrapped label still asks for its whole natural width
+    # unless it is told otherwise, and this one is now long enough that
+    # letting it do so would widen the assistant. Bounded to the same measure
+    # the stage blurbs use, so the two columns of prose agree.
+    $lead->set_max_width_chars( 60 );
     $lead->get_style_context->add_class( 'dim-label' );
     $box->pack_start( $lead, 0, 0, 0 );
 
@@ -653,8 +663,8 @@ sub _fill_settings
         # which is not a control anybody can set a value with.
         #
         # Only the ones a width helps. A switch has a size of its own, and
-        # asking for 220 pixels of it is how the first release of this page
-        # ended up with levers stretched right across the column.
+        # asking for 220 pixels of it stretches it into a lever right across
+        # the column.
         if ( $built->{ stretch } )
         {
             $built->{ control }->set_size_request( 220, -1 );

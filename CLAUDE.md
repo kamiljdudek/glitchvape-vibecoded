@@ -25,6 +25,8 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
+| `package/` | the spec, `debian/`, the desktop entry and the AppStream metadata |
+| `build/` | everything the packaging targets produce; disposable, gitignored |
 | `t/` | the suite; GUI tests skip themselves without a display |
 
 ## The invariants
@@ -154,9 +156,18 @@ Three binary packages from one source, in both packagings, split the same way:
 | `glitchvape-gui` | the window |
 | `glitchvape-fonts-extra` | typefaces whose terms are not established |
 
-`debian/rules` installs one package at a time from the Makefile's own targets
-rather than staging everything and splitting it back out with `.install`
-globs — the split already exists and `check-split` proves it.
+Everything a distribution needs is under `package/` and nothing a build
+produces is anywhere but `build/`, which is why `make clean` is one `rm -rf`.
+Both packagings build from the tarball `make dist` writes there: `rpmbuild -t`
+finds `package/glitchvape.spec` inside it, and `make deb` unpacks it and moves
+`package/debian` into place, because `dpkg-buildpackage` insists on a
+`debian/` directly beneath the directory it is run from. Building from the
+tarball rather than in the tree means a file `make dist` failed to include is
+a build failure rather than a package quietly missing something.
+
+`package/debian/rules` installs one package at a time from the Makefile's own
+targets rather than staging everything and splitting it back out with
+`.install` globs — the split already exists and `check-split` proves it.
 
 `GlitchVape::Paths::DATADIR` is one constant naming the installed data
 directory, rewritten by `make install`. Empty means "not installed" and sends
@@ -192,10 +203,11 @@ make check-split       # no Gtk3 outside GUI/
 make check-licenses    # every bundled font has its licence beside it
 make tidy critic       # perltidy + perlcritic
 make man               # manual pages from the tools' POD
-make dist              # source tarball
+make dist              # source tarball, into build/
 make deb               # the three .deb packages (needs debhelper)
 make rpm               # the three .rpm packages (make rpms for the srpm too)
 make srpm              # source RPM only
+make clean             # removes build/ whole, plus the tools' leavings
 
 perl -Ilib bin/glitchvape --check-deps    # what external tools are present
 perl -Ilib bin/glitchvape --check-fonts   # what each font role resolved to
@@ -206,6 +218,63 @@ perl -Ilib bin/glitchvape --explain NAME  # one effect's parameters
 Three environment variables override where things are found, which is how the
 tests run against the checkout regardless of what is installed:
 `GLITCHVAPE_ASSETS`, `GLITCHVAPE_PRESETS`, `GLITCHVAPE_FONTS`.
+
+Two escape hatches exist for building where the toolchain is not fully
+installed — `make deb DPKGFLAGS=-d` skips `dpkg-checkbuilddeps`, and
+`make rpm RPMFLAGS='--nodeps --nocheck'` skips the equivalent and the test
+run. `RPMTOPDIR` moves the rpmbuild tree, which otherwise lives in `build/`.
+
+## The window, and what it has already tried
+
+The interface has been rearranged more than once, and the arrangements that
+were discarded are the reason the current one looks as it does. That reasoning
+is recorded here rather than in comments beside the code, so that the code
+says what it does and this says what else was tried.
+
+- **Effect parameters were once inline, in a disclosure per row.** The list
+  was then as tall as the settings of everything in it, so a fifteen-effect
+  preset could not be seen at once, and only one effect's controls could be
+  held against the picture at a time. They live in `GUI/Adjust.pm` windows
+  now — non-modal, several at once, closed when their effect is removed.
+  The disclosure itself was hand-built from a toggle and a revealer rather
+  than a `GtkExpander`, for the event-window reason in the list below; that
+  problem went away with the disclosure.
+
+- **The soundtrack was under the preview, in a revealer tied to Animate.**
+  That put the two halves of one pipeline on opposite sides of the window and
+  made half of it appear and disappear. It is the second page of the left
+  pane's stack now, and with Animate off it explains what it is waiting for
+  instead of vanishing — a tab that disappears teaches nobody what it was for.
+
+- **The soundtrack page had its own pair of Add buttons.** "Add something
+  here" is one action, so it is one button: the action bar's Add serves
+  whichever page is showing, with a popover per page.
+
+- **There was a preset combo above the effect list.** A preset is now one of
+  the two things Add offers, because a preset is a set of effects and belongs
+  beside "one effect" rather than in a control of its own. It still *replaces*
+  the pipeline and still records its name, which is what keeps `--preset` in
+  the copied command line; `Clear all effects` in the menu is what the
+  combo's `(no preset)` entry used to do.
+
+- **Add, Adjust and Animate were labelled buttons.** Four labels did not fit
+  the pane. Only Apply keeps its word — it is the one with a render bill
+  attached and the one that changes to Stop. Dropping a label drops its
+  mnemonic, so those three keys moved to an accelerator group and each is
+  named in its button's tooltip.
+
+- **The render spinner was in the action bar.** It had to be faded rather than
+  hidden, because appearing would shove the button beside it. It is over the
+  preview now, which needs `set_overlay_pass_through` — see the list below.
+
+- **Saving a preset was an icon beside the combo.** It is in the menu, where
+  the platform puts Save As and where a rare operation is not guessed at from
+  a picture of a floppy disk.
+
+- **Export once inferred everything from the filename.** Format, size, frame
+  rate and palette are settings in a dialog now, because the two things people
+  actually change are the size and the format and neither should require
+  knowing that `.webm` means VP9.
 
 ## Things that have cost time before
 

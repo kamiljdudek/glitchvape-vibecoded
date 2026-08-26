@@ -62,8 +62,8 @@ sub descendants
 
     my ( $bar ) = @bars;
 
-    # Both buttons are in it, and both are outside the scrolled list -- Add
-    # effect used to be inside, where a long pipeline could scroll it away.
+    # Both buttons are in it, and both are outside the scrolled list, so a
+    # long pipeline cannot scroll either of them out of reach.
     for my $key ( qw(b_add b_apply) )
     {
         my @up;
@@ -92,6 +92,7 @@ sub descendants
 {
     my %expect = (
         b_add     => 'Add effect',
+        b_adjust  => 'Adjust',
         b_apply   => 'Apply',
         b_animate => 'Animate',
         b_mute    => 'Mute',
@@ -116,9 +117,9 @@ sub descendants
 # Alt+A has been Apply since there was a window and Alt+E has been Export;
 # adding buttons to the same window is exactly when a collision gets
 # introduced, and a collision is silent -- Gtk simply cycles between them.
-{
-    my %claimed;
+my %claimed;
 
+{
     for my $label ( descendants( $gui->{ window }, 'Gtk3::Label' ) )
     {
         # Only a label pointing at a widget actually claims the key.
@@ -138,9 +139,129 @@ sub descendants
 
     # And the ones that have always meant something still do.
     ok $claimed{ a } || $claimed{ s }, 'Apply (or Stop) claims a key';
-    ok $claimed{ n },
-        'Animate is still Alt+N, as it was when it was a checkbox';
-    ok $claimed{ e }, 'Export is still Alt+E';
+    ok $claimed{ e },                  'Export is still Alt+E';
+}
+
+# ---------------------------------------------------------------------------
+# The icon-only buttons kept their keys as accelerators
+
+# Add, Adjust and Animate carry no label, so they claim no mnemonic and the
+# check above cannot see them. The keys still have to work, and a key that
+# quietly stops working is worse than one that never existed.
+#
+# Fired rather than merely declared -- accel_groups_activate returns true only
+# if something actually answered -- because a group added to the wrong window
+# would look identical to a group that works.
+{
+    for my $spec (
+        [ 'd', 'b_add',     'Add effect' ],
+        [ 'j', 'b_adjust',  'Adjust' ],
+        [ 'n', 'b_animate', 'Animate' ],
+        )
+    {
+        my ( $letter, $key, $what ) = @$spec;
+
+        ok !$claimed{ $letter },
+            "$what claims no mnemonic, having no label to put one in";
+
+        ok Gtk3::accel_groups_activate( $gui->{ window },
+            Gtk3::Gdk::keyval_from_name( $letter ), 'mod1-mask' ),
+            "but Alt+\U$letter\E still reaches $what";
+    }
+
+    # Animate answered its accelerator above, which means it toggled. Put it
+    # back before the tests that care what mode the window is in.
+    $gui->{ b_animate }->set_active( 0 );
+}
+
+# ---------------------------------------------------------------------------
+# The left pane is a stack of two lists
+
+# Effects and soundtrack are both answers to "what goes into the render", so
+# they are two pages of one stack rather than one list with a second bolted
+# under it on the far side of the window.
+{
+    my ( $switcher ) = descendants( $gui->{ window }, 'Gtk3::StackSwitcher' );
+    ok $switcher, 'the left pane has a stack switcher';
+
+    my $stack = $gui->{ left_stack };
+    isa_ok $stack, 'Gtk3::Stack', 'what it switches';
+
+    ok $stack->get_child_by_name( 'image' ),      'holding an Image page';
+    ok $stack->get_child_by_name( 'soundtrack' ), 'and a Soundtrack page';
+    my @pages = $stack->get_children;
+    is scalar @pages, 2, 'and no others';
+
+    # The titles are what the switcher actually puts on its buttons, so they
+    # are read back off the buttons rather than off the stack's child
+    # properties -- what a person sees is the thing worth pinning.
+    my @titles =
+        sort map { $_->get_label // q{} }
+        descendants( $switcher, 'Gtk3::Label' );
+
+    is_deeply \@titles, [ 'Image', 'Soundtrack' ],
+        'under the titles the switcher shows';
+}
+
+# ---------------------------------------------------------------------------
+# One Add button, and it adds to whichever page is showing
+
+# "Add something here" is one action, so it is one button. Giving each page
+# its own pair of Add buttons said it was several, and put a second set of
+# controls inside a pane that already had a bar for them.
+{
+    $gui->{ left_stack }->set_visible_child_name( 'image' );
+    $gui->_sync_actions;
+
+    like $gui->{ b_add }->get_tooltip_text, qr/effect/i,
+        'on the Image page Add offers an effect';
+
+    $gui->{ left_stack }->set_visible_child_name( 'soundtrack' );
+    $gui->_sync_actions;
+
+    like $gui->{ b_add }->get_tooltip_text, qr/soundtrack|track/i,
+        'and on the Soundtrack page it offers a track';
+
+    # Both tooltips still name the key, since an accelerator is invisible.
+    like $gui->{ b_add }->get_tooltip_text, qr/Alt\+D/,
+        'either way it says which key presses it';
+
+    # There is no image open in this file, so Add is insensitive on both
+    # pages regardless. What it is gated on beyond that -- Animate, for the
+    # soundtrack -- is pinned in t/27-gui-adjust.t, which has a state.
+    ok !$gui->{ b_add }->get_sensitive,
+        'and with no image open it is not an action on either page';
+
+    $gui->{ left_stack }->set_visible_child_name( 'image' );
+    $gui->_sync_actions;
+}
+
+# ---------------------------------------------------------------------------
+# The soundtrack list is shaped like the effect list
+
+{
+    my $list = $gui->{ audio_list };
+    isa_ok $list, 'Gtk3::ListBox', 'the track list';
+
+    ok !$list->get_activate_on_single_click,
+        'and activates on a double click, as the effect list does';
+}
+
+# ---------------------------------------------------------------------------
+# The effect list activates on a double click, not a single one
+
+# A list where activating a row opens a window cannot be browsed if a single
+# click activates: passing over three rows with the arrow keys would leave
+# three windows open.
+{
+    my $list = $gui->{ effect_list };
+    isa_ok $list, 'Gtk3::ListBox', 'the effect list';
+
+    ok !$list->get_activate_on_single_click,
+        'and a single click does not activate a row';
+
+    is $list->get_selection_mode, 'single',
+        'exactly one row can be selected, which is what Adjust acts on';
 }
 
 # ---------------------------------------------------------------------------
@@ -167,7 +288,9 @@ sub descendants
     ok !scalar( grep { $_->isa( 'Gtk3::ScrolledWindow' ) } @up ),
         'and cannot be scrolled out of sight either';
 
-    # And nowhere near the preview controls, which is where it briefly was.
+    # And nowhere near the preview controls: among zoom and mute it would
+    # read as another free adjustment rather than something with a render
+    # bill behind it.
     my %above = map { $_ => 1 } @up;
     my @mute_up;
     my $m = $gui->{ b_mute };
@@ -182,22 +305,27 @@ sub descendants
         'and shares no bar with the preview controls';
 }
 
-# Toggling it drives the render mode and reveals the soundtrack row, which is
-# what it did as a checkbox.
+# Toggling it drives the render mode and unlocks the soundtrack page.
+#
+# The page is always reachable now, so what changes is which of its two faces
+# is showing: the controls, or the note explaining what they are waiting for.
+# A tab that vanished taught nobody what it had been for.
 {
     ok !$gui->{ animate }, 'animation is off to begin with';
-    ok !$gui->{ audio_revealer }->get_reveal_child,
-        'and the soundtrack row is hidden';
+    is $gui->{ audio_stack }->get_visible_child_name, 'needs-animation',
+        'and the soundtrack page says why it is empty';
 
     $gui->{ b_animate }->set_active( 1 );
 
     ok $gui->{ animate }, 'switching the toggle on turns animation on';
-    ok $gui->{ audio_revealer }->get_reveal_child,
-        'and reveals the soundtrack row';
+    is $gui->{ audio_stack }->get_visible_child_name, 'ready',
+        'and the soundtrack page offers its controls';
 
     $gui->{ b_animate }->set_active( 0 );
 
     ok !$gui->{ animate }, 'and switching it off turns it off again';
+    is $gui->{ audio_stack }->get_visible_child_name, 'needs-animation',
+        'and the page goes back to explaining itself';
 }
 
 # ---------------------------------------------------------------------------
@@ -244,16 +372,57 @@ sub descendants
     is $busy_request, $request, 'which does not change when it says Stop';
 }
 
-# The spinner holds its place whether or not it is spinning, for the same
-# reason: showing and hiding it would move the button beside it.
-{
-    ok $gui->{ spinner }->get_visible, 'the spinner is always in the layout';
+# ---------------------------------------------------------------------------
+# The spinner is over the picture, and does not steal the pointer
 
-    $gui->_busy( 1 );
-    cmp_ok $gui->{ spinner }->get_opacity, '>', 0, 'and is faded in when busy';
+# Over the preview rather than in the action bar, where it would have to be
+# faded rather than hidden so that appearing did not shove the button beside
+# it. What makes that safe is pass-through: without it the overlay's event
+# window swallows the drags that pan and zoom the preview, which are most of
+# what the preview is for.
+{
+    my ( $overlay ) = descendants( $gui->{ window }, 'Gtk3::Overlay' );
+    ok $overlay, 'the preview sits in an overlay';
+
+    my $badge = $gui->{ spinner_badge };
+
+    my @up;
+    my $w = $badge;
+    while ( $w = $w->get_parent ) { push @up, $w }
+    ok scalar( grep { $_ == $overlay } @up ), 'with the spinner over it';
+
+    ok $overlay->get_overlay_pass_through( $badge ),
+        'and every press still reaches the picture underneath';
+
+    ok !$badge->get_visible, 'the spinner is out of the way when idle';
+
+    $gui->_busy( 1, 'Rendering…' );
+    ok $badge->get_visible, 'and appears over the picture while rendering';
+    ok $gui->{ spinner }->get_property( 'active' ), 'actually spinning';
+    is $gui->{ spinner_label }->get_text, 'Rendering…',
+        'saying what it is waiting for';
 
     $gui->_busy( 0 );
-    is $gui->{ spinner }->get_opacity, 0, 'and out again when not';
+    ok !$badge->get_visible, 'and goes away again when the render is done';
+}
+
+# ---------------------------------------------------------------------------
+# A soundtrack survives switching animation off and on
+
+# The page hides the mix rather than clearing it, so going back to a still to
+# check one frame does not cost the tracks that were already assembled.
+{
+    $gui->{ b_animate }->set_active( 1 );
+    $gui->{ audio } = { path => '/nonexistent/track.mp3' };
+
+    $gui->{ b_animate }->set_active( 0 );
+    $gui->{ b_animate }->set_active( 1 );
+
+    is_deeply $gui->{ audio }, { path => '/nonexistent/track.mp3' },
+        'the soundtrack is still there after animation was switched off';
+
+    $gui->{ audio } = undef;
+    $gui->{ b_animate }->set_active( 0 );
 }
 
 done_testing;

@@ -21,15 +21,15 @@ GlitchVape::GUI::Export - what Export writes, and at what size
 
 =head1 DESCRIPTION
 
-Export used to ask one question, in a file chooser: where. Everything else
-followed from the name that was typed there -- the extension picked the
-encoder, and the size was whatever the preset happened to say. That is a fine
-default and a poor only option, because the two things people actually change
-are the size and the format, and neither should require knowing that C<.webm>
-means VP9.
+Where a render goes is asked in a file chooser at the moment of exporting.
+What it is -- format, size, frame rate, palette -- could be inferred from the
+name typed there, letting the extension pick the encoder and the preset decide
+the size. That is a fine default and a poor only option: the two things people
+actually change are the size and the format, and neither should require
+knowing that C<.webm> means VP9.
 
-So they are settings, held in one place and edited in one dialog, with a tab
-each for the two outputs. They are not the same question asked twice: a video
+So they are settings instead, held in one place and edited in one dialog, with
+a tab each for the two outputs. They are not the same question asked twice: a video
 has a frame rate and a codec, a still has a palette, and the one thing they
 share -- how big -- means different enough things in the two cases that it is
 asked differently.

@@ -2,7 +2,8 @@
 
 ![GlitchVape](assets/artwork/logo.png)
 
-# This is an entirely vibe-coded application. It is a tool for me, the author, aimed to simplify the application of filters and transformations
+> **This is an entirely vibe-coded application.** It is a tool for me, the
+> author, aimed at simplifying the application of filters and transformations.
 
 
 Vaporwave and glitch-art transformations for photographs. Reads PNG, JPEG and
@@ -72,7 +73,7 @@ There is a spec file, so the shortest route is a package:
 
 ```bash
 sudo dnf install -y rpm-build perl-macros
-sudo dnf builddep -y glitchvape.spec    # what the spec's BuildRequires name
+sudo dnf builddep -y package/glitchvape.spec   # what BuildRequires names
 make rpm                                # the three binary packages
 ```
 
@@ -112,7 +113,8 @@ to Terminus.
 
 ### Debian and Ubuntu
 
-There is a `debian/` directory, so the shortest route is again a package:
+There is a `package/debian/` directory, so the shortest route is again a
+package:
 
 ```bash
 sudo apt install -y build-essential debhelper devscripts
@@ -132,21 +134,33 @@ are a font aggregator's description rather than a document, which is not
 enough for a package that claims MIT and OFL on the tin. `glitchvape` only
 *suggests* it, and the `ui` role falls through to DejaVu without it.
 
-`debian/README.Debian` has the detail, including the one thing this packaging
+`package/debian/README.Debian` has the detail, including the one thing this packaging
 cannot do as it stands: a source package in main may not contain non-free
 content, and this one carries `assets/fonts-nonfree/`. Built locally or in a
 PPA it is fine; an upload to Debian proper would need either the licence
 settled — at which point the font moves up and the third package disappears —
-or the tarball repacked, for which `debian/copyright` already carries a
+or the tarball repacked, for which `package/debian/copyright` already carries a
 commented-out `Files-Excluded` line.
 
 The packaging drives the same `Makefile` the RPM spec does, rather than
-restating where anything goes, and `debian/rules` installs one binary package
+restating where anything goes, and `package/debian/rules` installs one binary package
 at a time from the targets the Makefile already splits — which is why there
 are no `.install` files here. `make check-split`, `make check-licenses` and
 the test suite all run during the build.
 
 #### Packaging layout
+
+Everything a distribution needs lives in `package/` — the RPM spec, `debian/`,
+the desktop entry and the AppStream metadata — and everything the packaging
+targets produce lands in `build/`, which is gitignored and which `make clean`
+removes whole. A build writes nothing into the source tree.
+
+Both packagings build from the tarball `make dist` writes there. `rpmbuild -t`
+finds `package/glitchvape.spec` inside it; `make deb` unpacks the tarball and
+moves `package/debian` into place, because `dpkg-buildpackage` insists on a
+`debian/` directly beneath the directory it runs in. Building from the tarball
+rather than in the tree means a file `make dist` failed to include is a build
+failure rather than a package quietly missing something.
 
 Installed, the modules go to `%{perl_vendorlib}` — `/usr/share/perl5` on
 Debian — and the data to
@@ -358,16 +372,60 @@ glitchvape-gui                              # open empty
 glitchvape-gui -p vhs-decay Pictures/IMG_8111.HEIC
 ```
 
-Presets and their parameters on the left, the render on the right, Apply
+What goes into the render on the left, the render itself on the right, Apply
 between them, Export to write the result at full size.
 
-The foot of the left pane is an action bar: **Add effect** opens the wizard,
-**Animate** decides whether the render is a loop or a still, and **Apply**
-renders it. All three sit outside the scrolled list, so none can be scrolled
-away by a long pipeline, and Apply keeps the accent colour that marks it as
-the one action the rest of the pane is leading up to. Apply becomes **Stop** while a render is in flight,
-icon and tooltip along with the word, and the button is pinned to the wider of
-the two so the bar does not twitch.
+The left pane is two pages of a stack under a switcher, because effects and
+soundtrack are both answers to the same question:
+
+- **Image** — the effects in the pipeline, one row each: a checkbox for
+  whether it is in the render, its presentable name beside the identifier a
+  preset and `--set` would use, and a minus to take it out.
+- **Soundtrack** — the tracks mixed under an animation, the same shape. With
+  **Animate** off the page says so rather than disappearing; nothing is
+  discarded, so switching animation off to check a still frame and back on
+  again finds the mix as it was.
+
+The foot of the pane is an action bar shared by both pages:
+
+| | |
+|---|---|
+| **+** | adds to whichever page is showing — a popover offers *Single effect…* or *Effects from a preset…* on Image, and the file or a generated kind on Soundtrack |
+| **cog** | opens the settings of the selected effect; double-clicking its row does the same |
+| **camera** | **Animate**: whether the render is a loop or a still |
+| **Apply** | renders it |
+
+Only Apply keeps a label — four of them do not fit the pane, and it is the
+one with a render bill attached. The other three carry tooltips naming their
+keys, `Alt+D`, `Alt+J` and `Alt+N`, which are accelerators rather than
+mnemonics because a button with no label has nowhere to underline a letter.
+All four sit outside the scrolled list, so none can be scrolled away by a long
+pipeline, and Apply keeps the accent colour that marks it as the one action
+the rest of the pane is leading up to. Apply becomes **Stop** while a render
+is in flight, icon and tooltip along with the word, and the button is pinned
+to the wider of the two so the bar does not twitch.
+
+Switching page drops the effect selection, and the cog goes back to waiting
+for one: it acts on the effect list, and a selection kept across the switch
+would point at something not on screen.
+
+While a render runs, a spinner sits over the picture rather than in the bar,
+and the picture can still be panned and zoomed under it.
+
+### An effect's settings are a window
+
+A row says whether an effect is in the render and what it is called. Its
+parameters open in a window of their own — double-click the row, or select it
+and press the cog.
+
+Those windows are not modal. Several can be open at once, the main window
+stays usable behind them, and Apply can be pressed without closing any: how
+much `chroma_shift` answers this much `scanlines` is a question you can only
+settle with both sets of controls in front of you. Each carries the effect's
+summary, its identifier, and a switch for whether it is in the render — the
+same fact as the row's checkbox, and the two move together. Removing an effect
+closes the window describing it, and an undo or a fresh preset rebuilds what
+the open ones show.
 
 It is a front end, not a second implementation. The controls are generated
 from the same `register()` declarations that produce the CLI flags and
@@ -401,19 +459,19 @@ belongs behind one:
 | **Randomize** | a new seed — reshuffles every effect that draws on randomness, leaving the parameters alone |
 | **Animation settings…** | how many frames the loop is and how fast; it reports the resulting length |
 | **Export settings…** | what Export writes and at what size — a tab for video, a tab for stills |
-| **Save as preset…** | writes the current settings to `presets/`; it used to be an icon of a floppy disk beside the preset combo |
+| **Clear all effects** | empties the pipeline without leaving the image; an ordinary edit, so undo steps back over it |
+| **Save as preset…** | writes the current settings to `presets/`, usable immediately as `-p <name>` |
 | **Copy command line…** | the `glitchvape` invocation that produces this export, to read and to copy |
 | **Check dependencies…** | what `--check-deps` and `--check-fonts` print, in a window — a graphical session being exactly where nobody has a terminal open |
 | **Clear preview cache** | empties the render store; nothing is lost but time |
 | **About GlitchVape** | version, licence, and how many effects and presets this copy can actually see |
 
-The seed used to be an entry field on the left. The number was never typed
-into it — what it is only matters *after* the fact, for reproducing a render
-that came out well — so the field went and the action stayed. The seed is
-reported in the status line after every render, and `Copy command line`
-carries it.
+The seed is an action rather than a field. A seed is never typed in — what it
+is only matters *after* the fact, for reproducing a render that came out well
+— so it is reported in the status line after every render, and `Copy command
+line` carries it.
 
-Frames and rate went the same way: set once and then left, while the
+Frames and rate are the same kind of thing: set once and then left, while the
 **Animate** toggle they govern sits beside **Apply**, because that is what it
 acts on. It changes what Apply *does* — twenty-four renders instead of one —
 and what Export then writes, rather than how the result is displayed. Put over
@@ -426,11 +484,11 @@ not.
 
 #### Export settings
 
-Export used to ask one question, in a file chooser: *where*. Everything else
-followed from the name typed there — the extension picked the encoder, the
-size was whatever the preset happened to say. A fine default and a poor only
-option, because the two things people actually change are the size and the
-format, and neither should require knowing that `.webm` means VP9.
+Export asks one question in a file chooser: *where*. Everything else could be
+inferred from the name typed there — letting the extension pick the encoder
+and the preset decide the size. A fine default and a poor only option, because
+the two things people actually change are the size and the format, and neither
+should require knowing that `.webm` means VP9.
 
 **Video**
 
@@ -525,8 +583,8 @@ what is exported.
 
 ### Adding an effect is a wizard
 
-Thirty-nine effects is too many for one list, so **Add effect…** opens a
-three-page assistant that asks the questions in the order a person has them.
+Thirty-nine effects is too many for one list, so **+ → Single effect…** opens
+a three-page assistant that asks the questions in the order a person has them.
 
 **What kind of thing am I after?** The nine stages under their presentable
 titles, each with a line of description and a count of what is still free.
@@ -597,8 +655,8 @@ been rendered before, so stepping back through history is a file lookup.
 
 ### Adding a track
 
-Switching **Animate** on slides out a soundtrack row. `Add audio track…` asks for a
-file and then opens a three-page wizard:
+The **Soundtrack** page lists what is mixed under the animation. **+** offers
+*Audio file…* — which asks for a file and then opens a three-page wizard:
 
 1. **Crop.** The whole file as a waveform, drawn in the `vapor` palette, with
    a selection you drag by either edge or move as a block. Play auditions the
@@ -613,14 +671,14 @@ file and then opens a three-page wizard:
    Tape dub, Nothing.
 3. **Confirm.** What was chosen and how long the result will be.
 
-`📻 Add generated track…` beside it opens a popover asking which kind —
-**Phone dial tones** or **TV static** — and then the window for that one.
+Below a separator the same popover lists the generated kinds — **Phone dial
+tones**, **TV static** — each opening the window for that one.
 
-Asking first and configuring afterwards, rather than one dialog with a kind
-combo at the top: the kind decides what every other control in the window is,
-so choosing it there meant a dialog that rebuilt itself underneath the
-pointer. Now the window that opens is already the right one, and its title
-says which.
+Asking which kind first and configuring it afterwards, rather than one dialog
+with a kind combo at the top: the kind decides what every other control in the
+window is, so choosing it there would rebuild the dialog underneath the
+pointer. The window that opens is already the right one, and its title says
+which.
 
 Neither the popover nor the window knows what the kinds are. The popover is
 built from the generator registry and the controls are built from that kind's
@@ -632,11 +690,12 @@ keypress sequence itself, which matters more than it looks: multi-tap makes
 `a` and `2` the same sound, and watching `2` appear three times for a `c` is
 what makes the encoding obvious rather than mysterious.
 
-There is one file at most, so its button goes away once it has been used.
-Generated tracks stack, so theirs never does — add as many as you like. The
-row then lists everything in the mix, each with its own `Edit…` and its own
-`✕`, so dropping the music does not take the static with it. Removing is one
-press with no confirmation, because both dialogs are quick to run again.
+There is one file at most, so that line of the popover goes away once it has
+been used. Generated tracks stack, so theirs never do — add as many as you
+like. The list then holds everything in the mix, each row with its own `Edit…`
+and its own minus, so dropping the music does not take the static with it.
+Double-clicking a row reopens its wizard. Removing is one press with no
+confirmation, because both dialogs are quick to run again.
 
 ### Mute in preview
 
@@ -733,6 +792,12 @@ glitchvape -p vhs-decay --set tracking.bands=12 --set grain.amount=0.2 in.heic
 ```
 
 Presets are found in `./presets`, or wherever `$GLITCHVAPE_PRESETS` points.
+
+In the window a preset is one of the two things **+** offers on the Image
+page. It is the only thing there that *replaces* what is already in the
+pipeline, which the chooser says before you press Load, and the name is
+recorded — so `Copy command line` still comes back as `-p vhs-decay` with
+whatever you changed on top.
 
 ---
 
@@ -1085,9 +1150,14 @@ around 24 million scalars as a Perl list, and displacing a run of pixels is one
 ## Development
 
 ```bash
-make test               # 1613 tests, or: prove -Ilib t/
+make test               # 1877 tests, or: prove -Ilib t/
 make check-split        # assert the CLI half needs no Gtk3
+make check-licenses     # assert every bundled font brought its licence
 make install PREFIX=…   # DESTDIR honoured
+make dist               # source tarball, into build/
+make deb                # the three .deb packages, into build/
+make rpm                # the three .rpm packages (make rpms adds the srpm)
+make clean              # removes build/ whole, plus the tools' leavings
 perlcritic lib/ bin/ t/ # clean at severity 1
 perltidy -b lib/**/*.pm # reformat to the house style
 ```

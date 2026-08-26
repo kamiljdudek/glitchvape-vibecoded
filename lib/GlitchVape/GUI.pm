@@ -24,6 +24,7 @@ use GlitchVape::IO               ();
 use GlitchVape::Registry         ();
 use GlitchVape::Tools            ();
 use GlitchVape::GUI::About       ();
+use GlitchVape::GUI::Adjust      ();
 use GlitchVape::GUI::Audio       ();
 use GlitchVape::GUI::CommandLine ();
 use GlitchVape::GUI::Cache       ();
@@ -85,14 +86,50 @@ render through L<GlitchVape::GUI::Export/render_options> rather than being
 assembled twice: the export and the command line equivalent are built from
 the same hash, so they cannot come to disagree about what would be written.
 
-=head2 The soundtrack row
+=head2 The left pane is two lists
 
-Switching Animate on reveals a row for building a soundtrack. There is one cropped
+Effects and soundtrack are both answers to "what goes into this render", so
+they are two pages of one C<Gtk3::Stack> under a switcher rather than one list
+with a second bolted on beneath it.
+
+They share the action bar at the foot. Apply renders whatever both of them
+say, and Add adds to whichever one is showing -- the effect assistant from the
+Image page, a popover of track kinds from the Soundtrack page. Adjust belongs
+to the effect list alone, so switching page drops the effect selection and
+Adjust goes back to waiting for one.
+
+=head2 Where an effect's parameters are
+
+Not in the list. A row says whether an effect is in the render, what it is
+called, and offers to take it out again; its parameters open in a window of
+their own -- see L<GlitchVape::GUI::Adjust>.
+
+That keeps the list as short as the pipeline is long rather than as tall as
+the settings of everything in it, and it lets two effects' controls be held
+against the picture at once -- deciding how much C<chroma_shift> answers this
+much C<scanlines> means seeing both.
+
+Whether an effect is enabled is therefore shown twice -- a checkbox on the
+row, a switch in the window -- and the two are kept in step.
+
+=head2 The soundtrack page
+
+The second page of the left pane builds a soundtrack. There is one cropped
 file at most, through L<GlitchVape::GUI::Audio>, and any number of generated
 tracks through L<GlitchVape::GUI::Generated> -- static under a dialled phrase
 under a piece of music is an ordinary thing to want. Each gets its own line
-with its own remove, so dropping one leaves the rest alone. The resulting spec
-lives here rather than in
+with its own remove, so dropping one leaves the rest alone; the Add button's
+popover stops offering the file once there is one, which is the only place
+that asymmetry shows.
+
+A soundtrack only means anything for an animation, but that is now said rather
+than enacted: with Animate off the page explains what it is waiting for
+instead of disappearing, because a tab that vanishes teaches nobody what it
+was for. Nothing is discarded when Animate goes off -- the page covers the mix
+rather than clearing it -- so going back to a still to check one frame does
+not cost the tracks already assembled.
+
+The resulting spec lives here rather than in
 L<GlitchVape::GUI::State>, alongside C<frames> and C<fps> and for the same
 reason: it is a property of this render rather than part of the configuration
 being edited, so it is not an undo step and is not written into a saved
@@ -149,10 +186,10 @@ sub _icon_button
     return $button;
 }
 
-# An icon beside a word, for the two buttons in the action bar. Both halves
-# are wanted: the icon is what the eye finds after the first day and the word
-# is what makes it findable on the first, and a bar with room for two buttons
-# has room for both.
+# An icon beside a word. Only Apply is dressed this way now -- the other three
+# buttons in the bar are icon-only, and the bar did not have room for four
+# labels -- but Apply needs both halves and needs to swap them together, which
+# is what this exists for.
 #
 # The child is built by hand rather than with set_image plus
 # set_always_show_image, because set_label on such a button rebuilds the child
@@ -197,10 +234,15 @@ sub new
     $cache->install_signal_handlers;
 
     my $self = bless {
-        cache        => $cache,
-        render       => GlitchVape::GUI::Render->new( cache => $cache ),
-        state        => undef,
-        rows         => {},
+        cache  => $cache,
+        render => GlitchVape::GUI::Render->new( cache => $cache ),
+        state  => undef,
+        rows   => {},
+
+        # Open settings windows, keyed by the effect each describes. Keyed
+        # rather than listed because the question asked of it is always "is
+        # this one already open?" -- see _adjust_effect.
+        adjust       => {},
         loading      => 0,
         preview_size => 720,
         animate      => 0,
@@ -278,6 +320,10 @@ sub _build_window
     $win->add( $paned );
 
     $self->{ window } = $win;
+
+    # After the panes, because it presses buttons the panes build.
+    $self->_install_accelerators;
+
     return;
 }
 
@@ -361,7 +407,8 @@ sub _build_menu
     my $menu = Gtk3::Menu->new;
 
     for my $item (
-        [ 'Randomize',           sub { return $self->_randomize }, 'seed' ],
+        [ 'Randomize',         sub { return $self->_randomize },     'seed' ],
+        [ 'Clear all effects', sub { return $self->_clear_effects }, 'clear' ],
         [ 'Animation settings…', sub { return $self->_animation_settings } ],
         [ 'Export settings…',    sub { return $self->_export_settings } ],
         undef,
@@ -395,7 +442,7 @@ sub _build_menu
 
         $menu->append( $entry );
 
-        # The two that need an image open are remembered so that
+        # The ones that need an image open are remembered so that
         # _sync_actions can grey them; the rest are always available.
         $self->{ "m_$key" } = $entry if $key;
     }
@@ -408,11 +455,59 @@ sub _build_menu
     return $button;
 }
 
+# The left pane holds two lists that are both answers to "what goes into the
+# render": the effects, and the soundtrack. They are the same kind of thing at
+# the same level, so they are two pages of one Gtk3::Stack rather than one
+# list with a second bolted underneath it -- and both halves of one pipeline
+# stay on one side of the window.
 sub _build_left
 {
     my ( $self ) = @_;
 
     my $outer = Gtk3::Box->new( 'vertical', 0 );
+
+    my $stack = Gtk3::Stack->new;
+    $stack->set_transition_type( 'slide-left-right' );
+    $stack->set_transition_duration( 150 );
+
+    $stack->add_titled( $self->_build_image_page, 'image', 'Image' );
+    $stack->add_titled( $self->_build_soundtrack_page,
+        'soundtrack', 'Soundtrack' );
+
+    my $switcher = Gtk3::StackSwitcher->new;
+    $switcher->set_stack( $stack );
+    $switcher->set_halign( 'center' );
+    $switcher->set_margin_top( 8 );
+    $switcher->set_margin_bottom( 8 );
+
+    # Switching page drops the effect selection. The Adjust button acts on it
+    # and only the Image page has one to act on, so a selection kept across
+    # the switch would be a button pointing at something not on screen -- and
+    # coming back to find a row still highlighted from several minutes ago
+    # invites adjusting the wrong effect.
+    $stack->signal_connect(
+        'notify::visible-child-name' => sub {
+            $self->{ effect_list }->unselect_all;
+            $self->_sync_actions;
+            return;
+        }
+    );
+
+    $self->{ left_stack }    = $stack;
+    $self->{ left_switcher } = $switcher;
+
+    $outer->pack_start( $switcher,                            0, 0, 0 );
+    $outer->pack_start( Gtk3::Separator->new( 'horizontal' ), 0, 0, 0 );
+    $outer->pack_start( $stack,                               1, 1, 0 );
+    $outer->pack_start( $self->_build_left_actions,           0, 0, 0 );
+
+    return $outer;
+}
+
+# The effects in the pipeline, which is what Apply renders.
+sub _build_image_page
+{
+    my ( $self ) = @_;
 
     my $scroll = Gtk3::ScrolledWindow->new;
     $scroll->set_policy( 'never', 'automatic' );
@@ -421,57 +516,100 @@ sub _build_left
     my $box = Gtk3::Box->new( 'vertical', 12 );
     $box->set_border_width( 12 );
 
-    $box->pack_start( $self->_build_preset_section, 0, 0, 0 );
-
     my $heading = Gtk3::Label->new;
     $heading->set_markup( '<b>Effects</b>' );
     $heading->set_xalign( 0 );
     $box->pack_start( $heading, 0, 0, 0 );
 
-    $self->{ effect_box } = Gtk3::Box->new( 'vertical', 6 );
-    $box->pack_start( $self->{ effect_box }, 0, 0, 0 );
+    # A GtkListBox, so that one effect is *selected* -- which is what the
+    # Adjust button needs and what a column of hand-packed boxes could not
+    # express. Rows carry a checkbox and a remove button and nothing else; the
+    # parameters moved out to GlitchVape::GUI::Adjust, where several effects'
+    # worth can be open at once and compared.
+    my $list = Gtk3::ListBox->new;
+    $list->set_selection_mode( 'single' );
+
+    # Single-click activation would mean browsing the list opened a window per
+    # row passed over. Double-click and Enter activate instead, which is also
+    # what a file manager does with the same widget.
+    $list->set_activate_on_single_click( 0 );
+
+    $list->signal_connect(
+        'row-activated' => sub {
+            my ( undef, $row ) = @_;
+            $self->_adjust_effect( $row->{ effect } ) if $row;
+            return;
+        }
+    );
+
+    $list->signal_connect(
+        'row-selected' => sub {
+            $self->_sync_actions;
+            return;
+        }
+    );
+
+    $self->{ effect_list } = $list;
+    $box->pack_start( $list, 0, 0, 0 );
 
     $scroll->add( $box );
-    $outer->pack_start( $scroll, 1, 1, 0 );
 
-    $outer->pack_start( $self->_build_left_actions, 0, 0, 0 );
-
-    return $outer;
+    return $scroll;
 }
 
-# The two things done to a pipeline -- add something to it, render it -- at
-# the foot of the pane that holds it, in a Gtk3::ActionBar.
+# The actions belonging to the pipeline above, in a Gtk3::ActionBar.
 #
 # An action bar rather than a box of buttons because that is what it is: the
 # platform's container for the actions belonging to the view above it, with
-# the separator, the padding and the start/end split already decided. Add
-# effect used to sit inside the scrolled list, where it moved down the screen
-# as the pipeline grew and could be scrolled out of sight entirely; Apply sat
-# below in a hand-built box. Both are outside the scroll now and neither can
-# be scrolled away.
+# the separator, the padding and the start/end split already decided. Every
+# button in it is outside the scrolled list, so a long pipeline cannot push
+# one of them off the screen.
+#
+# Four buttons, and only Apply keeps its word. Four labels do not fit the
+# pane at its usable width, and of the four it is Apply whose label has to
+# stay: it is the one with a bill attached, it is the one that changes to
+# Stop, and a row where exactly one button is labelled says which button
+# matters more clearly than a row where all four are. The other three are the
+# standard plus, cog and camera, and each carries a tooltip.
+#
+# A button with no label claims no mnemonic, so the keys are put back on an
+# accelerator group -- see _install_accelerators.
 #
 # Apply keeps its accent colour. A GtkActionBar imposes nothing on the buttons
 # inside it -- it is a container, not a style -- so suggested-action works
 # there exactly as it did before, and the one destination action stays
-# distinguishable from the one that opens a dialog.
+# distinguishable from the ones that open a window.
 sub _build_left_actions
 {
     my ( $self ) = @_;
 
     my $bar = Gtk3::ActionBar->new;
 
-    # Alt+D. Not Alt+A, which Apply has had since there was a window, and not
-    # Alt+E, which Export has in the header bar -- two controls answering one
-    # key is worse than either of them having no key at all.
-    my ( $add ) = _action_button( 'list-add-symbolic', 'A_dd effect…',
-        'Choose another effect to add to the pipeline' );
+    # What it adds depends on which page is showing -- see
+    # _add_to_current_page. The tooltip is rewritten to match by
+    # _sync_actions, because a button whose meaning changes has to say so.
+    my $add = _icon_button( 'list-add-symbolic' );
     $add->signal_connect(
         clicked => sub {
-            $self->_choose_effect;
+            $self->_add_to_current_page;
             return;
         }
     );
     $bar->pack_start( $add );
+
+    # Opens the settings for whichever effect is selected. Insensitive with
+    # no selection rather than hidden, because it is the button that explains
+    # what selecting a row is for.
+    my $adjust = _icon_button( 'preferences-system-symbolic',
+              "Open the settings for the selected effect (Alt+J).\n"
+            . 'Double-clicking its row does the same' );
+    $adjust->signal_connect(
+        clicked => sub {
+            $self->_adjust_selected;
+            return;
+        }
+    );
+    $bar->pack_start( $adjust );
 
     my ( $apply, $apply_icon, $apply_label ) = _action_button(
         APPLY_ICON,
@@ -494,15 +632,6 @@ sub _build_left_actions
     $apply->set_size_request( _widest_label( $apply_label, '_Apply', '_Stop' ),
         -1 );
 
-    # The spinner keeps its place in the layout at all times and is faded in
-    # and out rather than shown and hidden: appearing would take 22 pixels off
-    # the button beside it, and the button would jump every time a render
-    # started.
-    my $spinner = Gtk3::Spinner->new;
-    $spinner->set_size_request( 16, 16 );
-    $spinner->set_valign( 'center' );
-    $spinner->set_opacity( 0 );
-
     # Whether to render a loop instead of a still. A toggle rather than a
     # checkbox because it is a mode the window is in and stays in, and a
     # pressed button says that at a glance from across the room in a way a
@@ -513,17 +642,12 @@ sub _build_left_actions
     # renders instead of one -- and what Export then writes. Among the preview
     # controls it read as another free adjustment like zoom, and the cost was
     # discoverable only by hovering.
-    #
-    # Labelled, unlike the icon-only zoom and mute buttons on the other side.
-    # Those are asides about this playback; this one has a render bill behind
-    # it. It keeps the Alt+N it had as a checkbox.
-    my ( $animate ) = _dress_button(
-        Gtk3::ToggleButton->new,
-        'camera-video-symbolic',
-        'A_nimate',
-        "Render a looping animation instead of a still.\n"
-            . 'Costs one render per frame. Length and rate are in the menu'
-    );
+    my $animate = Gtk3::ToggleButton->new;
+    $animate->set_image(
+        Gtk3::Image->new_from_icon_name( 'camera-video-symbolic', 'button' ) );
+    $animate->set_tooltip_text(
+              "Render a looping animation instead of a still (Alt+N).\n"
+            . 'Costs one render per frame, and unlocks the Soundtrack page' );
     $animate->signal_connect(
         toggled => sub {
             $self->{ animate } = $animate->get_active;
@@ -533,20 +657,64 @@ sub _build_left_actions
     );
 
     # pack_end fills from the right, so these go in reverse of how they read:
-    # Apply at the end, the spinner that belongs to it next, and the toggle
-    # that decides what pressing it will cost before them both.
+    # Apply at the end, and the toggle that decides what pressing it will cost
+    # before it. The spinner belonging to Apply is over the picture rather
+    # than in this bar -- see _build_preview_overlay.
     $bar->pack_end( $apply );
-    $bar->pack_end( $spinner );
     $bar->pack_end( $animate );
 
     $self->{ b_animate }   = $animate;
     $self->{ b_add }       = $add;
+    $self->{ b_adjust }    = $adjust;
     $self->{ b_apply }     = $apply;
     $self->{ apply_icon }  = $apply_icon;
     $self->{ apply_label } = $apply_label;
-    $self->{ spinner }     = $spinner;
 
     return $bar;
+}
+
+# The keys the three icon-only buttons would have carried as labels.
+#
+# Alt+D for Add and Alt+N for Animate are the keys those buttons already had;
+# Alt+J is new, for Adjust, and is neither Alt+A (Apply, since there was a
+# window) nor Alt+E (Export, in the header bar). An accelerator is invisible,
+# so each one is named in the tooltip of the button it presses -- otherwise
+# the keys would exist and nobody would know.
+sub _install_accelerators
+{
+    my ( $self ) = @_;
+
+    my $accel = Gtk3::AccelGroup->new;
+
+    my %key = (
+        d => $self->{ b_add },
+        j => $self->{ b_adjust },
+        n => $self->{ b_animate },
+    );
+
+    for my $letter ( sort keys %key )
+    {
+        my $button = $key{ $letter };
+
+        # activate rather than clicked: a GtkToggleButton flips on activate,
+        # which is what Animate needs, and an ordinary button treats the two
+        # the same. An insensitive button ignores it either way, so Adjust
+        # with nothing selected does nothing rather than failing.
+        $accel->connect(
+            Gtk3::Gdk::keyval_from_name( $letter ),
+            'mod1-mask',
+            'visible',
+            sub {
+                $button->activate;
+                return 1;
+            }
+        );
+    }
+
+    $self->{ window }->add_accel_group( $accel );
+    $self->{ accel } = $accel;
+
+    return;
 }
 
 # Natural width of the widest of several words, measured on the label that
@@ -577,41 +745,6 @@ sub _widest_label
     # The icon, the box spacing and the button's own padding sit either side
     # of the text and are not in that number.
     return $widest + APPLY_EXTRA;
-}
-
-sub _build_preset_section
-{
-    my ( $self ) = @_;
-
-    my $box = Gtk3::Box->new( 'vertical', 6 );
-
-    my $heading = Gtk3::Label->new;
-    $heading->set_markup( '<b>Preset</b>' );
-    $heading->set_xalign( 0 );
-    $box->pack_start( $heading, 0, 0, 0 );
-
-    my $row = Gtk3::Box->new( 'horizontal', 6 );
-
-    my $combo = Gtk3::ComboBoxText->new;
-    $combo->set_hexpand( 1 );
-    $self->{ preset_combo } = $combo;
-    $self->_populate_presets;
-
-    $combo->signal_connect(
-        changed => sub {
-            return if $self->{ loading };
-            $self->_select_preset( $combo->get_active_text );
-            return;
-        }
-    );
-
-    # Saving used to be an icon beside this combo. It moved to the menu,
-    # where the platform puts Save As and where a rare operation does not have
-    # to be guessed at from a picture of a floppy disk.
-    $row->pack_start( $combo, 1, 1, 0 );
-    $box->pack_start( $row,   0, 0, 0 );
-
-    return $box;
 }
 
 sub _build_right
@@ -649,140 +782,285 @@ sub _build_right
     );
 
     $box->pack_start( $bar,                                 0, 0, 0 );
-    $box->pack_start( $self->{ preview }->widget,           1, 1, 0 );
+    $box->pack_start( $self->_build_preview_overlay,        1, 1, 0 );
     $box->pack_start( Gtk3::Separator->new( 'horizontal' ), 0, 0, 0 );
     $box->pack_start( $self->_build_preview_bar,            0, 0, 0 );
-    $box->pack_start( $self->_build_audio_bar,              0, 0, 0 );
     $box->pack_start( $self->_build_status,                 0, 0, 0 );
 
     return $box;
 }
 
-# The soundtrack row. In a revealer under the animation controls rather than
-# beside them, because a soundtrack only means anything for an animation: a
-# still with music is nothing, and a control that is permanently insensitive
-# is worse than one that is not there.
+# The spinner sits on the picture rather than beside the button that started
+# it, because the picture is what the eye is on while a render runs and a
+# 16-pixel spinner in an action bar is not news.
 #
-# One file at most and any number of generated tracks, so the lines below the
-# buttons are rebuilt from the spec rather than being a fixed pair -- the same
-# shape the effect list uses, and for the same reason.
-sub _build_audio_bar
+# gtk_overlay_set_overlay_pass_through is what makes this safe: without it the
+# overlay's event window would sit over the preview and swallow the drags that
+# pan and zoom it, which are most of what the preview is for. With it the
+# spinner is scenery and every press still reaches the GtkImageView beneath.
+sub _build_preview_overlay
 {
     my ( $self ) = @_;
 
-    my $revealer = Gtk3::Revealer->new;
-    $revealer->set_transition_type( 'slide-down' );
-    $revealer->set_transition_duration( 150 );
+    my $overlay = Gtk3::Overlay->new;
+    $overlay->add( $self->{ preview }->widget );
 
-    my $bar = Gtk3::Box->new( 'vertical', 6 );
-    $bar->set_border_width( 8 );
+    my $badge = Gtk3::Box->new( 'horizontal', 10 );
+    $badge->set_halign( 'center' );
+    $badge->set_valign( 'center' );
+    $badge->set_border_width( 14 );
 
-    my $buttons = Gtk3::Box->new( 'horizontal', 8 );
+    # Given the frame and background of a tooltip, so that it stays legible
+    # over a bright frame and a dark one alike -- which a bare spinner on a
+    # rendered photograph does not.
+    $badge->get_style_context->add_class( 'app-notification' );
 
-    my $add_file = Gtk3::Button->new_with_label( '♪  Add audio track…' );
-    $add_file->set_tooltip_text(
-              "Crop a section of an audio file and add it to the loop.\n"
-            . 'The loop repeats to cover whatever you choose' );
-    $add_file->signal_connect(
-        clicked => sub {
-            $self->_choose_audio;
+    my $spinner = Gtk3::Spinner->new;
+    $spinner->set_size_request( 24, 24 );
+    $spinner->set_valign( 'center' );
+
+    my $label = Gtk3::Label->new( 'Rendering…' );
+
+    $badge->pack_start( $spinner, 0, 0, 0 );
+    $badge->pack_start( $label,   0, 0, 0 );
+
+    # Hidden rather than faded: it is over the picture now, not in a row of
+    # buttons whose widths it would disturb, so there is nothing to hold a
+    # place for.
+    #
+    # The contents are shown once, here, because set_no_show_all stops
+    # show_all descending into the badge later -- so _busy shows the badge
+    # itself and the two widgets inside it are already visible.
+    $spinner->show;
+    $label->show;
+    $badge->set_no_show_all( 1 );
+
+    $overlay->add_overlay( $badge );
+    $overlay->set_overlay_pass_through( $badge, 1 );
+
+    $self->{ spinner }       = $spinner;
+    $self->{ spinner_badge } = $badge;
+    $self->{ spinner_label } = $label;
+
+    return $overlay;
+}
+
+# The soundtrack page.
+#
+# A soundtrack still only means anything for an animation -- a still with
+# music is nothing -- but that is now said rather than enacted. The page is
+# always reachable; when Animate is off it shows why it is empty instead of
+# vanishing, because a tab that disappears teaches nobody what it was for,
+# and a permanently insensitive one teaches them even less.
+#
+# Nothing is discarded when Animate goes off. The tracks live in
+# $self->{audio}, which the placeholder covers rather than clears, so
+# switching animation off to look at a still frame and back on again finds
+# the mix exactly as it was.
+#
+# One file at most and any number of generated tracks, so the lines are
+# rebuilt from the spec rather than being a fixed pair -- the same shape the
+# effect list uses, and for the same reason.
+#
+# The page is nothing but that list. Adding is the action bar's Add button,
+# the same one the effect list uses, because "add something to what this pane
+# is showing" is one action and having a second pair of Add buttons inside the
+# page said otherwise. See _add_to_current_page for how one button serves two
+# pages.
+sub _build_soundtrack_page
+{
+    my ( $self ) = @_;
+
+    my $stack = Gtk3::Stack->new;
+    $stack->set_transition_type( 'crossfade' );
+    $stack->set_transition_duration( 120 );
+
+    $stack->add_named( $self->_build_soundtrack_placeholder,
+        'needs-animation' );
+
+    my $box = Gtk3::Box->new( 'vertical', 12 );
+    $box->set_border_width( 12 );
+
+    my $heading = Gtk3::Label->new;
+    $heading->set_markup( '<b>Tracks</b>' );
+    $heading->set_xalign( 0 );
+    $box->pack_start( $heading, 0, 0, 0 );
+
+    # A GtkListBox for the same reasons the effect list is one, and with the
+    # same activation rule: double-click and Enter reopen a track's wizard,
+    # a single click merely selects.
+    my $list = Gtk3::ListBox->new;
+    $list->set_selection_mode( 'single' );
+    $list->set_activate_on_single_click( 0 );
+
+    $list->signal_connect(
+        'row-activated' => sub {
+            my ( undef, $row ) = @_;
+            $row->{ edit }->() if $row && $row->{ edit };
             return;
         }
     );
 
-    # A MenuButton rather than a button and a hand-rolled popup: it owns the
-    # popover, so the pressed state, the dismissal and the keyboard handling
-    # are the platform's problem rather than this file's.
-    my $add_made = Gtk3::MenuButton->new;
-    $add_made->set_label( '📻  Add generated track…' );
-    $add_made->set_tooltip_text(
-              "Dialpad tones, television static, and anything else the\n"
-            . 'generator registry knows how to make. Add as many as you like' );
-    $add_made->set_popover( $self->_build_generated_popover );
+    $self->{ audio_list } = $list;
+    $box->pack_start( $list, 0, 0, 0 );
 
-    $buttons->pack_start( $add_file, 0, 0, 0 );
-    $buttons->pack_start( $add_made, 0, 0, 0 );
+    my $scroll = Gtk3::ScrolledWindow->new;
+    $scroll->set_policy( 'never', 'automatic' );
+    $scroll->set_vexpand( 1 );
+    $scroll->add( $box );
 
-    my $list = Gtk3::Box->new( 'vertical', 4 );
+    $stack->add_named( $scroll, 'ready' );
 
-    $bar->pack_start( $buttons, 0, 0, 0 );
-    $bar->pack_start( $list,    0, 0, 0 );
+    $self->{ audio_stack } = $stack;
 
-    $revealer->add( $bar );
-
-    $self->{ audio_revealer } = $revealer;
-    $self->{ audio_add }      = $add_file;
-    $self->{ audio_add_made } = $add_made;
-    $self->{ audio_list }     = $list;
-
-    return $revealer;
+    return $stack;
 }
 
-# One row per registered generator, so a third kind appears here the moment it
-# is registered -- the same property the effect pane has.
+# What the page shows when there is no animation to put a soundtrack on.
+#
+# The icon is the same one a track carries in the list below, so the empty
+# page and the full one are visibly about the same thing.
+sub _build_soundtrack_placeholder
+{
+    my ( $self ) = @_;
+
+    my $box = Gtk3::Box->new( 'vertical', 12 );
+    $box->set_halign( 'center' );
+    $box->set_valign( 'center' );
+    $box->set_border_width( 24 );
+
+    my $icon =
+        Gtk3::Image->new_from_icon_name( 'audio-x-generic-symbolic', 'dialog' );
+    $icon->get_style_context->add_class( 'dim-label' );
+
+    my $text = Gtk3::Label->new(
+        'You must enable video animation if you want to add the sound.' );
+    $text->set_line_wrap( 1 );
+    $text->set_justify( 'center' );
+    $text->set_max_width_chars( 28 );
+    $text->get_style_context->add_class( 'dim-label' );
+
+    $box->pack_start( $icon, 0, 0, 0 );
+    $box->pack_start( $text, 0, 0, 0 );
+
+    return $box;
+}
+
+# What the Add button offers while the Soundtrack page is showing: the one
+# file, then one row per registered generator -- so a third kind appears here
+# the moment it is registered, the same property the effect pane has.
 #
 # Asking which kind first and configuring it afterwards, rather than opening
 # one dialog with a combo at the top: the kind decides what every other
 # control in that window is, so choosing it there meant a dialog that rebuilt
 # itself underneath the pointer.
-sub _build_generated_popover
+#
+# The file sits above a separator rather than among the generators because it
+# is the odd one out in two ways -- it comes off the disk, and there can only
+# ever be one. Its row is hidden once there is one.
+sub _build_add_track_popover
 {
     my ( $self ) = @_;
 
-    my $popover = Gtk3::Popover->new;
+    my $popover = Gtk3::Popover->new( $self->{ b_add } );
 
-    # Upwards: the soundtrack row lives at the bottom of the window, so there
-    # is never room below the button. Gtk would flip it there anyway; saying
-    # so means the arrow is not asking for something that cannot happen.
+    # Upwards: the Add button is at the foot of the pane, so there is never
+    # room below it. Gtk would flip it there anyway; saying so means the arrow
+    # is not asking for something that cannot happen.
     $popover->set_position( 'top' );
 
     my $box = Gtk3::Box->new( 'vertical', 2 );
     $box->set_border_width( 6 );
 
+    my $file = $self->_popover_row(
+        'audio-x-generic-symbolic',
+        'Audio file…',
+        'Crop a section of a file on disk',
+        sub {
+            $popover->popdown;
+            $self->_choose_audio;
+            return;
+        }
+    );
+
+    # Shown all the way down *before* no_show_all goes on, because show_all
+    # returns early on a widget carrying that flag -- setting it first would
+    # leave the row's own children unrealised and the row permanently blank.
+    # The flag is what then stops the $box->show_all below undoing the
+    # decision _sync_actions makes about whether this line belongs here.
+    $file->show_all;
+    $file->set_no_show_all( 1 );
+
+    my $rule = Gtk3::Separator->new( 'horizontal' );
+    $rule->set_margin_top( 4 );
+    $rule->set_margin_bottom( 4 );
+
+    $box->pack_start( $file, 0, 0, 0 );
+    $box->pack_start( $rule, 0, 0, 0 );
+
+    $self->{ audio_add_file } = $file;
+
     for my $kind ( GlitchVape::Generator::kinds() )
     {
         my $declared = GlitchVape::Generator::get( $kind );
 
-        my $row = Gtk3::Box->new( 'horizontal', 8 );
-
-        $row->pack_start(
-            Gtk3::Image->new_from_icon_name(
-                _generated_icon( $kind ), 'button'
+        $box->pack_start(
+            $self->_popover_row(
+                _generated_icon( $kind ),
+                $declared->{ label },
+                $declared->{ summary },
+                sub {
+                    $popover->popdown;
+                    $self->_open_generated( kind => $kind );
+                    return;
+                }
             ),
-            0, 0, 0
+            0,
+            0,
+            0
         );
-
-        my $text = Gtk3::Box->new( 'vertical', 0 );
-
-        my $label = Gtk3::Label->new( $declared->{ label } );
-        $label->set_xalign( 0 );
-
-        my $summary = Gtk3::Label->new( $declared->{ summary } );
-        $summary->set_xalign( 0 );
-        $summary->get_style_context->add_class( 'dim-label' );
-
-        $text->pack_start( $label,   0, 0, 0 );
-        $text->pack_start( $summary, 0, 0, 0 );
-        $row->pack_start( $text, 1, 1, 0 );
-
-        my $button = Gtk3::Button->new;
-        $button->set_relief( 'none' );
-        $button->add( $row );
-        $button->signal_connect(
-            clicked => sub {
-                $popover->popdown;
-                $self->_open_generated( kind => $kind );
-                return;
-            }
-        );
-
-        $box->pack_start( $button, 0, 0, 0 );
     }
 
     $box->show_all;
     $popover->add( $box );
 
     return $popover;
+}
+
+# One line of an Add popover: an icon, what it is, and what it gives you.
+sub _popover_row
+{
+    my ( $self, $icon, $label_text, $summary_text, $on_click ) = @_;
+
+    my $row = Gtk3::Box->new( 'horizontal', 8 );
+
+    $row->pack_start( Gtk3::Image->new_from_icon_name( $icon, 'button' ),
+        0, 0, 0 );
+
+    my $text = Gtk3::Box->new( 'vertical', 0 );
+
+    my $label = Gtk3::Label->new( $label_text );
+    $label->set_xalign( 0 );
+
+    my $summary = Gtk3::Label->new( $summary_text );
+    $summary->set_xalign( 0 );
+    $summary->get_style_context->add_class( 'dim-label' );
+
+    $text->pack_start( $label,   0, 0, 0 );
+    $text->pack_start( $summary, 0, 0, 0 );
+    $row->pack_start( $text, 1, 1, 0 );
+
+    my $button = Gtk3::Button->new;
+    $button->set_relief( 'none' );
+    $button->add( $row );
+    $button->signal_connect(
+        clicked => sub {
+            $on_click->();
+            return;
+        }
+    );
+
+    return $button;
 }
 
 # The same icons the track rows use, so a line in the popover and the line it
@@ -809,15 +1087,14 @@ sub _rebuild_audio_rows
     {
         # The file's own description, with the generated tracks taken out of
         # the spec so they are not repeated on its line.
-        $self->{ audio_list }->pack_start(
+        $self->{ audio_list }->add(
             $self->_audio_row(
                 'audio-x-generic-symbolic',
                 GlitchVape::Audio::describe( { %$audio, generated => undef } ),
                 'Reopen the crop and filter wizard',
                 sub { return $self->_edit_audio },
                 sub { return $self->_remove_audio },
-            ),
-            0, 0, 0
+            )
         );
     }
 
@@ -830,15 +1107,14 @@ sub _rebuild_audio_rows
         my $icon = 'audio-speakers-symbolic';
         $icon = 'call-start-symbolic' if $made[ $n ]{ kind } eq 'dtmf';
 
-        $self->{ audio_list }->pack_start(
+        $self->{ audio_list }->add(
             $self->_audio_row(
                 $icon,
                 GlitchVape::Generator::describe( $made[ $n ] ),
                 'Reopen this generated track',
                 sub { return $self->_edit_generated( $index ) },
                 sub { return $self->_remove_generated( $index ) },
-            ),
-            0, 0, 0
+            )
         );
     }
 
@@ -847,11 +1123,25 @@ sub _rebuild_audio_rows
     return;
 }
 
+# Shaped like an effect row: what it is on the left, the way to take it out
+# again on the right.
+#
+# It keeps an explicit Edit button, which the effect rows do not need. Adjust
+# in the action bar acts on the effect list only, so double-clicking would
+# otherwise be this list's sole route to a track's settings -- and a route
+# with nothing on screen pointing at it is one most people never find.
 sub _audio_row
 {
     my ( $self, $icon, $text, $tip, $edit_with, $remove_with ) = @_;
 
-    my $row = Gtk3::Box->new( 'horizontal', 6 );
+    my $row = Gtk3::ListBoxRow->new;
+
+    # Hung on the row so that activating it -- double click, or Enter -- does
+    # what the Edit button does.
+    $row->{ edit } = $edit_with;
+
+    my $box = Gtk3::Box->new( 'horizontal', 6 );
+    $box->set_border_width( 6 );
 
     my $image = Gtk3::Image->new_from_icon_name( $icon, 'button' );
 
@@ -859,9 +1149,11 @@ sub _audio_row
     $label->set_xalign( 0 );
     $label->set_ellipsize( 'middle' );
     $label->set_hexpand( 1 );
+    $label->set_tooltip_text( "$text\n\nDouble-click to edit" );
 
     my $edit = Gtk3::Button->new_with_label( 'Edit…' );
     $edit->set_tooltip_text( $tip );
+    $edit->set_valign( 'center' );
     $edit->signal_connect(
         clicked => sub {
             $edit_with->();
@@ -870,7 +1162,9 @@ sub _audio_row
     );
 
     my $remove =
-        _icon_button( 'window-close-symbolic', 'Remove this from the mix' );
+        _icon_button( 'list-remove-symbolic', 'Remove this from the mix' );
+    $remove->set_relief( 'none' );
+    $remove->set_valign( 'center' );
     $remove->signal_connect(
         clicked => sub {
             $remove_with->();
@@ -878,10 +1172,12 @@ sub _audio_row
         }
     );
 
-    $row->pack_start( $image,  0, 0, 0 );
-    $row->pack_start( $label,  1, 1, 0 );
-    $row->pack_start( $edit,   0, 0, 0 );
-    $row->pack_start( $remove, 0, 0, 0 );
+    $box->pack_start( $image,  0, 0, 0 );
+    $box->pack_start( $label,  1, 1, 0 );
+    $box->pack_start( $edit,   0, 0, 0 );
+    $box->pack_start( $remove, 0, 0, 0 );
+
+    $row->add( $box );
 
     return $row;
 }
@@ -982,29 +1278,64 @@ sub _rebuild_effects
 {
     my ( $self ) = @_;
 
-    $_->destroy for $self->{ effect_box }->get_children;
+    my $list = $self->{ effect_list };
+
+    # Which row was selected, so that rebuilding the list after a parameter
+    # change does not silently take the selection -- and the Adjust button --
+    # away from whatever the user was working on.
+    my $selected = $self->_selected_effect;
+
+    $_->destroy for $list->get_children;
     $self->{ rows } = {};
 
-    return unless $self->{ state };
+    unless ( $self->{ state } )
+    {
+        $self->_close_all_adjust;
+        return;
+    }
+
+    my %present;
 
     for my $name ( $self->{ state }->effect_names )
     {
-        $self->{ effect_box }
-            ->pack_start( $self->_effect_row( $name ), 0, 0, 0 );
+        $present{ $name } = 1;
+        $list->add( $self->_effect_row( $name ) );
     }
 
-    $self->{ effect_box }->show_all;
+    $list->show_all;
+
+    if ( defined $selected && $present{ $selected } )
+    {
+        $list->select_row( $self->{ rows }{ $selected }{ row } );
+    }
+
+    # An open settings window for an effect that is no longer in the pipeline
+    # would write to state that is not there, so it goes; the survivors are
+    # rebuilt from the state, because an undo or a preset has just replaced
+    # every value they were showing.
+    for my $name ( sort keys %{ $self->{ adjust } || {} } )
+    {
+        if ( $present{ $name } )
+        {
+            $self->{ adjust }{ $name }->refresh;
+        }
+        else
+        {
+            $self->_close_adjust( $name );
+        }
+    }
+
+    $self->_sync_actions;
     return;
 }
 
-# A GtkExpander would be the obvious widget here, but its label widget cannot
-# hold anything clickable: gtk_expander_map() calls gdk_window_show() on the
-# expander's own event window *after* mapping the label, and on GDK that raises
-# the window, so the expander's event window ends up stacked above the event
-# windows of whatever is in the label. Every press over the header -- including
-# one aimed at the enable switch or the remove button -- is swallowed by the
-# expander and merely toggles it. The disclosure is therefore built by hand out
-# of a toggle button and a revealer, which have no such overlap.
+# One line per effect: whether it is in the render, what it is called, and a
+# way to take it out again. The parameters are not here -- they are in
+# GlitchVape::GUI::Adjust, a window at a time.
+#
+# One row is one line high whatever the effect declares, so the length of the
+# list is the length of the pipeline and a long one can still be read at a
+# glance.
 sub _effect_row
 {
     my ( $self, $name ) = @_;
@@ -1012,95 +1343,34 @@ sub _effect_row
     my $spec  = GlitchVape::Registry->get( $name );
     my $state = $self->{ state };
 
-    my $grid = Gtk3::Grid->new;
-    $grid->set_row_spacing( 4 );
-    $grid->set_column_spacing( 8 );
-    $grid->set_margin_start( 12 );
-    $grid->set_margin_top( 6 );
-    $grid->set_margin_bottom( 6 );
-
-    my $params = $spec->{ params };
-    my $row    = 0;
-
-    unless ( %$params )
-    {
-        my $none = Gtk3::Label->new( 'This effect takes no parameters.' );
-        $none->set_xalign( 0 );
-        $none->get_style_context->add_class( 'dim-label' );
-        $grid->attach( $none, 0, 0, 2, 1 );
-    }
-
-    for my $key ( sort keys %$params )
-    {
-        my $built = GlitchVape::GUI::Params->build(
-            effect    => $name,
-            name      => $key,
-            spec      => $params->{ $key },
-            value     => $state->param( $name, $key ),
-            on_change => sub {
-                return if $self->{ loading };
-                $self->_set_param( $name, $key, $_[ 0 ] );
-                return;
-            },
-        );
-
-        $grid->attach( $built->{ label },   0, $row, 1, 1 );
-        $grid->attach( $built->{ control }, 1, $row, 1, 1 );
-        $row++;
-    }
-
-    my $body = Gtk3::Revealer->new;
-    $body->set_transition_type( 'slide-down' );
-    $body->set_transition_duration( 150 );
-    $body->add( $grid );
-
-    my ( $header, $disclose ) = $self->_effect_header( $name, $spec, $body );
-
-    my $outer = Gtk3::Box->new( 'vertical', 0 );
-    $outer->pack_start( $header, 0, 0, 0 );
-    $outer->pack_start( $body,   0, 0, 0 );
-
-    $self->{ rows }{ $name } = {
-        row      => $outer,
-        grid     => $grid,
-        body     => $body,
-        disclose => $disclose,
-    };
-
-    return $outer;
-}
-
-sub _effect_header
-{
-    my ( $self, $name, $spec, $body ) = @_;
+    my $row = Gtk3::ListBoxRow->new;
+    $row->{ effect } = $name;
 
     my $box = Gtk3::Box->new( 'horizontal', 8 );
+    $box->set_border_width( 6 );
 
-    my $arrow = Gtk3::Image->new_from_icon_name( 'pan-end-symbolic', 'button' );
-
-    my $disclose = Gtk3::ToggleButton->new;
-    $disclose->set_image( $arrow );
-    $disclose->set_relief( 'none' );
-    $disclose->set_valign( 'center' );
-    $disclose->set_tooltip_text( "Show the $spec->{title} parameters" );
-    $disclose->signal_connect(
+    # A checkbox rather than a switch. A switch is for a setting that takes
+    # effect as you leave it alone; this is one of a column of like things
+    # being ticked off, which is what a checkbox is for -- and it is a third
+    # of the width, which the row needs for the name.
+    my $check = Gtk3::CheckButton->new;
+    $check->set_active( $state->enabled( $name ) ? 1 : 0 );
+    $check->set_valign( 'center' );
+    $check->set_tooltip_text( "Include $spec->{title} in the pipeline" );
+    $check->signal_connect(
         toggled => sub {
-            my $open = $disclose->get_active ? 1 : 0;
-            $body->set_reveal_child( $open );
-            $arrow->set_from_icon_name(
-                $open ? 'pan-down-symbolic' : 'pan-end-symbolic', 'button' );
-            return;
-        }
-    );
-
-    my $switch = Gtk3::Switch->new;
-    $switch->set_active( $self->{ state }->enabled( $name ) ? 1 : 0 );
-    $switch->set_valign( 'center' );
-    $switch->set_tooltip_text( "Include $spec->{title} in the pipeline" );
-    $switch->signal_connect(
-        'notify::active' => sub {
             return if $self->{ loading };
-            $self->{ state }->enabled( $name, $switch->get_active );
+
+            my $on = $check->get_active ? 1 : 0;
+            $state->enabled( $name, $on );
+
+            # The same fact is on the switch in that effect's settings window
+            # if one is open, and it has to move with this.
+            if ( my $window = $self->{ adjust }{ $name } )
+            {
+                $window->set_enabled( $on );
+            }
+
             $self->_touch;
             return;
         }
@@ -1126,7 +1396,7 @@ sub _effect_header
 
     my $stage = GlitchVape::Registry->stage_info( $spec->{ stage } );
     $label->set_tooltip_text(
-        sprintf "%s\n%s stage",
+        sprintf "%s\n%s stage\n\nDouble-click to adjust",
         $spec->{ summary },
         $stage->{ title }
     );
@@ -1137,6 +1407,11 @@ sub _effect_header
     $remove->set_valign( 'center' );
     $remove->signal_connect(
         clicked => sub {
+
+            # Before the state loses it, because closing is keyed on the name
+            # and the window would otherwise be left describing nothing.
+            $self->_close_adjust( $name );
+
             $self->{ state }->remove_effect( $name );
             $self->_rebuild_effects;
             $self->_touch;
@@ -1144,44 +1419,101 @@ sub _effect_header
         }
     );
 
-    # Clicking the name is the other half of the disclosure the arrow starts,
-    # which is what a GtkExpander label would have done. A label has no window
-    # of its own to take the press, so it rides in an event box.
-    my $label_area = Gtk3::EventBox->new;
-    $label_area->set_visible_window( 0 );
-    $label_area->add( $label );
-    $label_area->add_events( 'button-press-mask' );
-    $label_area->signal_connect(
-        'button-press-event' => sub {
-            $disclose->set_active( $disclose->get_active ? 0 : 1 );
-            return 1;
-        }
-    );
+    $box->pack_start( $check,  0, 0, 0 );
+    $box->pack_start( $label,  1, 1, 0 );
+    $box->pack_start( $remove, 0, 0, 0 );
 
-    $box->pack_start( $disclose,   0, 0, 0 );
-    $box->pack_start( $switch,     0, 0, 0 );
-    $box->pack_start( $label_area, 1, 1, 0 );
-    $box->pack_start( $remove,     0, 0, 0 );
+    $row->add( $box );
 
-    return ( $box, $disclose );
+    $self->{ rows }{ $name } = { row => $row, check => $check };
+
+    return $row;
 }
 
-sub _set_param
+# ---------------------------------------------------------------------------
+# Settings windows
+
+# The effect whose row is selected, or undef.
+sub _selected_effect
 {
-    my ( $self, $effect, $key, $value ) = @_;
+    my ( $self ) = @_;
 
-    local $@;
-    my $ok = eval {
-        $self->{ state }->param( $effect, $key, $value );
-        1;
-    };
+    my $row = $self->{ effect_list }->get_selected_row or return undef;
+    return $row->{ effect };
+}
 
-    # A half-typed value in an entry -- '#FF' on the way to '#FF00AA' -- fails
-    # the registry's validation. That is not an error worth interrupting the
-    # user over; it just means this keystroke is not a value yet.
-    return unless $ok;
+sub _adjust_selected
+{
+    my ( $self ) = @_;
 
-    $self->_touch;
+    my $name = $self->_selected_effect or return;
+    $self->_adjust_effect( $name );
+
+    return;
+}
+
+# One window per effect, so asking twice raises the one that is open rather
+# than stacking a second copy on top of it -- two windows writing the same
+# parameters would disagree the moment either was touched.
+sub _adjust_effect
+{
+    my ( $self, $name ) = @_;
+
+    return unless $self->{ state };
+    return unless defined $name;
+
+    if ( my $open = $self->{ adjust }{ $name } )
+    {
+        $open->present;
+        return;
+    }
+
+    $self->{ adjust }{ $name } = GlitchVape::GUI::Adjust->new(
+        parent    => $self->{ window },
+        name      => $name,
+        state     => $self->{ state },
+        on_change => sub {
+            $self->_touch;
+            return;
+        },
+        on_enabled => sub {
+            my ( $on ) = @_;
+
+            # The checkbox on the row is the same fact seen from the list.
+            if ( my $row = $self->{ rows }{ $name } )
+            {
+                $self->{ loading }++;
+                $row->{ check }->set_active( $on ? 1 : 0 );
+                $self->{ loading }--;
+            }
+
+            $self->_touch;
+            return;
+        },
+        on_closed => sub {
+            delete $self->{ adjust }{ $_[ 0 ] };
+            return;
+        },
+    );
+
+    return;
+}
+
+sub _close_adjust
+{
+    my ( $self, $name ) = @_;
+
+    my $window = delete $self->{ adjust }{ $name } or return;
+    $window->close;
+
+    return;
+}
+
+sub _close_all_adjust
+{
+    my ( $self ) = @_;
+
+    $self->_close_adjust( $_ ) for sort keys %{ $self->{ adjust } || {} };
     return;
 }
 
@@ -1311,8 +1643,7 @@ sub _show_source
 
             $self->_busy( 0 );
             $self->{ preview }->show_still( $path );
-            $self->_status(
-                'Choose a preset, adjust anything, then press Apply.' );
+            $self->_status( 'Add effects, adjust anything, then press Apply.' );
             return;
         },
         on_error => sub {
@@ -1321,8 +1652,7 @@ sub _show_source
             # open it -- everything else about the file is already loaded, and
             # Apply will report the same problem more usefully.
             $self->_busy( 0 );
-            $self->_status(
-                'Choose a preset, adjust anything, then press Apply.' );
+            $self->_status( 'Add effects, adjust anything, then press Apply.' );
             return;
         },
     );
@@ -1688,27 +2018,25 @@ sub _animate_spec
 # ---------------------------------------------------------------------------
 # Presets
 
-sub _populate_presets
+# Empty the pipeline without leaving the image.
+#
+# In the menu rather than beside the effect list: it discards every effect at
+# once, which is not something to have within a slip of the Add button. It is
+# an ordinary edit, so undo steps back over it like any other.
+sub _clear_effects
 {
     my ( $self ) = @_;
 
-    my $combo = $self->{ preset_combo };
+    return unless $self->{ state };
 
-    $self->{ loading }++;
-    $combo->remove_all;
-    $combo->append_text( '(no preset)' );
+    $self->_close_all_adjust;
 
-    my @names;
-    for my $p ( @{ GlitchVape::Config::list_presets() } )
-    {
-        $combo->append_text( $p->{ name } );
-        push @names, $p->{ name };
-    }
+    $self->{ state }->preset( undef );
+    $self->{ state }{ current }{ effects } = {};
 
-    $combo->set_active( 0 );
-    $self->{ loading }--;
+    $self->_reload_widgets;
+    $self->_touch;
 
-    $self->{ preset_names } = \@names;
     return;
 }
 
@@ -1718,15 +2046,6 @@ sub _select_preset
 
     return unless $self->{ state };
     return unless defined $name;
-
-    if ( $name eq '(no preset)' )
-    {
-        $self->{ state }->preset( undef );
-        $self->{ state }{ current }{ effects } = {};
-        $self->_reload_widgets;
-        $self->_touch;
-        return;
-    }
 
     local $@;
     unless ( eval { $self->{ state }->load_preset( $name ); 1 } )
@@ -1856,10 +2175,207 @@ sub _write_preset
     print { $fh } Encode::encode( 'UTF-8', $yaml );
     close $fh;
 
-    $self->_populate_presets;
     $self->_status( "Saved $path -- usable now as: glitchvape -p $name" );
 
     return;
+}
+
+# One Add button, two pages. Which list it adds to is whichever list the pane
+# is showing, because "add something here" is one action and giving each page
+# its own pair of Add buttons said it was several.
+#
+# The effect page opens the assistant directly; the soundtrack page has a
+# choice to make first -- a file, or which kind of generated track -- so it
+# gets a popover hung off the button.
+sub _add_to_current_page
+{
+    my ( $self ) = @_;
+
+    if ( $self->_on_soundtrack_page )
+    {
+        # Built on first use rather than with the window: the generator
+        # registry is read to build it, and nothing guarantees every
+        # generator has registered by the time the window goes up.
+        unless ( $self->{ add_track_popover } )
+        {
+            $self->{ add_track_popover } = $self->_build_add_track_popover;
+
+            # Built after the last sync, so it has never been told whether a
+            # file is already in the mix.
+            $self->_sync_actions;
+        }
+
+        $self->{ add_track_popover }->popup;
+        return;
+    }
+
+    $self->{ add_effect_popover } ||= $self->_build_add_effect_popover;
+    $self->{ add_effect_popover }->popup;
+
+    return;
+}
+
+# What the Add button offers while the Image page is showing: one effect, or
+# everything a preset names.
+#
+# A preset is a set of effects with their parameters already dialled in, so it
+# belongs beside "one effect" as the other size of the same action rather than
+# in a control of its own. It is the only entry that replaces what is already
+# there, which is why it says so on its second line.
+sub _build_add_effect_popover
+{
+    my ( $self ) = @_;
+
+    my $popover = Gtk3::Popover->new( $self->{ b_add } );
+    $popover->set_position( 'top' );
+
+    my $box = Gtk3::Box->new( 'vertical', 2 );
+    $box->set_border_width( 6 );
+
+    $box->pack_start(
+        $self->_popover_row(
+            'list-add-symbolic',
+            'Single effect…',
+            'Choose one, and dial it in against a preview',
+            sub {
+                $popover->popdown;
+                $self->_choose_effect;
+                return;
+            }
+        ),
+        0,
+        0,
+        0
+    );
+
+    $box->pack_start(
+        $self->_popover_row(
+            'view-list-symbolic',
+            'Effects from a preset…',
+            'A whole look at once — replaces what is here',
+            sub {
+                $popover->popdown;
+                $self->_choose_preset;
+                return;
+            }
+        ),
+        0,
+        0,
+        0
+    );
+
+    $box->show_all;
+    $popover->add( $box );
+
+    return $popover;
+}
+
+# The preset chooser.
+#
+# A dialog rather than a third level of popover: this is the one action in the
+# window that discards work, so it is worth a moment's deliberation and a
+# button that has to be pressed on purpose. The list is read from disk each
+# time it opens, so a preset saved from the menu is in it immediately.
+sub _choose_preset
+{
+    my ( $self ) = @_;
+
+    return unless $self->{ state };
+
+    my $presets = GlitchVape::Config::list_presets();
+
+    unless ( @$presets )
+    {
+        $self->_report( 'No presets were found. '
+                . 'GLITCHVAPE_PRESETS says where to look for them.' );
+        return;
+    }
+
+    my $dialog = Gtk3::Dialog->new_with_buttons(
+        'Effects from a preset',
+        $self->{ window },
+        'modal',
+        'Cancel' => 'cancel',
+        'Load'   => 'ok',
+    );
+    $dialog->set_default_size( 420, 460 );
+    $dialog->set_default_response( 'ok' );
+
+    my $content = $dialog->get_content_area;
+    $content->set_border_width( 12 );
+    $content->set_spacing( 8 );
+
+    my $lead = Gtk3::Label->new(
+        'Loading a preset replaces every effect in the pipeline.' );
+    $lead->set_xalign( 0 );
+    $lead->set_line_wrap( 1 );
+    $lead->set_max_width_chars( 44 );
+    $lead->get_style_context->add_class( 'dim-label' );
+    $content->pack_start( $lead, 0, 0, 0 );
+
+    my $list = Gtk3::ListBox->new;
+    $list->set_selection_mode( 'single' );
+
+    for my $preset ( @$presets )
+    {
+        my $row = Gtk3::ListBoxRow->new;
+        $row->{ preset } = $preset->{ name };
+
+        my $text = Gtk3::Box->new( 'vertical', 0 );
+        $text->set_border_width( 6 );
+
+        my $title = Gtk3::Label->new( $preset->{ title } );
+        $title->set_xalign( 0 );
+
+        # The name second, because that is what -p wants and what the saved
+        # file is called.
+        my $name = Gtk3::Label->new;
+        $name->set_markup( "<span alpha='45%'><tt>"
+                . Glib::Markup::escape_text( $preset->{ name } )
+                . '</tt></span>' );
+        $name->set_xalign( 0 );
+
+        $text->pack_start( $title, 0, 0, 0 );
+        $text->pack_start( $name,  0, 0, 0 );
+        $row->add( $text );
+        $list->add( $row );
+    }
+
+    # Double-clicking a row is the same as pressing Load, which is what the
+    # rest of the window's lists do.
+    $list->set_activate_on_single_click( 0 );
+    $list->signal_connect(
+        'row-activated' => sub {
+            $dialog->response( 'ok' );
+            return;
+        }
+    );
+
+    my $scroll = Gtk3::ScrolledWindow->new;
+    $scroll->set_policy( 'never', 'automatic' );
+    $scroll->set_vexpand( 1 );
+    $scroll->add( $list );
+    $content->pack_start( $scroll, 1, 1, 0 );
+
+    $dialog->show_all;
+
+    my $answer = $dialog->run;
+    my $row    = $list->get_selected_row;
+    my $chosen = ( $answer eq 'ok' && $row ) ? $row->{ preset } : undef;
+
+    $dialog->destroy;
+
+    $self->_select_preset( $chosen ) if defined $chosen;
+
+    return;
+}
+
+sub _on_soundtrack_page
+{
+    my ( $self ) = @_;
+
+    my $page = $self->{ left_stack }->get_visible_child_name // 'image';
+    return $page eq 'soundtrack';
 }
 
 sub _choose_effect
@@ -2056,7 +2572,6 @@ sub _reload_widgets
 
     $self->{ loading }++;
 
-    $self->_select_preset_in_combo( $self->{ state }->preset );
     $self->_rebuild_effects;
 
     $self->{ loading }--;
@@ -2065,38 +2580,12 @@ sub _reload_widgets
     return;
 }
 
-sub _select_preset_in_combo
-{
-    my ( $self, $name ) = @_;
-
-    my $combo = $self->{ preset_combo };
-
-    unless ( defined $name && length $name )
-    {
-        $combo->set_active( 0 );
-        return;
-    }
-
-    my $names = $self->{ preset_names } || [];
-    for my $n ( 0 .. $#$names )
-    {
-        if ( $names->[ $n ] eq $name )
-        {
-            $combo->set_active( $n + 1 );
-            return;
-        }
-    }
-
-    $combo->set_active( 0 );
-    return;
-}
-
 # ---------------------------------------------------------------------------
 # Menu actions
 
 # A new seed, which reshuffles every effect that draws on randomness while
-# leaving every parameter alone. This used to be an entry with the number in
-# it, and the number was never typed: what it is only matters after the fact,
+# leaving every parameter alone. Not an entry with the number in it: a seed is
+# never typed, because what it is only matters after the fact,
 # for reproducing a render somebody liked, and Copy command line carries it
 # for that. So the action stays and the field goes.
 sub _randomize
@@ -2438,7 +2927,8 @@ sub _busy
     if ( $busy )
     {
         $self->{ spinner }->start;
-        $self->{ spinner }->set_opacity( 1 );
+        $self->{ spinner_label }->set_text( $message // 'Rendering…' );
+        $self->{ spinner_badge }->show;
         $self->_set_apply( STOP_ICON, '_Stop',
             'Abandon this render. The settings are untouched' );
         $self->_status( $message ) if defined $message;
@@ -2446,7 +2936,7 @@ sub _busy
     else
     {
         $self->{ spinner }->stop;
-        $self->{ spinner }->set_opacity( 0 );
+        $self->{ spinner_badge }->hide;
         $self->_set_apply( APPLY_ICON, '_Apply',
                   'Render the pipeline and show the result. '
                 . 'Nothing on the left takes effect until this is pressed' );
@@ -2518,24 +3008,51 @@ sub _sync_actions
     $self->{ b_undo }->set_sensitive( $ready && $self->{ state }->can_undo );
     $self->{ b_redo }->set_sensitive( $ready && $self->{ state }->can_redo );
     $self->{ b_export }->set_sensitive( $ready );
-    $self->{ b_add }->set_sensitive( $ready );
+
+    my $soundtrack = $self->_on_soundtrack_page;
+
+    # Adjust acts on the selected effect, so it is only an action on the page
+    # that has effects on it, and only once one is picked. Without this it is
+    # a button that does nothing and says nothing about why.
+    $self->{ b_adjust }->set_sensitive( $ready
+            && !$soundtrack
+            && defined $self->_selected_effect );
     $self->{ m_preset }->set_sensitive( $have );
+    $self->{ m_clear }->set_sensitive( $ready );
     $self->{ m_command }->set_sensitive( $have );
     $self->{ m_seed }->set_sensitive( $have );
     $self->{ b_apply }->set_sensitive( $have );
 
     my $animated = $self->{ animate };
 
-    # The soundtrack row slides in with Animate. There is one file at most, so
-    # its button goes away once it has been used; generated tracks stack, so
-    # theirs never does.
-    $self->{ audio_revealer }->set_reveal_child( $animated );
+    # The soundtrack page says why it is empty rather than emptying. Nothing
+    # is cleared here -- $self->{audio} is untouched -- so a mix put together
+    # with Animate on is still there after switching it off and on again.
+    $self->{ audio_stack }
+        ->set_visible_child_name( $animated ? 'ready' : 'needs-animation' );
 
-    $self->{ audio_add }
-        ->set_visible( !GlitchVape::Audio::has_file( $self->{ audio } ) );
+    # One button, two meanings, so it says which one it currently has. On the
+    # soundtrack page with no animation to carry a track it is not an action
+    # at all -- which is the same thing the page itself is saying.
+    if ( $soundtrack )
+    {
+        $self->{ b_add }->set_sensitive( $ready && $animated );
+        $self->{ b_add }
+            ->set_tooltip_text( 'Add a track to the soundtrack (Alt+D)' );
+    }
+    else
+    {
+        $self->{ b_add }->set_sensitive( $ready );
+        $self->{ b_add }
+            ->set_tooltip_text( 'Add an effect to the pipeline (Alt+D)' );
+    }
 
-    $_->set_sensitive( $ready )
-        for $self->{ audio_add }, $self->{ audio_add_made };
+    # There is one file at most, so its line in the popover goes away once it
+    # has been used; generated tracks stack, so theirs never do.
+    if ( my $file = $self->{ audio_add_file } )
+    {
+        $file->set_visible( !GlitchVape::Audio::has_file( $self->{ audio } ) );
+    }
 
     $self->_rebuild_audio_rows;
 

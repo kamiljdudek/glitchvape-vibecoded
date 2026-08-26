@@ -37,11 +37,11 @@ L<GlitchVape::Registry> appears in the left pane.
 
 =head2 Why the kind is chosen before the window opens
 
-It used to be a combo at the top of this dialog, and that was the wrong place
-for it: the kind decides what every other control in the window is, so
-changing it rebuilt the whole dialog underneath the pointer. Asking first and
-configuring afterwards means the window that opens is already the right one,
-and its title says which.
+A combo at the top of this dialog would be the wrong place for it: the kind
+decides what every other control in the window is, so changing it would
+rebuild the whole dialog underneath the pointer. Asking first and configuring
+afterwards means the window that opens is already the right one, and its title
+says which.
 
 =head2 Auditioning
 

@@ -6,6 +6,16 @@
 NAME       = glitchvape
 VERSION    = 0.01
 
+# Where the packaging lives, and where everything it produces goes.
+#
+# Two directories rather than a scatter of files at the top of the tree: what
+# a distribution needs to build a package is not what somebody reading the
+# program needs to see first, and build output is not source at all. $(BUILDDIR)
+# is entirely disposable -- `make clean` removes it whole -- which is why the
+# rpmbuild tree is put inside it too.
+PKGDIR     = package
+BUILDDIR   = build
+
 PREFIX     ?= /usr/local
 DESTDIR    ?=
 
@@ -277,8 +287,9 @@ install-gui:
 
 	$(MAKE) install-man MAN_LIST="glitchvape-gui"
 
-	$(INSTALL_DATA) $(NAME).desktop $(DESTDIR)$(APPDIR)/$(NAME).desktop
-	$(INSTALL_DATA) $(NAME).metainfo.xml \
+	$(INSTALL_DATA) $(PKGDIR)/$(NAME).desktop \
+	    $(DESTDIR)$(APPDIR)/$(NAME).desktop
+	$(INSTALL_DATA) $(PKGDIR)/$(NAME).metainfo.xml \
 	    $(DESTDIR)$(METAINFODIR)/$(NAME).metainfo.xml
 
 # The logo is 215x185 and an icon theme directory wants a square, so the icon
@@ -333,32 +344,32 @@ fix-inc:
 # package from it: which font ends up in which .rpm or .deb is decided by the
 # spec's %files lists and by debian/rules, not by what the source carries.
 #
-# debian/ goes in whole apart from what a previous build left in it. Those
-# excludes are the same set .gitignore names, for the same reason: a staging
-# tree from an earlier `make deb` is not source, and a tarball carrying one
-# would build a package containing the last build's output.
-DIST = $(NAME)-$(VERSION)
+# assets/luts is not named here even though install-common creates it and the
+# spec ships it: it is an empty directory for LUTs somebody drops in, so there
+# has never been anything in the tree to put in the tarball. Naming it made
+# tar report a missing file on every `make dist` -- harmlessly, because the
+# pipe swallows the status, which is the only reason it went unnoticed.
+#
+# $(PKGDIR) goes in whole, spec and debian/ together, because both packagings
+# are built from this tarball and each needs its own half of it. Nothing has
+# to be excluded from it any more: a build never writes there. It writes into
+# $(BUILDDIR), which is not in the tarball at all.
+DIST    = $(NAME)-$(VERSION)
+TARBALL = $(BUILDDIR)/$(DIST).tar.gz
 
 dist: check-licenses
-	rm -rf $(DIST) $(DIST).tar.gz
-	mkdir -p $(DIST)
+	rm -rf $(BUILDDIR)/$(DIST) $(TARBALL)
+	mkdir -p $(BUILDDIR)/$(DIST)
 	tar -cf - \
 	    --exclude='*.bak' --exclude='*.tdy' \
 	    --exclude='*.ERR' --exclude='*.LOG' \
-	    --exclude='debian/.debhelper' --exclude='debian/files' \
-	    --exclude='debian/tmp' --exclude='debian/*.substvars' \
-	    --exclude='debian/*.debhelper.log' \
-	    --exclude='debian/debhelper-build-stamp' \
-	    --exclude='debian/$(NAME)' --exclude='debian/$(NAME)-gui' \
-	    --exclude='debian/$(NAME)-fonts-extra' \
-	    bin lib presets t Makefile README.md LICENSE debian \
-	    assets/artwork assets/luts $(FONT_DIRS) $(EXTRA_FONT_DIRS) \
-	    $(NAME).spec $(NAME).desktop $(NAME).metainfo.xml \
+	    bin lib presets t Makefile README.md LICENSE $(PKGDIR) \
+	    assets/artwork $(FONT_DIRS) $(EXTRA_FONT_DIRS) \
 	    .perlcriticrc .perltidyrc \
-	  | tar -xf - -C $(DIST)
-	tar -czf $(DIST).tar.gz $(DIST)
-	rm -rf $(DIST)
-	@echo "$(DIST).tar.gz"
+	  | tar -xf - -C $(BUILDDIR)/$(DIST)
+	tar -czf $(TARBALL) -C $(BUILDDIR) $(DIST)
+	rm -rf $(BUILDDIR)/$(DIST)
+	@echo "$(TARBALL)"
 
 # ---------------------------------------------------------------------------
 # The RPM packages
@@ -369,11 +380,17 @@ dist: check-licenses
 # rather than a package that is missing something nobody notices until it is
 # installed. It is the same reason `make deb` runs the test suite.
 #
-# Everything lands under $(RPMTOPDIR), which defaults to where rpmbuild would
-# have put it anyway. Overriding it is how to build without touching $$HOME:
+# Everything lands under $(RPMTOPDIR), which is inside $(BUILDDIR) rather than
+# in $$HOME: a build of this tree should not write outside this tree, and
+# `make clean` should be able to undo it. Point it at ~/rpmbuild if the
+# habitual location is wanted:
 #
-#     make rpm RPMTOPDIR=$$PWD/build-rpm
-RPMTOPDIR ?= $(HOME)/rpmbuild
+#     make rpm RPMTOPDIR=$$HOME/rpmbuild
+#
+# It is made absolute because rpmbuild's %_topdir will not accept a relative
+# path -- it resolves it against wherever rpmbuild happens to chdir to, which
+# is not here.
+RPMTOPDIR ?= $(CURDIR)/$(BUILDDIR)/rpmbuild
 RPMBUILD  ?= rpmbuild
 
 # Extra macro definitions, and extra rpmbuild flags. Two variables rather than
@@ -424,7 +441,7 @@ rpm-tools:
 	esac
 
 srpm: dist rpm-tools
-	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -ts $(DIST).tar.gz
+	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -ts $(TARBALL)
 	@echo "Built:"
 	@ls -1 $(RPMTOPDIR)/SRPMS/$(NAME)-$(VERSION)-*.src.rpm 2>/dev/null \
 	    | sed 's/^/  /' || true
@@ -433,7 +450,7 @@ srpm: dist rpm-tools
 # build service would do it.
 #
 # This needs every BuildRequires the spec names, which rpmbuild checks before
-# it starts. `sudo dnf builddep $(NAME).spec` installs them, and is not run
+# it starts. `sudo dnf builddep $(PKGDIR)/$(NAME).spec` installs them, and is not run
 # from here: a Makefile target that acquires root to install packages is not
 # something to have happen because somebody typed `make rpm`. For a quick
 # local build without them:
@@ -443,10 +460,10 @@ srpm: dist rpm-tools
 # which skips the dependency check and the %check section -- and therefore
 # skips the test suite, so it proves the packaging and not the program.
 rpm: dist rpm-tools
-	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -tb $(DIST).tar.gz
+	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -tb $(TARBALL)
 	@echo "Built:"
 	@find $(RPMTOPDIR)/RPMS -name '$(NAME)*-$(VERSION)-*.rpm' \
-	    -newer $(DIST).tar.gz -printf '  %p\n' 2>/dev/null || true
+	    -newer $(TARBALL) -printf '  %p\n' 2>/dev/null || true
 
 # Both, which is what a release actually needs: the source package to hand to
 # a build service and the binaries to try before doing so.
@@ -455,22 +472,45 @@ rpms: srpm rpm
 # ---------------------------------------------------------------------------
 # The Debian packages
 #
-# Built in place rather than from the tarball, because debian/ is in the tree
-# and dpkg-buildpackage wants to be run from the top of a source directory --
-# which this is. The .deb files land in the parent directory, which is where
-# dpkg-buildpackage puts them and not something worth arguing with.
+# Built from the tarball, like the RPMs, because debian/ no longer sits at the
+# top of this tree -- it is in $(PKGDIR) with the spec, and dpkg-buildpackage
+# insists on being run from a directory that has debian/ directly beneath it.
+# Unpacking the tarball into $(BUILDDIR) and moving $(PKGDIR)/debian into place
+# gives it exactly that.
+#
+# This is the arrangement the RPM side already had, and it buys the same
+# thing: a file `make dist` failed to include is a build failure here rather
+# than a package quietly missing something. It also means a build writes
+# nothing into the source tree at all -- the staging directories, the
+# substvars and the .debhelper logs all land under $(BUILDDIR) and go with
+# `make clean`, so there is nothing left for .gitignore to name.
 #
 # -b for binary only: there is no signed source upload to make here, and the
-# three .deb files are what anybody asking for `make deb` wants.
-deb:
+# three .deb files are what anybody asking for `make deb` wants. They land
+# beside the unpacked tree, which is to say in $(BUILDDIR).
+#
+# DPKGFLAGS is the counterpart of RPMFLAGS, and exists for the same one case:
+#
+#     make deb DPKGFLAGS=-d
+#
+# -d skips dpkg-checkbuilddeps, which is what a machine with debhelper
+# unpacked somewhere other than / needs -- the tools are on PATH but no
+# debhelper-compat is registered with dpkg, so the check refuses a build that
+# then works perfectly.
+DPKGFLAGS ?=
+
+deb: dist
 	@command -v dpkg-buildpackage >/dev/null \
 	    || { echo "deb: dpkg-dev is not installed" >&2; exit 1; }
 	@command -v dh >/dev/null \
 	    || { echo "deb: debhelper is not installed" >&2; exit 1; }
-	dpkg-buildpackage -us -uc -b
+	rm -rf $(BUILDDIR)/$(DIST)
+	tar -xzf $(TARBALL) -C $(BUILDDIR)
+	mv $(BUILDDIR)/$(DIST)/$(PKGDIR)/debian $(BUILDDIR)/$(DIST)/debian
+	cd $(BUILDDIR)/$(DIST) && dpkg-buildpackage -us -uc -b $(DPKGFLAGS)
 	@echo
-	@echo "Built in $$(cd .. && pwd):"
-	@ls -1 ../$(NAME)*_$(VERSION)-*_all.deb 2>/dev/null || true
+	@echo "Built in $(BUILDDIR):"
+	@ls -1 $(BUILDDIR)/$(NAME)*_$(VERSION)-*_all.deb 2>/dev/null || true
 
 uninstall:
 	rm -f  $(addprefix $(DESTDIR)$(BINDIR)/,$(SCRIPTS))
@@ -481,8 +521,12 @@ uninstall:
 	rm -f  $(DESTDIR)$(METAINFODIR)/$(NAME).metainfo.xml
 	rm -f  $(DESTDIR)$(ICONDIR)/256x256/apps/$(NAME).png
 
+# $(BUILDDIR) goes whole: the tarball, the unpacked trees both packagings
+# build in, the .deb files and the rpmbuild tree are all inside it, so there
+# is one thing to remove rather than a list to keep in step with the targets
+# that create them.
 clean:
 	rm -f $(MAN1)
 	find . -name '*.bak' -o -name '*.tdy' -o -name '*.ERR' -o -name '*.LOG' \
 	    | xargs -r rm -f
-	rm -rf .prove $(DIST) $(DIST).tar.gz
+	rm -rf .prove $(BUILDDIR)
