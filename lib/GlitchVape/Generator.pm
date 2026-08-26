@@ -2,9 +2,12 @@ package GlitchVape::Generator;
 
 use strict;
 use warnings;
+use utf8;
 
-use GlitchVape::DTMF  ();
-use GlitchVape::Noise ();
+use GlitchVape::DTMF   ();
+use GlitchVape::Geiger ();
+use GlitchVape::Heart  ();
+use GlitchVape::Noise  ();
 
 our $VERSION = '0.01';
 
@@ -45,6 +48,7 @@ my @ORDER;
 
     kind     => 'static'
     label    => 'TV static'
+    icon     => 'audio-speakers-symbolic'     what the interface shows
     summary  => one line
     doc      => paragraph
     params   => hashref in the L<GlitchVape::Registry> parameter shape
@@ -68,6 +72,25 @@ sub register
     $KIND{ $kind } = \%spec;
 
     return $kind;
+}
+
+=head2 icon( $kind )
+
+The icon name for a kind, from its declaration. Declared rather than mapped in
+the interface, because a mapping keyed on kind is exactly the special case
+C<register> exists to avoid -- and there were two copies of it, which had
+begun to disagree.
+
+=cut
+
+sub icon
+{
+    my ( $kind ) = @_;
+    $kind = $_[ 1 ] if ref $kind || ( $kind // q{} ) eq __PACKAGE__;
+
+    my $declared = $KIND{ $kind // q{} } or return 'audio-speakers-symbolic';
+
+    return $declared->{ icon } || 'audio-speakers-symbolic';
 }
 
 =head2 kinds() / get( $kind ) / all()
@@ -328,6 +351,7 @@ sub spec_parts
 __PACKAGE__->register(
     kind    => 'dtmf',
     label   => 'Phone dial tones',
+    icon    => 'call-start-symbolic',
     summary => 'A phrase spelled out in dialpad tones',
     doc     => <<'DOC',
 Text dialled on a phone keypad, multi-tap style. Under a soundtrack it plays
@@ -357,6 +381,7 @@ DOC
 __PACKAGE__->register(
     kind    => 'static',
     label   => 'TV static',
+    icon    => 'audio-speakers-symbolic',
     summary => 'The hiss of a set tuned to nothing',
     doc     => <<'DOC',
 Analogue snow. Pink rather than white, and band-limited to a television's
@@ -378,6 +403,64 @@ DOC
     render => sub {
         my ( %arg ) = @_;
         return GlitchVape::Noise::render( %arg );
+    },
+);
+
+__PACKAGE__->register(
+    kind    => 'geiger',
+    label   => 'Geiger counter',
+    icon    => 'radio-symbolic',
+    summary => 'Ticks, clumping as the source comes and goes',
+    doc     => <<'DOC',
+A Geiger-Müller tube ticking. The gaps between clicks are drawn from the
+exponential distribution radioactive decay actually has, which is what makes
+them clump into bursts and pauses rather than sounding like a metronome with a
+fault -- and the tube's dead time is modelled too, so a strong source
+saturates into a buzz instead of merely ticking faster.
+
+The distance to the source wanders, so the rate rises and falls by the inverse
+square law. It has no natural end: under a soundtrack it simply carries on
+wandering.
+DOC
+    params   => GlitchVape::Geiger::params(),
+    order    => [ GlitchVape::Geiger::param_order() ],
+    duration => \&GlitchVape::Geiger::duration,
+    describe => \&GlitchVape::Geiger::describe,
+    resolve  => sub {
+        my ( $spec ) = @_;
+        return resolve_params( GlitchVape::Geiger::params(), $spec );
+    },
+    render => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Geiger::render( %arg );
+    },
+);
+
+__PACKAGE__->register(
+    kind    => 'heart',
+    label   => 'Heartbeat',
+    icon    => 'emote-love-symbolic',
+    summary => 'Lub-dub, wandering the way a real one does',
+    doc     => <<'DOC',
+Two valve closures a beat, and the gap between them is shorter than the gap to
+the next beat -- which is the difference between a heartbeat and a drum loop.
+As the rate rises it is the pause that disappears rather than both gaps
+shrinking together, which is why a fast one sounds urgent.
+
+The rate wanders within a ceiling you set, at a pace you set, and stays
+irregular at either extreme. It has no natural end.
+DOC
+    params   => GlitchVape::Heart::params(),
+    order    => [ GlitchVape::Heart::param_order() ],
+    duration => \&GlitchVape::Heart::duration,
+    describe => \&GlitchVape::Heart::describe,
+    resolve  => sub {
+        my ( $spec ) = @_;
+        return resolve_params( GlitchVape::Heart::params(), $spec );
+    },
+    render => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Heart::render( %arg );
     },
 );
 

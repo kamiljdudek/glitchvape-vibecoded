@@ -378,7 +378,7 @@ sub _placeholder
 
     my $label = Gtk3::Label->new;
     $label->set_markup( "<span size='large'>No preview yet</span>\n"
-            . "<span alpha='60%'>Open an image, choose a preset, "
+            . "<span alpha='60%'>Open an image, add some effects, "
             . 'and press Apply</span>' );
     $label->set_justify( 'center' );
 

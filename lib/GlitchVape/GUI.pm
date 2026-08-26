@@ -379,8 +379,10 @@ sub _build_header
             return;
         }
     );
-    $bar->pack_end( $export );
+    # pack_end fills from the right, so the first packed sits outermost: the
+    # menu is hard against the window controls and Export is inboard of it.
     $bar->pack_end( $self->_build_menu );
+    $bar->pack_end( $export );
 
     $self->{ header }   = $bar;
     $self->{ b_undo }   = $undo;
@@ -505,9 +507,25 @@ sub _build_left
 }
 
 # The effects in the pipeline, which is what Apply renders.
+#
+# Two faces, like the soundtrack page: the list, and -- when the pipeline is
+# empty -- a line saying how to fill it. An empty pane with a heading over
+# nothing does not say whether there is something to do or something wrong.
 sub _build_image_page
 {
     my ( $self ) = @_;
+
+    my $stack = Gtk3::Stack->new;
+    $stack->set_transition_type( 'crossfade' );
+    $stack->set_transition_duration( 120 );
+
+    $stack->add_named(
+        _empty_page(
+            'applications-graphics-symbolic',
+            "Use the '+' button to add effects or apply a preset."
+        ),
+        'empty'
+    );
 
     my $scroll = Gtk3::ScrolledWindow->new;
     $scroll->set_policy( 'never', 'automatic' );
@@ -553,8 +571,41 @@ sub _build_image_page
     $box->pack_start( $list, 0, 0, 0 );
 
     $scroll->add( $box );
+    $stack->add_named( $scroll, 'ready' );
 
-    return $scroll;
+    $self->{ effect_stack } = $stack;
+
+    return $stack;
+}
+
+# The empty face of either page: an icon over a line of explanation, centred.
+#
+# One helper because the two pages are saying the same kind of thing -- what
+# this pane would hold, and what to do about it being empty -- and two
+# hand-built columns would drift apart in spacing the first time either was
+# touched.
+sub _empty_page
+{
+    my ( $icon_name, $text ) = @_;
+
+    my $box = Gtk3::Box->new( 'vertical', 12 );
+    $box->set_halign( 'center' );
+    $box->set_valign( 'center' );
+    $box->set_border_width( 24 );
+
+    my $icon = Gtk3::Image->new_from_icon_name( $icon_name, 'dialog' );
+    $icon->get_style_context->add_class( 'dim-label' );
+
+    my $label = Gtk3::Label->new( $text );
+    $label->set_line_wrap( 1 );
+    $label->set_justify( 'center' );
+    $label->set_max_width_chars( 28 );
+    $label->get_style_context->add_class( 'dim-label' );
+
+    $box->pack_start( $icon,  0, 0, 0 );
+    $box->pack_start( $label, 0, 0, 0 );
+
+    return $box;
 }
 
 # The actions belonging to the pipeline above, in a Gtk3::ActionBar.
@@ -875,8 +926,23 @@ sub _build_soundtrack_page
     $stack->set_transition_type( 'crossfade' );
     $stack->set_transition_duration( 120 );
 
-    $stack->add_named( $self->_build_soundtrack_placeholder,
-        'needs-animation' );
+    # The icon is the same one a track carries in the list, so the empty page
+    # and the full one are visibly about the same thing.
+    $stack->add_named(
+        _empty_page(
+            'audio-x-generic-symbolic',
+            'You must enable video animation if you want to add the sound.'
+        ),
+        'needs-animation'
+    );
+
+    $stack->add_named(
+        _empty_page(
+            'audio-x-generic-symbolic',
+            "Use the '+' button to add a soundtrack."
+        ),
+        'empty'
+    );
 
     my $box = Gtk3::Box->new( 'vertical', 12 );
     $box->set_border_width( 12 );
@@ -914,36 +980,6 @@ sub _build_soundtrack_page
     $self->{ audio_stack } = $stack;
 
     return $stack;
-}
-
-# What the page shows when there is no animation to put a soundtrack on.
-#
-# The icon is the same one a track carries in the list below, so the empty
-# page and the full one are visibly about the same thing.
-sub _build_soundtrack_placeholder
-{
-    my ( $self ) = @_;
-
-    my $box = Gtk3::Box->new( 'vertical', 12 );
-    $box->set_halign( 'center' );
-    $box->set_valign( 'center' );
-    $box->set_border_width( 24 );
-
-    my $icon =
-        Gtk3::Image->new_from_icon_name( 'audio-x-generic-symbolic', 'dialog' );
-    $icon->get_style_context->add_class( 'dim-label' );
-
-    my $text = Gtk3::Label->new(
-        'You must enable video animation if you want to add the sound.' );
-    $text->set_line_wrap( 1 );
-    $text->set_justify( 'center' );
-    $text->set_max_width_chars( 28 );
-    $text->get_style_context->add_class( 'dim-label' );
-
-    $box->pack_start( $icon, 0, 0, 0 );
-    $box->pack_start( $text, 0, 0, 0 );
-
-    return $box;
 }
 
 # What the Add button offers while the Soundtrack page is showing: the one
@@ -1006,7 +1042,7 @@ sub _build_add_track_popover
 
         $box->pack_start(
             $self->_popover_row(
-                _generated_icon( $kind ),
+                GlitchVape::Generator::icon( $kind ),
                 $declared->{ label },
                 $declared->{ summary },
                 sub {
@@ -1063,16 +1099,6 @@ sub _popover_row
     return $button;
 }
 
-# The same icons the track rows use, so a line in the popover and the line it
-# produces are recognisably the same thing.
-sub _generated_icon
-{
-    my ( $kind ) = @_;
-
-    return 'call-start-symbolic' if $kind eq 'dtmf';
-    return 'audio-speakers-symbolic';
-}
-
 # One line per thing in the soundtrack: the file if there is one, then each
 # generated track in the order it will be described.
 sub _rebuild_audio_rows
@@ -1104,12 +1130,9 @@ sub _rebuild_audio_rows
     {
         my $index = $n;
 
-        my $icon = 'audio-speakers-symbolic';
-        $icon = 'call-start-symbolic' if $made[ $n ]{ kind } eq 'dtmf';
-
         $self->{ audio_list }->add(
             $self->_audio_row(
-                $icon,
+                GlitchVape::Generator::icon( $made[ $n ]{ kind } ),
                 GlitchVape::Generator::describe( $made[ $n ] ),
                 'Reopen this generated track',
                 sub { return $self->_edit_generated( $index ) },
@@ -3023,13 +3046,33 @@ sub _sync_actions
     $self->{ m_seed }->set_sensitive( $have );
     $self->{ b_apply }->set_sensitive( $have );
 
+    # The effect page says how to fill itself while there is nothing in it.
+    # Driven from the state rather than from the row count so that it is
+    # right before the first _rebuild_effects has run.
+    my $has_effects = $have && scalar( $self->{ state }->effect_names );
+    $self->{ effect_stack }
+        ->set_visible_child_name( $has_effects ? 'ready' : 'empty' );
+
     my $animated = $self->{ animate };
 
-    # The soundtrack page says why it is empty rather than emptying. Nothing
-    # is cleared here -- $self->{audio} is untouched -- so a mix put together
-    # with Animate on is still there after switching it off and on again.
-    $self->{ audio_stack }
-        ->set_visible_child_name( $animated ? 'ready' : 'needs-animation' );
+    # Three faces, because there are three things the page can be saying.
+    # Without an animation it explains what it is waiting for; with one and
+    # nothing in it, how to fill it; otherwise it shows the mix.
+    #
+    # Nothing is cleared here -- $self->{audio} is untouched -- so a mix put
+    # together with Animate on is still there after switching it off and on
+    # again, and the page goes straight back to 'ready'.
+    my $has_tracks =
+        GlitchVape::Audio::has_file( $self->{ audio } )
+        || scalar GlitchVape::Audio::generated( $self->{ audio } );
+
+    my $page = 'needs-animation';
+    if ( $animated )
+    {
+        $page = $has_tracks ? 'ready' : 'empty';
+    }
+
+    $self->{ audio_stack }->set_visible_child_name( $page );
 
     # One button, two meanings, so it says which one it currently has. On the
     # soundtrack page with no animation to carry a track it is not an action
