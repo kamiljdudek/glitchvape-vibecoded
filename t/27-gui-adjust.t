@@ -23,9 +23,10 @@ use GlitchVape::GUI ();
 
 local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 
-# One effect's settings, in a window of its own. The properties pinned here
-# are the ones that make several of them usable at once -- which is the whole
-# reason the parameters left the list.
+# One effect's settings, in a popover hung off the Adjust button. What is
+# pinned here is the behaviour that makes a popover workable in a program
+# whose rendering is an explicit Apply: it follows the selection, and it does
+# not dismiss itself.
 
 my $gui = GlitchVape::GUI->new;
 $gui->{ window }->show_all;
@@ -42,6 +43,29 @@ sub rows_of
 {
     my ( $list ) = @_;
     return map { $_->{ effect } } $list->get_children;
+}
+
+# Select an effect and make sure the popover is showing it. Adjust is a
+# toggle, so pressing it blindly closes a popover that is already up.
+sub open_on
+{
+    my ( $name ) = @_;
+
+    select_effect( $name );
+    $gui->_adjust_selected unless $gui->{ adjust } && $gui->{ adjust }->visible;
+
+    return;
+}
+
+sub select_effect
+{
+    my ( $name ) = @_;
+
+    my ( $row ) =
+        grep { $_->{ effect } eq $name } $gui->{ effect_list }->get_children;
+    $gui->{ effect_list }->select_row( $row );
+
+    return $row;
 }
 
 # ---------------------------------------------------------------------------
@@ -64,46 +88,79 @@ sub rows_of
     ok !$gui->{ b_adjust }->get_sensitive,
         'Adjust is not an action while no row is selected';
 
-    my ( $row ) = $gui->{ effect_list }->get_children;
-    $gui->{ effect_list }->select_row( $row );
+    select_effect( 'scanlines' );
     $gui->_sync_actions;
 
     ok $gui->{ b_adjust }->get_sensitive, 'and becomes one once a row is';
 }
 
 # ---------------------------------------------------------------------------
-# Several may be open at once
+# It is a popover, and it is not modal
 
-# The reason these are not modal: deciding how much chroma_shift answers this
-# much scanlines means having both sets of controls in front of you.
+# Rendering is an explicit Apply, so a modal popover would close the moment
+# Apply was pressed and have to be reopened for every single render.
 
 {
-    $gui->_adjust_effect( 'scanlines' );
-    $gui->_adjust_effect( 'vignette' );
+    $gui->_adjust_selected;
 
-    is scalar( keys %{ $gui->{ adjust } } ), 2,
-        'two effects can have their settings open at the same time';
+    my $adjust = $gui->{ adjust };
+    ok $adjust, 'pressing Adjust builds the popover';
 
-    for my $name ( 'scanlines', 'vignette' )
-    {
-        my $window = $gui->{ adjust }{ $name }->window;
-        ok $window,             "$name has a window";
-        ok !$window->get_modal, "and the $name window is not modal";
-        is $window->get_transient_for, $gui->{ window },
-            "but does belong to the main window";
-    }
+    isa_ok $adjust->popover, 'Gtk3::Popover', 'what it shows';
+
+    ok !$adjust->popover->get_modal,
+        'which is not modal, so an Apply does not dismiss it';
+
+    is $adjust->popover->get_relative_to, $gui->{ b_adjust },
+        'and is hung off the button that opened it';
+
+    is $adjust->popover->get_position, 'top',
+        'pointing upwards, since Adjust is at the foot of the pane';
+
+    ok $adjust->visible, 'it is up';
+    is $adjust->effect, 'scanlines', 'showing the selected effect';
 }
 
-# Asking twice raises the window that is open rather than stacking a second
-# copy: two windows writing the same parameters would disagree the moment
-# either was touched.
+# Pressing Adjust again puts it away. Without this there would be no way to
+# dismiss it with the control that summoned it, a non-modal popover not
+# closing itself.
 {
-    my $before = $gui->{ adjust }{ scanlines };
-    $gui->_adjust_effect( 'scanlines' );
+    $gui->_adjust_selected;
 
-    is $gui->{ adjust }{ scanlines }, $before,
-        'asking again reuses the window rather than opening a second';
-    is scalar( keys %{ $gui->{ adjust } } ), 2, 'so the count does not grow';
+    ok !$gui->{ adjust }->visible, 'pressing Adjust again puts it away';
+    is $gui->{ adjust }->effect, undef, 'and it is showing nothing';
+}
+
+# ---------------------------------------------------------------------------
+# It follows the selection
+
+{
+    select_effect( 'scanlines' );
+    $gui->_adjust_selected;
+
+    is $gui->{ adjust }->effect, 'scanlines', 'open on scanlines';
+
+    select_effect( 'vignette' );
+
+    is $gui->{ adjust }->effect, 'vignette',
+        'selecting another row moves the popover to it';
+    ok $gui->{ adjust }->visible, 'without closing it';
+
+    # Nothing selected is nothing to show.
+    $gui->{ effect_list }->unselect_all;
+
+    ok !$gui->{ adjust }->visible, 'and clearing the selection puts it away';
+}
+
+# While it is closed, moving the selection does not open it: the popover is
+# summoned, not sprung.
+{
+    ok !$gui->{ adjust }->visible, 'the popover is closed';
+
+    select_effect( 'scanlines' );
+
+    ok !$gui->{ adjust }->visible,
+        'selecting a row while it is closed leaves it closed';
 }
 
 # ---------------------------------------------------------------------------
@@ -113,20 +170,21 @@ sub rows_of
 # count being told as being set, or the two answer each other forever.
 
 {
-    my $window = $gui->{ adjust }{ scanlines };
-    my $check  = $gui->{ rows }{ scanlines }{ check };
+    open_on( 'scanlines' );
+
+    my $check = $gui->{ rows }{ scanlines }{ check };
 
     ok $check->get_active, 'a new effect starts enabled on its row';
-    ok $window->{ switch }->get_active, 'and on its switch';
+    ok $gui->{ adjust }{ switch }->get_active, 'and on the popover switch';
 
     $check->set_active( 0 );
 
     ok !$gui->{ state }->enabled( 'scanlines' ),
         'unticking the row disables the effect';
-    ok !$window->{ switch }->get_active,
-        'and moves the switch in the open window with it';
+    ok !$gui->{ adjust }{ switch }->get_active,
+        'and moves the switch with it, the popover showing that effect';
 
-    $window->{ switch }->set_active( 1 );
+    $gui->{ adjust }{ switch }->set_active( 1 );
 
     ok $gui->{ state }->enabled( 'scanlines' ),
         'and the switch enables it again';
@@ -134,59 +192,47 @@ sub rows_of
 }
 
 # ---------------------------------------------------------------------------
-# Removing an effect closes the window describing it
+# Removing the effect it is showing closes it
 
-# A settings window for something no longer in the pipeline would write to
+# A popover left describing something no longer in the pipeline would write to
 # state that is not there.
 
 {
-    my $window = $gui->{ adjust }{ vignette }->window;
-    ok $window, 'vignette has an open window';
+    open_on( 'vignette' );
+    is $gui->{ adjust }->effect, 'vignette', 'showing vignette';
 
     # Taken out of the state directly, so what is being tested is that
-    # rebuilding the list notices the orphan by itself -- a preset or an undo
-    # removes effects without going anywhere near the row's minus button.
+    # rebuilding the list notices by itself -- a preset or an undo removes
+    # effects without going anywhere near the row's minus button.
     $gui->{ state }->remove_effect( 'vignette' );
     $gui->_rebuild_effects;
 
-    ok !$gui->{ adjust }{ vignette },
-        'removing the effect leaves no window behind';
+    ok !$gui->{ adjust }->visible,
+        'removing the effect it was showing closes the popover';
 
     is_deeply [ rows_of( $gui->{ effect_list } ) ], [ 'scanlines' ],
         'and the row goes with it';
-
-    ok $gui->{ adjust }{ scanlines }, 'while the other window is left alone';
 }
 
-# The same holds when the removal comes from the row's own minus button,
-# which is the way it actually happens.
+# Removing a different effect leaves it alone.
 {
     $gui->{ state }->add_effect( 'grain' );
     $gui->_rebuild_effects;
-    $gui->_adjust_effect( 'grain' );
 
-    ok $gui->{ adjust }{ grain }, 'grain has an open window';
+    open_on( 'scanlines' );
+    ok $gui->{ adjust }->visible, 'the popover is showing scanlines';
 
-    # The minus button is the last child of the row's box.
-    my ( $row ) =
-        grep { $_->{ effect } eq 'grain' } $gui->{ effect_list }->get_children;
-    my ( $box ) = $row->get_children;
-    my ( $remove ) =
-        grep { $_->isa( 'Gtk3::Button' ) && !$_->isa( 'Gtk3::CheckButton' ) }
-        $box->get_children;
+    $gui->{ state }->remove_effect( 'grain' );
+    $gui->_rebuild_effects;
 
-    $remove->clicked;
-
-    ok !$gui->{ adjust }{ grain },
-        'pressing the minus on the row closes its settings window too';
-    ok !grep( { $_ eq 'grain' } rows_of( $gui->{ effect_list } ) ),
-        'and takes the effect out of the pipeline';
+    ok $gui->{ adjust }->visible, 'removing a different effect leaves it up';
+    is $gui->{ adjust }->effect, 'scanlines', 'still on the same one';
 }
 
 # ---------------------------------------------------------------------------
-# An open window follows an undo
+# It survives an undo, showing what the state now holds
 
-# Undo steps over whole configurations, so a window built against the old one
+# Undo steps over whole configurations, so a popover built against the old one
 # is showing values that are no longer set.
 
 {
@@ -200,115 +246,104 @@ sub rows_of
 
     is $state->param( 'scanlines', 'opacity' ), 0.1, 'the later value is set';
 
-    # The state is undone and the widgets reloaded directly, rather than
-    # through _step_history: that would also start a render, and there is no
-    # real picture behind this state to render.
+    # Undone and the widgets reloaded directly rather than through
+    # _step_history: that would also start a render, and there is no real
+    # picture behind this state to render.
     $state->undo;
     $gui->_reload_widgets;
 
     is $state->param( 'scanlines', 'opacity' ), 0.9,
         'undo puts the earlier one back';
 
-    ok $gui->{ adjust }{ scanlines },
-        'and the settings window is still open across it';
+    ok $gui->{ adjust }->visible, 'and the popover is still open across it';
+    is $gui->{ adjust }->effect, 'scanlines', 'on the same effect';
 }
 
 # ---------------------------------------------------------------------------
-# Closing a window forgets it, so the next ask opens a fresh one
+# Adjust acts on whichever list is showing
+
+# One gesture for both pages: select a row, press the cog. The soundtrack
+# keeps its dialogs -- a track has a real Cancel and building one is a
+# decision you can back out of, which moving a slider is not -- so what the
+# cog opens there is a wizard rather than a popover.
 
 {
-    my $window = $gui->{ adjust }{ scanlines };
-    $window->window->destroy;
-
-    ok !$gui->{ adjust }{ scanlines },
-        'a window closed by the user is dropped from the register';
-
-    $gui->_adjust_effect( 'scanlines' );
-
-    ok $gui->{ adjust }{ scanlines }, 'and asking again opens a new one';
-    isnt $gui->{ adjust }{ scanlines }, $window, 'which is not the old one';
-}
-
-# ---------------------------------------------------------------------------
-# Switching page drops the effect selection
-
-# The Adjust button acts on it and only the Image page has effects to act on,
-# so a selection kept across the switch would be a button pointing at
-# something not on screen.
-
-{
-    $gui->{ left_stack }->set_visible_child_name( 'image' );
-
-    my ( $row ) = $gui->{ effect_list }->get_children;
-    $gui->{ effect_list }->select_row( $row );
-    $gui->_sync_actions;
-
-    ok defined $gui->_selected_effect,
-        'an effect is selected on the Image page';
-    ok $gui->{ b_adjust }->get_sensitive, 'so Adjust is an action';
+    $gui->{ animate } = 1;
+    $gui->{ audio } =
+        { generated => [ { kind => 'heart', bpm => 70, seconds => 20 } ] };
 
     $gui->{ left_stack }->set_visible_child_name( 'soundtrack' );
+    $gui->{ audio_list }->unselect_all;
+    $gui->_sync_actions;
 
-    ok !defined $gui->_selected_effect,
-        'switching to Soundtrack drops the selection';
-    ok !$gui->{ b_adjust }->get_sensitive, 'and Adjust stops being an action';
+    ok !$gui->{ adjust }->visible,
+        'leaving the effect page puts the popover away';
 
-    # Lost, not remembered: coming back to a row still highlighted from
-    # several minutes ago invites adjusting the wrong effect.
+    ok !$gui->{ b_adjust }->get_sensitive,
+        'and with no track selected Adjust is not an action';
+
+    my ( $row ) = $gui->{ audio_list }->get_children;
+    ok $row, 'the mix has a track in it';
+
+    $gui->{ audio_list }->select_row( $row );
+    $gui->_sync_actions;
+
+    ok $gui->{ b_adjust }->get_sensitive,
+        'selecting a track makes Adjust an action again';
+
+    like $gui->{ b_adjust }->get_tooltip_text, qr/track/i,
+        'and it says it will reopen the track';
+
+    # The row carries the way back into whatever built it, which is what
+    # Adjust presses now that the rows have no Edit button of their own.
+    ok $row->{ edit }, 'the row knows how to reopen its wizard';
+
+    my ( $box ) = $row->get_children;
+    my @buttons = grep { $_->isa( 'Gtk3::Button' ) } $box->get_children;
+
+    is scalar @buttons, 1,
+        'and carries one button, the minus, having lost its Edit';
+
+    $gui->{ audio }   = undef;
+    $gui->{ animate } = 0;
     $gui->{ left_stack }->set_visible_child_name( 'image' );
-
-    ok !defined $gui->_selected_effect, 'and coming back does not put it back';
-    ok !$gui->{ b_adjust }->get_sensitive, 'so Adjust is still waiting';
+    $gui->_sync_actions;
 }
 
 # ---------------------------------------------------------------------------
-# Add is gated on there being an animation to carry a track
+# Selecting a track does not rebuild the list underneath itself
+
+# _sync_actions rebuilds the track rows, and it runs on every selection
+# change: without a guard, selecting a row destroys that row from inside its
+# own signal handler and the list draws widgets it no longer holds.
 
 {
+    $gui->{ animate } = 1;
+    $gui->{ audio }   = {
+        generated => [
+            { kind => 'heart',  bpm      => 70, seconds => 20 },
+            { kind => 'geiger', strength => 60, seconds => 20 },
+        ]
+    };
+
     $gui->{ left_stack }->set_visible_child_name( 'soundtrack' );
-    $gui->{ b_animate }->set_active( 0 );
     $gui->_sync_actions;
 
-    ok !$gui->{ b_add }->get_sensitive,
-        'with no animation, Add on the Soundtrack page is not an action';
+    my @before = $gui->{ audio_list }->get_children;
+    is scalar @before, 2, 'two tracks, two rows';
 
-    $gui->{ b_animate }->set_active( 1 );
-
-    ok $gui->{ b_add }->get_sensitive, 'and becomes one once Animate is on';
-}
-
-# ---------------------------------------------------------------------------
-# The Add popover offers the file once, and the generators always
-
-# There is one cropped file at most; generated tracks stack.
-
-{
-    $gui->_add_to_current_page;
-
-    my $popover = $gui->{ add_track_popover };
-    ok $popover, 'pressing Add on the Soundtrack page builds a popover';
-
-    is $popover->get_relative_to, $gui->{ b_add },
-        'hung off the Add button that opened it';
-    is $popover->get_position, 'top',
-        'and pointing upwards, since Add is at the foot of the pane';
-
-    ok $gui->{ audio_add_file }->get_visible,
-        'the audio-file line is offered while there is no file in the mix';
-
-    $gui->{ audio } = { path => '/nonexistent/track.mp3' };
+    $gui->{ audio_list }->select_row( $before[ 1 ] );
     $gui->_sync_actions;
 
-    ok !$gui->{ audio_add_file }->get_visible,
-        'and goes away once one has been added';
+    my @after = $gui->{ audio_list }->get_children;
+    is scalar @after, 2, 'still two rows after selecting one';
 
-    # The generated kinds are not gated that way -- as many as you like.
-    my @rows = $gui->{ audio_list }->get_children;
-    is scalar @rows, 1, 'the file has a row in the track list';
-    isa_ok $rows[ 0 ], 'Gtk3::ListBoxRow', 'which';
-    ok $rows[ 0 ]->{ edit }, 'and carries the way to reopen its wizard';
+    ok defined $gui->{ audio_list }->get_selected_row,
+        'and the selection survived';
 
-    $gui->{ audio } = undef;
+    $gui->{ audio }   = undef;
+    $gui->{ animate } = 0;
+    $gui->{ left_stack }->set_visible_child_name( 'image' );
     $gui->_sync_actions;
 }
 

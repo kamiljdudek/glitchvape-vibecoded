@@ -391,7 +391,7 @@ The foot of the pane is an action bar shared by both pages:
 | | |
 |---|---|
 | **+** | adds to whichever page is showing — a popover offers *Single effect…* or *Effects from a preset…* on Image, and the file or a generated kind on Soundtrack |
-| **cog** | opens the settings of the selected effect; double-clicking its row does the same |
+| **cog** | the settings of the selected row — a popover on Image, the track's own wizard on Soundtrack |
 | **camera** | **Animate**: whether the render is a loop or a still |
 | **Apply** | renders it |
 
@@ -412,20 +412,32 @@ would point at something not on screen.
 While a render runs, a spinner sits over the picture rather than in the bar,
 and the picture can still be panned and zoomed under it.
 
-### An effect's settings are a window
+### An effect's settings are a popover
 
 A row says whether an effect is in the render and what it is called. Its
-parameters open in a window of their own — double-click the row, or select it
-and press the cog.
+parameters are in a popover hung off the cog: select a row, press the cog,
+press it again to put the settings away.
 
-Those windows are not modal. Several can be open at once, the main window
-stays usable behind them, and Apply can be pressed without closing any: how
-much `chroma_shift` answers this much `scanlines` is a question you can only
-settle with both sets of controls in front of you. Each carries the effect's
-summary, its identifier, and a switch for whether it is in the render — the
-same fact as the row's checkbox, and the two move together. Removing an effect
-closes the window describing it, and an undo or a fresh preset rebuilds what
-the open ones show.
+A popover rather than a window because there is no OK here and no Cancel — a
+control writes to the state the moment it moves. A window with a title bar and
+no confirming buttons looks like a dialog and behaves like a panel, and people
+go looking for the button that commits the change; the only one there is Apply,
+which belongs to the whole pipeline.
+
+It is deliberately **not** modal, which is not a popover's default. Rendering
+here is an explicit Apply, so one that closed the moment anything else was
+clicked would have to be reopened after every render. Left non-modal it stays
+up across an Apply, and it follows the selection: click another row and it
+shows that effect instead.
+
+It carries the effect's summary, its identifier, and a switch for whether it is
+in the render — the same fact as the row's checkbox, and the two move together.
+Removing the effect it is showing closes it, and an undo or a fresh preset
+rebuilds what it shows.
+
+The cost, paid knowingly: one effect at a time. Two sets of controls at once
+is genuinely the better way to decide how much `chroma_shift` answers this
+much `scanlines`.
 
 It is a front end, not a second implementation. The controls are generated
 from the same `register()` declarations that produce the CLI flags and
@@ -619,6 +631,26 @@ previews have been rendered — leaves the settings exactly as they were. Once
 applied, the effect is an ordinary member of the list with no memory of having
 arrived through a wizard.
 
+### Watching a loop render
+
+A still gives a spinner over the picture and nothing else — there is one step
+and it is the whole render. A loop counts: **Frame 7 of 24**, a small bar
+under it, and after a few frames a rough estimate of how much longer.
+
+The estimate ignores the first frame. That one pays for decoding the source,
+which every frame after it reuses, so extrapolating from it alone promises a
+wait half again as long as the one that actually follows — and a figure that
+then falls steadily is worse than no figure at all.
+
+The bar stops short of full when the frames are done and the label changes to
+**Encoding…**, because after the last frame there is still an ffmpeg run, and
+with a soundtrack an audio render before it. Export counts the same way, and
+is the one that benefits: it renders at full size rather than preview size.
+
+The frame is as fine as the counting gets. Inside one is a chain of
+ImageMagick calls, none of which reports progress, so anything more precise
+would be made up.
+
 ### The picture appears when you open it
 
 Opening a file puts the photograph on the screen straight away, with nothing
@@ -692,10 +724,16 @@ what makes the encoding obvious rather than mysterious.
 
 There is one file at most, so that line of the popover goes away once it has
 been used. Generated tracks stack, so theirs never do — add as many as you
-like. The list then holds everything in the mix, each row with its own `Edit…`
-and its own minus, so dropping the music does not take the static with it.
-Double-clicking a row reopens its wizard. Removing is one press with no
-confirmation, because both dialogs are quick to run again.
+like. The list then holds everything in the mix, each row with its own minus,
+so dropping the music does not take the static with it. Selecting a row and
+pressing the cog reopens whatever built it — the same gesture the effects use,
+which is why the rows carry no Edit button of their own. Removing is one press
+with no confirmation, because the wizards are quick to run again.
+
+Those stay dialogs rather than becoming popovers. A generated track has a real
+Cancel and only commits on Add: deciding whether to have a track at all is a
+decision you can back out of, in a way that moving a slider on one you already
+have is not. The audio file is a three-page wizard besides.
 
 ### Mute in preview
 

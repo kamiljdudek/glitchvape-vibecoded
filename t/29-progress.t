@@ -201,8 +201,10 @@ $gui->_sync_actions;
     is $gui->{ spinner_label }->get_text, 'Frame 1 of 8',
         'and counts frames, not the encode that follows them';
 
-    cmp_ok $gui->{ spinner_bar }->get_fraction, '>', 0;
-    cmp_ok $gui->{ spinner_bar }->get_fraction, '<', 1;
+    cmp_ok $gui->{ spinner_bar }->get_fraction, '>', 0,
+        'with the bar off its starting mark';
+    cmp_ok $gui->{ spinner_bar }->get_fraction, '<', 1,
+        'and nowhere near the end on the first frame';
 
     # The frames are done but the ffmpeg run is not. A bar sitting at full
     # through it would be saying the render had finished.

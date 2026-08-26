@@ -233,12 +233,27 @@ says what it does and this says what else was tried.
 
 - **Effect parameters were once inline, in a disclosure per row.** The list
   was then as tall as the settings of everything in it, so a fifteen-effect
-  preset could not be seen at once, and only one effect's controls could be
-  held against the picture at a time. They live in `GUI/Adjust.pm` windows
-  now — non-modal, several at once, closed when their effect is removed.
-  The disclosure itself was hand-built from a toggle and a revealer rather
-  than a `GtkExpander`, for the event-window reason in the list below; that
-  problem went away with the disclosure.
+  preset could not be seen at once. The disclosure itself was hand-built from
+  a toggle and a revealer rather than a `GtkExpander`, for the event-window
+  reason in the list below; that problem went away with the disclosure.
+
+- **Then they were non-modal windows, one per effect.** That bought comparing
+  two effects' controls side by side, and cost honesty: a window with a title
+  bar and no OK or Cancel looks like a dialog and behaves like a panel. They
+  are one popover now — `GUI/Adjust.pm`, hung off the Adjust button, following
+  the list selection. It is deliberately `set_modal(0)`, because Apply is a
+  button here and a modal popover would have to be reopened after every
+  render. Row activation went with the windows, on both lists: selecting is
+  the whole gesture.
+
+  Two things bit while doing it. `popdown()` closes with a transition, so the
+  popover's own `get_visible` lags the decision — `Adjust.pm` keeps the state
+  itself and clears it on the `closed` signal. And rebuilding either list
+  emits `row-selected` on the way through, which without a guard tells the
+  popover nothing is selected and closes it; `_rebuild_audio_rows` had the
+  same problem from the other direction, rebuilding from `_sync_actions` and
+  so destroying a row from inside its own selection handler. It now skips the
+  rebuild unless the mix has actually changed.
 
 - **The soundtrack was under the preview, in a revealer tied to Animate.**
   That put the two halves of one pipeline on opposite sides of the window and
@@ -246,9 +261,12 @@ says what it does and this says what else was tried.
   pane's stack now, and with Animate off it explains what it is waiting for
   instead of vanishing — a tab that disappears teaches nobody what it was for.
 
-- **The soundtrack page had its own pair of Add buttons.** "Add something
-  here" is one action, so it is one button: the action bar's Add serves
-  whichever page is showing, with a popover per page.
+- **The soundtrack page had its own pair of Add buttons, and its rows an
+  Edit button each.** "Add something here" and "open what is selected" are
+  each one action, so each is one button: Add and Adjust both serve whichever
+  page is showing. The soundtrack keeps its *dialogs* — a generated track has
+  a real Cancel and only commits on Add, so the argument that turned the
+  effect settings into a popover does not transfer to it.
 
 - **There was a preset combo above the effect list.** A preset is now one of
   the two things Add offers, because a preset is a set of effects and belongs
@@ -307,6 +325,36 @@ once the rate is high enough for dead time to bind the clicks overlap and no
 onset detector can separate them. The real sub is put back before the
 reproducibility checks — with the recorder in place `pcm()` writes silence,
 and two silent buffers compare equal whatever the seed was.
+
+## Progress is counted in frames
+
+A still is one step and the step is the whole render, so nothing is reported
+and no bar appears. A loop takes long enough to be worth watching, so the
+child counts frames down a pipe opened before the fork, and the parent reads
+it with a `Glib::IO` watch — bytes off a pipe, which is the same thing it
+already does for the error file, and nothing that would have the parent touch
+ImageMagick.
+
+The frame is the smallest honest unit: inside one is a chain of ImageMagick
+calls, none of which reports progress.
+
+Two things are easy to get wrong here and both were:
+
+- **The total is `frames + 1`, and every report in a render must use the same
+  one.** The extra step is the ffmpeg run after the last frame — with a
+  soundtrack, an audio render before that — so a bar reaching full and then
+  sitting there would be saying the render had finished. Reporting `frames` for
+  the loop and `frames + 1` for the encode changes the denominator underneath
+  the bar, which reads as a jump backwards.
+- **A watch that returned 0 has already removed itself.** `_end_progress` runs
+  on every path that finishes with a child, so the callback clears the id when
+  it returns 0 — otherwise the removal is a `GLib-CRITICAL`.
+
+`GlitchVape::render` takes `on_frame` and `on_encode` for the same purpose, so
+the export path reports through the library rather than through a second loop
+in the GUI. The estimate discards the first frame: it pays for decoding the
+source that every later frame reuses, so extrapolating from it promises a wait
+half again as long as the one that follows.
 
 ## Things that have cost time before
 

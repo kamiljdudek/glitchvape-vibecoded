@@ -239,10 +239,10 @@ sub new
         state  => undef,
         rows   => {},
 
-        # Open settings windows, keyed by the effect each describes. Keyed
-        # rather than listed because the question asked of it is always "is
-        # this one already open?" -- see _adjust_effect.
-        adjust       => {},
+        # The settings popover, built on first use because it hangs off a
+        # button that does not exist yet. One of them: see
+        # GlitchVape::GUI::Adjust/WHY A POPOVER AND NOT A WINDOW.
+        adjust       => undef,
         loading      => 0,
         preview_size => 720,
         animate      => 0,
@@ -491,6 +491,11 @@ sub _build_left
     $stack->signal_connect(
         'notify::visible-child-name' => sub {
             $self->{ effect_list }->unselect_all;
+
+            # The popover belongs to a list that is no longer on screen, and
+            # being non-modal it would otherwise stay up over the other page.
+            $self->{ adjust }->popdown if $self->{ adjust };
+
             $self->_sync_actions;
             return;
         }
@@ -541,29 +546,18 @@ sub _build_image_page
     $box->pack_start( $heading, 0, 0, 0 );
 
     # A GtkListBox, so that one effect is *selected* -- which is what the
-    # Adjust button needs and what a column of hand-packed boxes could not
+    # Adjust button acts on and what a column of hand-packed boxes could not
     # express. Rows carry a checkbox and a remove button and nothing else; the
-    # parameters moved out to GlitchVape::GUI::Adjust, where several effects'
-    # worth can be open at once and compared.
+    # parameters are in the Adjust popover, which follows this selection.
     my $list = Gtk3::ListBox->new;
     $list->set_selection_mode( 'single' );
 
-    # Single-click activation would mean browsing the list opened a window per
-    # row passed over. Double-click and Enter activate instead, which is also
-    # what a file manager does with the same widget.
-    $list->set_activate_on_single_click( 0 );
-
-    $list->signal_connect(
-        'row-activated' => sub {
-            my ( undef, $row ) = @_;
-            $self->_adjust_effect( $row->{ effect } ) if $row;
-            return;
-        }
-    );
-
+    # No row activation. Settings are the Adjust button's popover, which
+    # follows the selection -- so selecting is the whole gesture, and a double
+    # click would be a second way to do what one click has already done.
     $list->signal_connect(
         'row-selected' => sub {
-            $self->_sync_actions;
+            $self->_follow_selection;
             return;
         }
     );
@@ -972,12 +966,12 @@ sub _build_soundtrack_page
     # a single click merely selects.
     my $list = Gtk3::ListBox->new;
     $list->set_selection_mode( 'single' );
-    $list->set_activate_on_single_click( 0 );
 
+    # Nothing to activate, as on the effect list: settings are the action
+    # bar's Adjust button, which acts on whichever list is showing.
     $list->signal_connect(
-        'row-activated' => sub {
-            my ( undef, $row ) = @_;
-            $row->{ edit }->() if $row && $row->{ edit };
+        'row-selected' => sub {
+            $self->_sync_actions;
             return;
         }
     );
@@ -1120,9 +1114,31 @@ sub _rebuild_audio_rows
 {
     my ( $self ) = @_;
 
-    $_->destroy for $self->{ audio_list }->get_children;
-
     my $audio = $self->{ audio };
+
+    # Only when the mix has actually changed.
+    #
+    # This is reached from _sync_actions, which runs on every selection
+    # change -- and selecting a row would otherwise destroy that very row
+    # from inside its own signal handler, which leaves the list drawing
+    # widgets it no longer holds. The signature is what the rows would say,
+    # so anything that changes a row changes it.
+    my $signature = join "\n",
+        map { GlitchVape::Generator::describe( $_ ) }
+        GlitchVape::Audio::generated( $audio );
+
+    $signature =
+        GlitchVape::Audio::describe( { %$audio, generated => undef } )
+        . "\n$signature"
+        if GlitchVape::Audio::has_file( $audio );
+
+    return
+        if defined $self->{ audio_signature }
+        && $self->{ audio_signature } eq $signature;
+
+    $self->{ audio_signature } = $signature;
+
+    $_->destroy for $self->{ audio_list }->get_children;
 
     if ( GlitchVape::Audio::has_file( $audio ) )
     {
@@ -1162,12 +1178,8 @@ sub _rebuild_audio_rows
 }
 
 # Shaped like an effect row: what it is on the left, the way to take it out
-# again on the right.
-#
-# It keeps an explicit Edit button, which the effect rows do not need. Adjust
-# in the action bar acts on the effect list only, so double-clicking would
-# otherwise be this list's sole route to a track's settings -- and a route
-# with nothing on screen pointing at it is one most people never find.
+# again on the right, and its settings behind the same Adjust button the
+# effects use. One gesture for both lists -- select, then press the cog.
 sub _audio_row
 {
     my ( $self, $icon, $text, $tip, $edit_with, $remove_with ) = @_;
@@ -1187,17 +1199,7 @@ sub _audio_row
     $label->set_xalign( 0 );
     $label->set_ellipsize( 'middle' );
     $label->set_hexpand( 1 );
-    $label->set_tooltip_text( "$text\n\nDouble-click to edit" );
-
-    my $edit = Gtk3::Button->new_with_label( 'Edit…' );
-    $edit->set_tooltip_text( $tip );
-    $edit->set_valign( 'center' );
-    $edit->signal_connect(
-        clicked => sub {
-            $edit_with->();
-            return;
-        }
-    );
+    $label->set_tooltip_text( $tip );
 
     my $remove =
         _icon_button( 'list-remove-symbolic', 'Remove this from the mix' );
@@ -1212,7 +1214,6 @@ sub _audio_row
 
     $box->pack_start( $image,  0, 0, 0 );
     $box->pack_start( $label,  1, 1, 0 );
-    $box->pack_start( $edit,   0, 0, 0 );
     $box->pack_start( $remove, 0, 0, 0 );
 
     $row->add( $box );
@@ -1323,12 +1324,20 @@ sub _rebuild_effects
     # away from whatever the user was working on.
     my $selected = $self->_selected_effect;
 
+    # Destroying the rows clears the selection, and re-adding them sets it
+    # again -- both of which emit row-selected. Left unguarded the first one
+    # tells the popover that nothing is selected and it closes, so rebuilding
+    # the list for an unrelated reason would put away settings somebody was
+    # in the middle of using.
+    $self->{ rebuilding }++;
+
     $_->destroy for $list->get_children;
     $self->{ rows } = {};
 
     unless ( $self->{ state } )
     {
-        $self->_close_all_adjust;
+        $self->{ rebuilding }--;
+        $self->{ adjust }->popdown if $self->{ adjust };
         return;
     }
 
@@ -1347,21 +1356,12 @@ sub _rebuild_effects
         $list->select_row( $self->{ rows }{ $selected }{ row } );
     }
 
-    # An open settings window for an effect that is no longer in the pipeline
-    # would write to state that is not there, so it goes; the survivors are
-    # rebuilt from the state, because an undo or a preset has just replaced
-    # every value they were showing.
-    for my $name ( sort keys %{ $self->{ adjust } || {} } )
-    {
-        if ( $present{ $name } )
-        {
-            $self->{ adjust }{ $name }->refresh;
-        }
-        else
-        {
-            $self->_close_adjust( $name );
-        }
-    }
+    $self->{ rebuilding }--;
+
+    # The popover is showing values an undo or a preset may have just
+    # replaced, and may be showing an effect that is no longer here at all --
+    # refresh handles both, closing itself in the second case.
+    $self->{ adjust }->refresh if $self->{ adjust };
 
     $self->_sync_actions;
     return;
@@ -1402,11 +1402,12 @@ sub _effect_row
             my $on = $check->get_active ? 1 : 0;
             $state->enabled( $name, $on );
 
-            # The same fact is on the switch in that effect's settings window
-            # if one is open, and it has to move with this.
-            if ( my $window = $self->{ adjust }{ $name } )
+            # The same fact is on the switch in the popover, when the popover
+            # happens to be showing this effect.
+            my $adjust = $self->{ adjust };
+            if ( $adjust && ( $adjust->effect // q{} ) eq $name )
             {
-                $window->set_enabled( $on );
+                $adjust->set_enabled( $on );
             }
 
             $self->_touch;
@@ -1434,7 +1435,7 @@ sub _effect_row
 
     my $stage = GlitchVape::Registry->stage_info( $spec->{ stage } );
     $label->set_tooltip_text(
-        sprintf "%s\n%s stage\n\nDouble-click to adjust",
+        sprintf "%s\n%s stage",
         $spec->{ summary },
         $stage->{ title }
     );
@@ -1446,10 +1447,8 @@ sub _effect_row
     $remove->signal_connect(
         clicked => sub {
 
-            # Before the state loses it, because closing is keyed on the name
-            # and the window would otherwise be left describing nothing.
-            $self->_close_adjust( $name );
-
+            # _rebuild_effects refreshes the popover, which closes itself if
+            # this was the effect it had been showing.
             $self->{ state }->remove_effect( $name );
             $self->_rebuild_effects;
             $self->_touch;
@@ -1469,7 +1468,7 @@ sub _effect_row
 }
 
 # ---------------------------------------------------------------------------
-# Settings windows
+# The settings popover
 
 # The effect whose row is selected, or undef.
 sub _selected_effect
@@ -1480,42 +1479,22 @@ sub _selected_effect
     return $row->{ effect };
 }
 
-sub _adjust_selected
+# The one popover, built on first use because it hangs off a button the panes
+# build. There is only ever one: see GlitchVape::GUI::Adjust/WHY A POPOVER AND
+# NOT A WINDOW.
+sub _adjust
 {
     my ( $self ) = @_;
 
-    my $name = $self->_selected_effect or return;
-    $self->_adjust_effect( $name );
-
-    return;
-}
-
-# One window per effect, so asking twice raises the one that is open rather
-# than stacking a second copy on top of it -- two windows writing the same
-# parameters would disagree the moment either was touched.
-sub _adjust_effect
-{
-    my ( $self, $name ) = @_;
-
-    return unless $self->{ state };
-    return unless defined $name;
-
-    if ( my $open = $self->{ adjust }{ $name } )
-    {
-        $open->present;
-        return;
-    }
-
-    $self->{ adjust }{ $name } = GlitchVape::GUI::Adjust->new(
-        parent    => $self->{ window },
-        name      => $name,
-        state     => $self->{ state },
-        on_change => sub {
+    $self->{ adjust } ||= GlitchVape::GUI::Adjust->new(
+        relative_to => $self->{ b_adjust },
+        state       => $self->{ state },
+        on_change   => sub {
             $self->_touch;
             return;
         },
         on_enabled => sub {
-            my ( $on ) = @_;
+            my ( $name, $on ) = @_;
 
             # The checkbox on the row is the same fact seen from the list.
             if ( my $row = $self->{ rows }{ $name } )
@@ -1528,37 +1507,86 @@ sub _adjust_effect
             $self->_touch;
             return;
         },
-        on_closed => sub {
-            delete $self->{ adjust }{ $_[ 0 ] };
-            return;
-        },
     );
 
-    return;
+    # The popover outlives any one state -- a new file is a new state and the
+    # same popover -- so it is told which one to write to rather than being
+    # rebuilt.
+    $self->{ adjust }{ state } = $self->{ state };
+
+    return $self->{ adjust };
 }
 
-sub _close_adjust
+# Adjust, pressed.
+#
+# Like Add, it acts on whichever page is showing, so there is one gesture for
+# both lists: select a row, press the cog. On the soundtrack that reopens the
+# track's own wizard, which stays a dialog -- it has a real Cancel, and
+# building a track is a decision you can back out of in a way that moving a
+# slider is not.
+#
+# On the effect page it toggles, because the popover is not modal and will not
+# dismiss itself: without this there would be no way to put it away with the
+# control that summoned it.
+sub _adjust_selected
 {
-    my ( $self, $name ) = @_;
+    my ( $self ) = @_;
 
-    my $window = delete $self->{ adjust }{ $name } or return;
-    $window->close;
+    if ( $self->_on_soundtrack_page )
+    {
+        $self->_edit_selected_track;
+        return;
+    }
+
+    my $adjust = $self->_adjust;
+
+    if ( $adjust->visible )
+    {
+        $adjust->popdown;
+        return;
+    }
+
+    my $name = $self->_selected_effect or return;
+    $adjust->show_effect( $name );
 
     return;
 }
 
-sub _close_all_adjust
+# The selected track's row remembers how to reopen whatever made it -- the
+# crop wizard for the file, the generator's own dialog for the rest.
+sub _edit_selected_track
 {
     my ( $self ) = @_;
 
-    $self->_close_adjust( $_ ) for sort keys %{ $self->{ adjust } || {} };
+    my $row  = $self->{ audio_list }->get_selected_row or return;
+    my $edit = $row->{ edit }                          or return;
+
+    $edit->();
+
     return;
 }
 
-sub _touch
+# The selection moved. The popover shows the selected effect, so if it is up
+# it changes what it is showing rather than being left describing a row nobody
+# is looking at any more.
+sub _follow_selection
 {
     my ( $self ) = @_;
-    $self->{ dirty } = 1;
+
+    # The list is being rebuilt underneath, and the selection it reports on
+    # the way through is not one anybody made.
+    return if $self->{ rebuilding };
+
+    my $adjust = $self->{ adjust };
+
+    if ( $adjust && $adjust->visible )
+    {
+        my $name = $self->_selected_effect;
+
+        if   ( defined $name ) { $adjust->show_effect( $name ) }
+        else                   { $adjust->popdown }
+    }
+
     $self->_sync_actions;
     return;
 }
@@ -2073,8 +2101,6 @@ sub _clear_effects
     my ( $self ) = @_;
 
     return unless $self->{ state };
-
-    $self->_close_all_adjust;
 
     $self->{ state }->preset( undef );
     $self->{ state }{ current }{ effects } = {};
@@ -3040,9 +3066,9 @@ sub _progress
 
     my $text = sprintf 'Frame %d of %d', $done, $frames;
 
-    if ( my $left = $self->_estimate( $done, $frames ) )
+    if ( my $remaining = $self->_estimate( $done, $frames ) )
     {
-        $text .= sprintf ' · about %s left', $left;
+        $text .= sprintf ' · about %s left', $remaining;
     }
 
     $self->{ spinner_label }->set_text( $text );
@@ -3067,13 +3093,13 @@ sub _estimate
     my $counted = @$seen - 2;
     return undef unless $counted > 0 && $elapsed > 0;
 
-    my $each = $elapsed / $counted;
-    my $left = int( $each * ( $frames - $done ) + 0.5 );
+    my $each      = $elapsed / $counted;
+    my $remaining = int( $each * ( $frames - $done ) + 0.5 );
 
-    return undef if $left < 1;
-    return sprintf '%ds', $left if $left < 60;
+    return undef if $remaining < 1;
+    return sprintf '%ds', $remaining if $remaining < 60;
 
-    return sprintf '%dm %02ds', int( $left / 60 ), $left % 60;
+    return sprintf '%dm %02ds', int( $remaining / 60 ), $remaining % 60;
 }
 
 # Apply and Stop are one button wearing two hats, so all three things that
@@ -3141,12 +3167,15 @@ sub _sync_actions
 
     my $soundtrack = $self->_on_soundtrack_page;
 
-    # Adjust acts on the selected effect, so it is only an action on the page
-    # that has effects on it, and only once one is picked. Without this it is
+    # Adjust acts on the selected row of whichever list is showing, so it is
+    # an action once there is one to act on and not before. Without this it is
     # a button that does nothing and says nothing about why.
-    $self->{ b_adjust }->set_sensitive( $ready
-            && !$soundtrack
-            && defined $self->_selected_effect );
+    my $selected =
+        $soundtrack
+        ? defined $self->{ audio_list }->get_selected_row
+        : defined $self->_selected_effect;
+
+    $self->{ b_adjust }->set_sensitive( $ready && $selected );
     $self->{ m_preset }->set_sensitive( $have );
     $self->{ m_clear }->set_sensitive( $ready );
     $self->{ m_command }->set_sensitive( $have );
@@ -3188,12 +3217,17 @@ sub _sync_actions
         $self->{ b_add }->set_sensitive( $ready && $animated );
         $self->{ b_add }
             ->set_tooltip_text( 'Add a track to the soundtrack (Alt+D)' );
+        $self->{ b_adjust }
+            ->set_tooltip_text( 'Reopen the selected track (Alt+J)' );
     }
     else
     {
         $self->{ b_add }->set_sensitive( $ready );
         $self->{ b_add }
             ->set_tooltip_text( 'Add an effect to the pipeline (Alt+D)' );
+        $self->{ b_adjust }->set_tooltip_text(
+                  "Show the settings of the selected effect (Alt+J).\n"
+                . 'Press again to put them away' );
     }
 
     # There is one file at most, so its line in the popover goes away once it

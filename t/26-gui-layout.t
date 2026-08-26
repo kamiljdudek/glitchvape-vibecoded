@@ -239,26 +239,27 @@ my %claimed;
 # ---------------------------------------------------------------------------
 # The soundtrack list is shaped like the effect list
 
+# Same shape, same gesture: select a row and press the cog. Neither list
+# activates, because the action bar is the one place settings are opened
+# from.
+
 {
     my $list = $gui->{ audio_list };
     isa_ok $list, 'Gtk3::ListBox', 'the track list';
 
-    ok !$list->get_activate_on_single_click,
-        'and activates on a double click, as the effect list does';
+    is $list->get_selection_mode, 'single',
+        'with one selected row, which is what Adjust acts on';
 }
 
 # ---------------------------------------------------------------------------
-# The effect list activates on a double click, not a single one
+# The effect list has one selected row and nothing to activate
 
-# A list where activating a row opens a window cannot be browsed if a single
-# click activates: passing over three rows with the arrow keys would leave
-# three windows open.
+# Settings are the Adjust button's popover, which follows the selection, so
+# selecting a row is the whole gesture. The soundtrack list is the one that
+# still activates, because its rows open a wizard.
 {
     my $list = $gui->{ effect_list };
     isa_ok $list, 'Gtk3::ListBox', 'the effect list';
-
-    ok !$list->get_activate_on_single_click,
-        'and a single click does not activate a row';
 
     is $list->get_selection_mode, 'single',
         'exactly one row can be selected, which is what Adjust acts on';

@@ -548,16 +548,21 @@ sub _play_button
 {
     my ( $self, $action ) = @_;
 
-    my $button = Gtk3::Button->new_with_label( 'Play' );
+    my $button =
+        Gtk3::Button->new_with_label( GlitchVape::GUI::Player::PLAY_LABEL );
 
     my $widest = 0;
-    for my $text ( 'Play', 'Stop', 'Rendering…' )
+    for my $text (
+        GlitchVape::GUI::Player::PLAY_LABEL,
+        GlitchVape::GUI::Player::STOP_LABEL,
+        GlitchVape::GUI::Player::RENDERING_LABEL
+        )
     {
         $button->set_label( $text );
         my ( undef, $natural ) = $button->get_preferred_width;
         $widest = $natural if $natural > $widest;
     }
-    $button->set_label( 'Play' );
+    $button->set_label( GlitchVape::GUI::Player::PLAY_LABEL );
     $button->set_size_request( $widest, -1 );
 
     $button->signal_connect(
@@ -952,7 +957,8 @@ sub _play_filtered
     }
 
     $self->{ rendering } = $pid;
-    $self->{ filter_play }->set_label( 'Rendering…' );
+    $self->{ filter_play }
+        ->set_label( GlitchVape::GUI::Player::RENDERING_LABEL );
 
     Glib::Child->watch_add(
         $pid,
@@ -966,7 +972,8 @@ sub _play_filtered
             $self->{ rendering } = undef;
             return 0 unless $wanted;
 
-            $self->{ filter_play }->set_label( 'Play' );
+            $self->{ filter_play }
+                ->set_label( GlitchVape::GUI::Player::PLAY_LABEL );
 
             if ( $status != 0 )
             {
@@ -994,7 +1001,8 @@ sub _playing
 
     if ( $on )
     {
-        $self->{ play_button }->set_label( 'Stop' ) if $self->{ play_button };
+        $self->{ play_button }->set_label( GlitchVape::GUI::Player::STOP_LABEL )
+            if $self->{ play_button };
         return;
     }
 
@@ -1002,7 +1010,7 @@ sub _playing
 
     for my $button ( $self->{ crop_play }, $self->{ filter_play } )
     {
-        $button->set_label( 'Play' ) if $button;
+        $button->set_label( GlitchVape::GUI::Player::PLAY_LABEL ) if $button;
     }
 
     return;

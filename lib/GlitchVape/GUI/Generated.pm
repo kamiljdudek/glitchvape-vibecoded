@@ -103,8 +103,8 @@ sub run
         on_state => sub {
             my ( $on ) = @_;
 
-            my $label = 'Play';
-            $label = 'Stop' if $on;
+            my $label = GlitchVape::GUI::Player::PLAY_LABEL;
+            $label = GlitchVape::GUI::Player::STOP_LABEL if $on;
 
             $self->{ play }->set_label( $label );
             return;
@@ -224,18 +224,22 @@ sub _build_bottom
 
     my $row = Gtk3::Box->new( 'horizontal', 8 );
 
-    my $play = Gtk3::Button->new_with_label( 'Play' );
+    my $play =
+        Gtk3::Button->new_with_label( GlitchVape::GUI::Player::PLAY_LABEL );
 
     # Pinned to the wider of the two words, measured rather than guessed, so
     # the button does not change size when it changes meaning.
     my $widest = 0;
-    for my $text ( 'Play', 'Stop' )
+    for my $text (
+        GlitchVape::GUI::Player::PLAY_LABEL,
+        GlitchVape::GUI::Player::STOP_LABEL
+        )
     {
         $play->set_label( $text );
         my ( undef, $natural ) = $play->get_preferred_width;
         $widest = $natural if $natural > $widest;
     }
-    $play->set_label( 'Play' );
+    $play->set_label( GlitchVape::GUI::Player::PLAY_LABEL );
     $play->set_size_request( $widest, -1 );
 
     $play->signal_connect(

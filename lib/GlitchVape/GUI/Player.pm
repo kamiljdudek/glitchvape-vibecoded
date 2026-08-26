@@ -2,6 +2,7 @@ package GlitchVape::GUI::Player;
 
 use strict;
 use warnings;
+use utf8;
 
 use Glib ();
 use Gtk3 ();
@@ -41,6 +42,21 @@ C<playbin> is given a C<fakesink> for video. A soundtrack taken out of an MP4
 would otherwise open a video window of its own beside the wizard.
 
 =cut
+
+=head2 PLAY_LABEL / STOP_LABEL / RENDERING_LABEL
+
+What the button that drives this reads in each of its three states, with the
+transport symbol the state deserves. Here rather than in either dialog because
+both of them drive the same player, and two copies of a label are two labels
+that come to disagree.
+
+=cut
+
+use constant {
+    PLAY_LABEL      => '▶  Play',
+    STOP_LABEL      => '⏹  Stop',
+    RENDERING_LABEL => '⏳  Rendering…',
+};
 
 # How often the position is polled. Fast enough for a playhead that does not
 # visibly step, slow enough not to matter.
