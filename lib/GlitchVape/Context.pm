@@ -12,6 +12,8 @@ use GlitchVape::Tools  ();
 
 our $VERSION = '0.01';
 
+use constant PI => 4 * atan2( 1, 1 );
+
 =head1 NAME
 
 GlitchVape::Context - per-render state shared by every effect
@@ -106,6 +108,63 @@ sub phase
     my $self = shift;
     return 0 if $self->{ frames } <= 1;
     return $self->{ frame } / $self->{ frames };
+}
+
+=head2 travel( $distance, $repeat )
+
+How far a repeating pattern has moved by this frame, for an effect with a
+C<drift> parameter. C<$distance> is what the user asked for over one whole
+loop and C<$repeat> is the period of the thing being moved -- a line spacing,
+a tile, two rows of a field. Returns 0 for a still.
+
+The distance is snapped to a whole number of repeats first, because a loop has
+to close: travel two and a half line spacings and the last frame does not join
+the first, which shows as a jolt once per loop for as long as the video plays.
+Snapping is silent and deliberate. The alternative is refusing the value, and
+nobody setting C<drift> wants an error about the least interesting digit in it.
+
+It never snaps to zero. Rounding 1 down to 0 when the repeat is 6 would turn a
+drift somebody asked for into an effect that does nothing, which reads as a
+broken parameter rather than as a rounded one.
+
+=cut
+
+sub travel
+{
+    my ( $self, $distance, $repeat ) = @_;
+
+    return 0 unless $distance && $self->{ frames } > 1;
+
+    $repeat = abs( $repeat || 1 );
+
+    my $steps = int( abs( $distance ) / $repeat + 0.5 ) || 1;
+    my $total = $steps * $repeat;
+    $total = -$total if $distance < 0;
+
+    return $total * $self->phase;
+}
+
+=head2 excursion( $amount )
+
+How far a B<non>-repeating feature has moved by this frame -- the one bright
+band of a reflection, the delay of an echo. Returns 0 for a still.
+
+These have nowhere to travel to. A single band swept off one edge has to
+reappear at the other, and that jump is visible in a way a repeating pattern's
+is not, because there is no second band to disguise it. So this rocks: out to
+C<$amount> and back over the loop, which closes at any value and is anyway
+what the physical thing does. A window reflection moves because the room does,
+and rooms do not scroll.
+
+=cut
+
+sub excursion
+{
+    my ( $self, $amount ) = @_;
+
+    return 0 unless $amount && $self->{ frames } > 1;
+
+    return $amount * sin( 2 * PI() * $self->phase );
 }
 
 =head2 rng_for( $effect_name )

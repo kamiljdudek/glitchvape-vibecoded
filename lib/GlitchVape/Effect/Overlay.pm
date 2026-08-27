@@ -491,6 +491,13 @@ DOC
             max     => 8,
             doc => 'How hard the horizontal lines bunch towards the horizon',
         },
+        drift => {
+            default => 0,
+            type    => 'num',
+            min     => -64,
+            max     =>  64,
+            doc     => 'Grid lines travelled per loop; negative recedes',
+        },
         sun => {
             default => 1,
             type    => 'bool',
@@ -539,9 +546,27 @@ sub _grid
 
     # Horizontal lines: t^perspective spaces them tightly at the horizon and
     # widely at the bottom of the frame.
-    for my $i ( 1 .. $p->{ lines_h } )
+    #
+    # Drift moves them along that curve rather than down the screen, which is
+    # the whole trick: a line travelling at constant speed in t accelerates
+    # towards the viewer exactly as the spacing widens, so the plane reads as
+    # ground going past instead of as stripes sliding. One line spacing is the
+    # repeat, so travel() snaps to whole lines and the loop closes with a line
+    # sitting where its neighbour started.
+    #
+    # Only these move. The vertical lines converge on the vanishing point and
+    # are the same set of rays whatever the ground is doing; scrolling them
+    # would swing the whole plane sideways.
+    my $shift = $ctx->travel( $p->{ drift }, 1 );
+    my $extra = int( abs $p->{ drift } ) + 1;
+
+    for my $i ( 1 - $extra .. $p->{ lines_h } + $extra )
     {
-        my $t = $i / $p->{ lines_h };
+        my $t = ( $i + $shift ) / $p->{ lines_h };
+
+        # Off the top past the horizon, or off the bottom of the frame.
+        next if $t <= 0 || $t > 1;
+
         my $y = $hy + ( $h - $hy ) * ( $t**$p->{ perspective } );
         push @draw, sprintf( 'line 0,%.1f %d,%.1f', $y, $w, $y );
     }
@@ -639,8 +664,16 @@ sub _draw_sun
         }
     }
 
+    # The mask carries the shape as black and white pixels, so its intensity
+    # has to be moved into its alpha channel before the composite. IM6's
+    # CopyOpacity fell back to intensity when the source had no alpha; IM7
+    # aliases CopyOpacity to CopyAlpha, which copies the alpha channel and
+    # nothing else -- and `xc:black` arrives with a fully opaque one. Without
+    # the copy the sun composites as an opaque square with no slots in it.
+    $mask->Set( alpha => 'copy' );
+
     $disc->Set( alpha => 'on' );
-    $disc->Composite( image => $mask->[ 0 ], compose => 'CopyOpacity' );
+    $disc->Composite( image => $mask->[ 0 ], compose => 'CopyAlpha' );
 
     my $x = $cx - $r;
     my $y = $hy - int( $r * 1.15 );
@@ -670,6 +703,7 @@ DOC
         ratio => {
             default => '16:9',
             type    => 'str',
+            suggest => 'ratio',
             doc     => 'Target aspect, e.g. "16:9" or "4:3"; empty to skip',
         },
         color => {
@@ -743,6 +777,14 @@ $R->register(
     doc     => <<'DOC',
 Repeats a string in a low-contrast grid over the image, in the manner of a
 stock-photo proof or a corrupted screensaver.
+
+C<drift> slides the whole tiling along the text's own reading direction, so
+with C<rotate> set the motion comes out diagonal and the thing reads as the
+screensaver it is imitating. This is the effect that animates most cleanly of
+any of them, and for a reason worth knowing: a tiled pattern has an exact
+period, so moving it a whole number of tiles per loop returns it to itself
+with nothing to hide and no speed at which it goes wrong. Everything else that
+drifts has to snap or rock to close its loop; this one simply closes.
 DOC
     params => {
         string => {
@@ -788,6 +830,13 @@ DOC
             max     => 12,
             doc     => 'Gap between repetitions, in multiples of text size',
         },
+        drift => {
+            default => 0,
+            type    => 'num',
+            min     => -32,
+            max     =>  32,
+            doc     => 'Tiles the pattern slides per loop; negative reverses',
+        },
     },
     apply => \&_watermark,
 );
@@ -813,24 +862,33 @@ sub _watermark
     my $step = int( $size * $p->{ spacing } ) || $size;
     my $text = Encode::encode( 'UTF-8', $p->{ string } );
 
+    # One tile across. The inner loop below lays repetitions down at this
+    # interval, so it is also the distance the pattern has to slide to look
+    # untouched -- which is what makes the scroll loop exactly.
+    my $period = $step * 2;
+
+    # Wrapped into one tile: sliding by six tiles and by one look the same, so
+    # there is no reason to draw the other five off the edge of the canvas.
+    my $slide = $ctx->travel( $p->{ drift }, 1 ) * $period;
+    $slide -= $period * int( $slide / $period );
+
+    my $row = 0;
     for ( my $y = 0 ; $y < $diag ; $y += $step )
     {
-        # Offset every other row so the grid does not read as columns.
         # Offset every other row by half a step so the tiling reads as a
         # scatter rather than as columns.
-        my $stagger = 0;
-        if ( int( $y / $step ) % 2 )
-        {
-            $stagger = int( $step / 2 );
-        }
-        for ( my $x = -$step ; $x < $diag ; $x += $step * 2 )
+        my $stagger = $row++ % 2 ? int( $step / 2 ) : 0;
+
+        # A tile's margin either side, so the one sliding in at the left edge
+        # is already drawn when it gets there.
+        for ( my $x = -$period ; $x < $diag + $period ; $x += $period )
         {
             $layer->Annotate(
                 text      => $text,
                 font      => $font,
                 pointsize => $size,
                 fill      => $p->{ color },
-                x         => $x + $stagger,
+                x         => $x + $stagger + $slide,
                 y         => $y,
                 gravity   => 'NorthWest',
                 encoding  => 'UTF-8',

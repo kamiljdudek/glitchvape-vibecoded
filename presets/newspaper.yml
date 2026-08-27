@@ -1,0 +1,63 @@
+name: newspaper
+title: Colour newsprint, screened and misregistered
+
+# Four-colour printing on cheap stock, in the order a press does it.
+#
+# `chroma_shift` runs at the channels stage, so it is misregistration of the
+# separations themselves -- the plates out of line before anything is screened,
+# which is what the colour fringe on a newspaper photograph actually is.
+# Shifting after the screen would smear the dots instead and read as a focus
+# problem.
+#
+# `softness` and `vignette` sort after `cmyk` inside the optics stage, so the
+# blur is ink spreading into absorbent paper rather than a soft original. The
+# order is alphabetical within a stage, which is doing the right thing here by
+# accident rather than by design -- worth knowing if either is ever renamed.
+#
+# `grain` is deliberately before the screen and so gets screened along with
+# everything else: it coarsens the dots the way a bad plate does, instead of
+# sitting on top as digital noise.
+#
+# Saturation comes down first because newsprint has a small gamut; leaving it
+# up makes the screen chase colours the four inks cannot reach and the rosette
+# turns to mud.
+
+output:
+  max_dim: 1600
+
+effects:
+  grade:
+    saturation: 72
+    contrast: 12
+    brightness: 104
+
+  chroma_shift:
+    amount: 2
+    angle: 8
+    anchor: green
+
+  grain:
+    amount: 0.05
+    size: 2
+    shadow_bias: 0.35
+    mono: 1
+
+  cmyk:
+    pitch: 7
+    angles: '15,75,0,45'
+    paper: '#EFE8D8'
+    strength: 1.0
+
+  softness:
+    blur: 0.7
+    radius: 1.5
+    sharpen: 0.3
+
+  vignette:
+    strength: 0.22
+    size: 1.7
+
+  letterbox:
+    ratio: ''
+    border: 0.035
+    color: '#EFE8D8'

@@ -5,6 +5,7 @@ use warnings;
 
 use GlitchVape::Registry ();
 use GlitchVape::Pixels   ();
+use GlitchVape::Palette  ();
 
 our $VERSION = '0.01';
 
@@ -20,7 +21,7 @@ my $R = 'GlitchVape::Registry';
 
 $R->register(
     name    => 'downsample',
-    title   => 'Downscale & Upscale',
+    title   => 'Pixelize',
     stage   => 'format',
     summary => 'Throw away resolution, then scale back up',
     doc     => <<'DOC',
@@ -110,6 +111,187 @@ sub _downsample
     $img->Resize( geometry => "${w}x${h}!", filter => ucfirst $p->{ filter } );
 
     return;
+}
+
+# ---------------------------------------------------------------------------
+
+$R->register(
+    name    => 'bitmap',
+    title   => '8-Bit Bitmap Mode',
+    stage   => 'format',
+    summary => 'Low resolution, fixed palette and ordered dither, together',
+    doc     => <<'DOC',
+What a home computer's bitmap mode actually did: a small number of chunky
+pixels, each one an index into a palette of fixed colours, with a threshold
+matrix faking the shades the hardware did not have.
+
+This exists as one effect rather than as C<downsample> plus C<palette> plus
+C<dither> because the order those three run in is the whole difference between
+an 8-bit picture and a photograph with a pattern over it. The palette lookup
+and the dither have to happen while the image is still small, so that one dithered
+cell is one chunky pixel. Run separately they cannot: C<downsample> is a
+C<format> effect and C<dither> a C<grain> one, so the dither lands after the
+image has been scaled back up and its checkerboard is drawn in pixels far
+smaller than the blocks it is supposed to be shading. The blocks disappear.
+
+So the chain here is down, dither, remap, up -- in one pass, at the small size,
+which is a thing no ordering of the three separate effects can express.
+
+The dither is applied as an offset rather than as a quantisation: the threshold
+matrix nudges each pixel up or down before the palette lookup, so neighbouring
+pixels round to different entries and the eye mixes them. Quantising first and
+remapping afterwards -- which is what chaining the existing two effects does --
+puts colours in that the palette then has to snap somewhere arbitrary, and the
+result is speckle rather than shading.
+
+Being a C<format> effect, this commits to its palette before any C<colour>
+effect runs, so a grade or a tint after it will move pixels back off the
+palette. That is the right way round -- the blocks have to exist before
+anything shapes them, and a bloom or a scanline blending two neighbouring
+entries is what a screen showing an 8-bit image did anyway -- but it does mean
+the palette is a look here rather than a guarantee.
+DOC
+    params => {
+        factor => {
+            default => 6,
+            type    => 'num',
+            min     => 1,
+            max     => 64,
+            doc     => 'Divide resolution by this before the palette lookup',
+        },
+        palette => {
+            default => 'laserwave',
+            type    => 'str',
+            suggest => 'palette',
+            doc     => 'Palette name, or inline "#FF71CE,#01CDFE,..."',
+        },
+        matrix => {
+            default => 'o4x4',
+            type    => 'enum',
+            values  => [ qw(none o2x2 o4x4 o8x8) ],
+            doc     => 'Bayer matrix the dither offset comes from',
+        },
+        amount => {
+            default => 0.25,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'How far the matrix nudges a pixel before the lookup',
+        },
+        filter => {
+            default => 'point',
+            type    => 'enum',
+            values  => [ qw(point box triangle) ],
+            doc     => 'Interpolation on the way back up',
+        },
+    },
+    apply => \&_bitmap,
+);
+
+sub _bitmap
+{
+    my ( $ctx, $p ) = @_;
+
+    my ( $w, $h ) = $ctx->dims;
+
+    my $sw = int( $w / $p->{ factor } ) || 1;
+    my $sh = int( $h / $p->{ factor } ) || 1;
+
+    my $remap =
+        GlitchVape::Palette::remap_file( $p->{ palette }, $ctx->tmpdir );
+
+    my @args = ( '-filter', 'Point', '-resize', "${sw}x${sh}!" );
+
+    if ( $p->{ matrix } ne 'none' && $p->{ amount } > 0 )
+    {
+        my $tile = _bayer_file( $p->{ matrix }, $ctx->tmpdir );
+
+        # result = amount*tile + image - amount/2, so the matrix is centred on
+        # zero and shifts a pixel either way rather than only brightening it.
+        push @args,
+            '(', '-size', "${sw}x${sh}", "tile:$tile", ')',
+            '-compose', 'Mathematics', '-define',
+            sprintf(
+            'compose:args=0,%.4f,1,%.4f',
+            $p->{ amount },
+            -$p->{ amount } / 2
+            ),
+            '-composite';
+    }
+
+    # -dither before -remap: it is a setting that the remap reads, not an
+    # operation, so after it the remap has already diffused its own error and
+    # torn the matrix pattern up.
+    push @args,
+        '-dither', 'None', '-remap', $remap,
+        '-filter', ucfirst $p->{ filter }, '-resize', "${w}x${h}!";
+
+    $ctx->magick( @args );
+
+    return;
+}
+
+# The threshold matrix, written once per size into the render's temporary
+# directory and reused. Built rather than shipped: it is defined by a
+# recurrence, and four lines of it are easier to check than a binary asset.
+#
+#   M(2n) = [ 4*M(n)+0  4*M(n)+2 ]
+#           [ 4*M(n)+3  4*M(n)+1 ]
+sub _bayer_file
+{
+    my ( $name, $dir ) = @_;
+    require File::Spec;
+    require GlitchVape::Tools;
+
+    my ( $n ) = $name =~ /(\d+)/;
+    $n ||= 4;
+
+    my $path = File::Spec->catfile( $dir, "bayer_$n.png" );
+    return $path if -f $path;
+
+    my $m    = [ [ 0 ] ];
+    my $size = 1;
+    while ( $size < $n )
+    {
+        my @next;
+        for my $y ( 0 .. $size * 2 - 1 )
+        {
+            for my $x ( 0 .. $size * 2 - 1 )
+            {
+                my $base = 4 * $m->[ $y % $size ][ $x % $size ];
+                my $quad = ( $y < $size ? 0 : 2 ) + ( $x < $size ? 0 : 1 );
+                $next[ $y ][ $x ] =
+                    $base + ( 0, 2, 3, 1 )[ $quad ];
+            }
+        }
+        $m = \@next;
+        $size *= 2;
+    }
+
+    # Raw single-channel bytes rather than ImageMagick's txt: enumeration.
+    # That format needs a full (r,g,b) tuple per line and silently reads a
+    # bare gray(n) as black, which produces a uniform tile -- a dither that
+    # does nothing, and looks exactly like one that is switched off.
+    my $cells = $n * $n;
+    my $raw   = File::Spec->catfile( $dir, "bayer_$n.gray" );
+
+    open my $fh, '>:raw', $raw
+        or die "GlitchVape: cannot write $raw: $!\n";
+    for my $y ( 0 .. $n - 1 )
+    {
+        for my $x ( 0 .. $n - 1 )
+        {
+            print { $fh } chr int( $m->[ $y ][ $x ] / $cells * 255 + 0.5 );
+        }
+    }
+    close $fh;
+
+    my @argv = GlitchVape::Tools::magick_argv( '-size', "${n}x$n", '-depth',
+        '8', "gray:$raw", $path );
+    system( @argv ) == 0
+        or die "GlitchVape: could not build the $name threshold matrix\n";
+
+    return $path;
 }
 
 # ---------------------------------------------------------------------------

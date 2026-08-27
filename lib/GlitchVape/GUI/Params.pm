@@ -31,8 +31,8 @@ to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
                           are known, or an entry paired with a colour picker
                           or a calendar
 
-The four string cases are worth the special-casing: C<palette.name> takes one
-of twelve named palettes I<or> an inline list of hex colours, C<text.font>
+The four string cases are worth the special-casing: a palette parameter takes
+one of the named palettes I<or> an inline list of hex colours, C<text.font>
 takes a font role rather than a font name, a colour parameter typed by hand is
 the one most likely to be got wrong, and C<osd.date> is a date, which is a
 thing people pick rather than spell.
@@ -57,14 +57,21 @@ C<--set osd.date='JAN 05 1995'> and the window talking about the same string.
 # since every effect spells them the same way.
 my %COLOUR_PARAM = map { $_ => 1 } qw(tint color shadow background);
 
-# Parameters whose accepted values are known but open: the combo offers them
-# and the entry still takes anything, because palette.name also accepts an
-# inline '#FF71CE,#01CDFE' list.
-my %SUGGESTED = (
-    'palette.name'      => sub { GlitchVape::Palette::names() },
-    'gradient_map.name' => sub { GlitchVape::Palette::names() },
-    'duotone.name'      => sub { GlitchVape::Palette::duotone_names() },
-    'letterbox.ratio'   => sub { qw(16:9 2.35:1 4:3 1:1 9:16) },
+# Where a suggestion list comes from. A parameter opts in by declaring
+# `suggest => 'palette'` in the registry, and the combo then offers these
+# while the entry still takes anything -- a palette parameter also accepts an
+# inline '#FF71CE,#01CDFE' list, so the values are an offer, not a set.
+#
+# Keyed by the kind of suggestion rather than by 'effect.param', which is what
+# it used to be. That spelling meant every new effect wanting a palette needed
+# a line adding here, so the declaration stopped being the whole story and the
+# GUI had to be edited to add an effect. Now a fifth effect wanting palette
+# names says so where its other parameters are described, and this file does
+# not change.
+my %SUGGEST_SOURCE = (
+    palette => sub { GlitchVape::Palette::names() },
+    duotone => sub { GlitchVape::Palette::duotone_names() },
+    ratio   => sub { qw(16:9 2.35:1 4:3 1:1 9:16) },
 );
 
 =head2 build( %arg )
@@ -144,7 +151,7 @@ sub _kind
     return 'numeric'   if $type eq 'int'  || $type eq 'num';
     return 'colour'    if _is_colour( $arg );
     return 'date'      if $arg->{ name } eq 'date';
-    return 'suggested' if $SUGGESTED{ "$arg->{effect}.$arg->{name}" };
+    return 'suggested' if $SUGGEST_SOURCE{ $arg->{ spec }{ suggest } // q{} };
     return 'font'      if $arg->{ name } eq 'font';
     return 'text';
 }
@@ -322,7 +329,7 @@ sub _suggested
 {
     my ( $arg ) = @_;
 
-    my @values = $SUGGESTED{ "$arg->{effect}.$arg->{name}" }->();
+    my @values = $SUGGEST_SOURCE{ $arg->{ spec }{ suggest } }->();
     return _combo_with_entry( $arg, \@values );
 }
 

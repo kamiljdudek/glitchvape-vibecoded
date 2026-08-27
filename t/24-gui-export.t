@@ -21,6 +21,7 @@ BEGIN
 
 use GlitchVape              ();
 use GlitchVape::Registry    ();
+use GlitchVape::Palette     ();
 use GlitchVape::GUI::Export ();
 use GlitchVape::GUI::Params ();
 use GlitchVape::GUI::State  ();
@@ -194,6 +195,53 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
     );
 
     ok $text->{ stretch }, 'so does an entry';
+}
+
+# ---------------------------------------------------------------------------
+# A suggestion list comes from the declaration, not from a list in the GUI
+
+# The property being pinned is invariant 1: adding an effect must not require
+# editing GlitchVape::GUI::Params. A parameter says `suggest => 'palette'`
+# where its type and range are declared, and the combo fills itself. This used
+# to be a table here keyed on 'effect.param', so every new effect that wanted
+# palette names needed a line adding to the GUI -- which is exactly the
+# coupling the invariant exists to forbid.
+{
+    my @palette_params = (
+        [ 'palette',      'name' ],
+        [ 'gradient_map', 'name' ],
+        [ 'bitmap',       'palette' ],
+    );
+
+    my $offered = scalar GlitchVape::Palette::names();
+
+    for my $pair ( @palette_params )
+    {
+        my ( $effect, $param ) = @$pair;
+        my $spec = GlitchVape::Registry->get( $effect )->{ params }{ $param };
+
+        is $spec->{ suggest }, 'palette',
+            "$effect.$param declares where its suggestions come from";
+
+        my $built = GlitchVape::GUI::Params->build(
+            effect => $effect,
+            name   => $param,
+            spec   => $spec,
+            value  => $spec->{ default },
+        );
+
+        isa_ok $built->{ control }, 'Gtk3::ComboBoxText',
+            "so $effect.$param gets a combo";
+
+        my $rows = 0;
+        $built->{ control }->get_model->foreach( sub { $rows++; return 0 } );
+        is $rows, $offered, 'offering every registered palette';
+
+        # An entry as well as a list, because a palette parameter also takes
+        # an inline '#FF71CE,#01CDFE' that no list could enumerate.
+        ok $built->{ control }->get_child->isa( 'Gtk3::Entry' ),
+            'and still takes an inline colour list';
+    }
 }
 
 # ---------------------------------------------------------------------------

@@ -1591,6 +1591,24 @@ sub _follow_selection
     return;
 }
 
+# One edit to the configuration. Every path that changes what would be
+# rendered ends here, so that the actions agree with the new state -- Adjust
+# in particular, which is only an action while a row is selected and so has to
+# be re-decided after a rebuild that dropped the selection.
+#
+# It does not render: what has changed is the configuration, and the picture
+# on screen is still the last one asked for. Applying is a separate gesture
+# because it is the one with a render bill attached.
+sub _touch
+{
+    my ( $self ) = @_;
+
+    $self->{ dirty } = 1;
+    $self->_sync_actions;
+
+    return;
+}
+
 # ---------------------------------------------------------------------------
 # Files
 

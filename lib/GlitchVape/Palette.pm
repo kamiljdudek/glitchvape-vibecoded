@@ -82,6 +82,74 @@ my %PALETTE = (
         title  => 'Degraded thermal-paper monochrome',
         colors => [ '#1C1A17', '#4A453D', '#8A8175', '#C4BCAC', '#EFE8D8' ],
     },
+
+    # Real hardware palettes, for the 8-bit end of the range. These are not
+    # moods somebody chose: they are the entire set of colours a machine could
+    # put on screen, which is why they look the way they do and why imitating
+    # one means using all of it rather than a selection from it.
+    #
+    # They earn their place next to the moods because everything that takes a
+    # palette takes these too -- `bitmap`, `palette`, `gradient_map` -- so the
+    # 8-bit look is available to effects that know nothing about it.
+
+    cga => {
+
+        # Mode 4 palette 1, high intensity: the one that made every late-80s
+        # PC game magenta. There were other CGA palettes; nobody remembers
+        # them.
+        title  => 'CGA four-colour, the magenta one',
+        colors => [ '#000000', '#55FFFF', '#FF55FF', '#FFFFFF' ],
+    },
+
+    ega => {
+        title  => 'EGA sixteen-colour',
+        colors => [
+            '#000000', '#0000AA', '#00AA00', '#00AAAA', '#AA0000', '#AA00AA',
+            '#AA5500', '#AAAAAA', '#555555', '#5555FF', '#55FF55', '#55FFFF',
+            '#FF5555', '#FF55FF', '#FFFF55', '#FFFFFF',
+        ],
+    },
+
+    c64 => {
+
+        # Pepto's measured values rather than the datasheet's nominal ones:
+        # the VIC-II generated colour in the composite signal, so what the
+        # chip meant and what a television showed are different sets of
+        # numbers, and these are the ones people recognise.
+        title  => 'Commodore 64 VIC-II',
+        colors => [
+            '#000000', '#FFFFFF', '#880000', '#AAFFEE', '#CC44CC', '#00CC55',
+            '#0000AA', '#EEEE77', '#DD8855', '#664400', '#FF7777', '#333333',
+            '#777777', '#AAFF66', '#0088FF', '#BBBBBB',
+        ],
+    },
+
+    spectrum => {
+
+        # Fifteen, not sixteen: the BRIGHT bit applied to the whole set, and
+        # bright black is black, so one of the two blacks is a duplicate that
+        # would only weight the remap towards it.
+        title  => 'ZX Spectrum, both brightnesses',
+        colors => [
+            '#000000', '#0000D7', '#D70000', '#D700D7', '#00D700', '#00D7D7',
+            '#D7D700', '#D7D7D7', '#0000FF', '#FF0000', '#FF00FF', '#00FF00',
+            '#00FFFF', '#FFFF00', '#FFFFFF',
+        ],
+    },
+
+    nes => {
+
+        # A sixteen-entry selection from the PPU's 54, not the whole thing.
+        # The full set is mostly near-duplicate darks that a remap never
+        # reaches, and carrying them would slow every lookup to no visible
+        # end. Spread evenly across the hues the console is remembered for.
+        title  => 'NES palette, sixteen of the fifty-four',
+        colors => [
+            '#000000', '#7C7C7C', '#BCBCBC', '#FCFCFC', '#0000FC', '#0078F8',
+            '#3CBCFC', '#A4E4FC', '#B800B8', '#F878F8', '#A81000', '#F83800',
+            '#FCA044', '#F8D878', '#007800', '#B8F818',
+        ],
+    },
 );
 
 # Two-stop ramps for duotone. Kept separate from the 5-stop palettes because a

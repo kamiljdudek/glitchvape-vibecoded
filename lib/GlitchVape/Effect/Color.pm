@@ -30,6 +30,15 @@ $R->register(
 Offsets the red and blue channels in opposite directions, leaving green in
 place. Green carries most of the perceived luminance, so anchoring it keeps the
 image sharp while the edges fringe cyan/magenta.
+
+Two things move in an animation, and they are different things. C<pulse>
+breathes the separation wider and narrower without changing its direction, and
+C<drift> swings the direction itself round the frame while the separation stays
+the same width. Together they read as a lens being focused and turned at once;
+either alone is the more useful.
+
+C<pulse> defaults to the breathing this effect always did and had no way to
+switch off. Set it to 0 for a fringe that holds still.
 DOC
     params => {
         amount => {
@@ -53,6 +62,20 @@ DOC
             max     => 50,
             doc     => 'Random per-render variation added to amount',
         },
+        pulse => {
+            default => 0.35,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'Breathing of the separation width across a loop',
+        },
+        drift => {
+            default => 0,
+            type    => 'num',
+            min     => -8,
+            max     =>  8,
+            doc     => 'Turns the separation angle travels per loop',
+        },
         anchor => {
             default => 'green',
             type    => 'enum',
@@ -72,16 +95,26 @@ sub _chroma_shift
     $amount += $rng->between( -$p->{ jitter }, $p->{ jitter } )
         if $p->{ jitter };
 
-    # Around an animation loop the fringe should breathe, not jump.
-    if ( $ctx->frames > 1 )
-    {
-        $amount *= 1 + 0.35 * sin( 2 * $PI * $ctx->phase );
-    }
+    # Around an animation loop the fringe should breathe, not jump. A width has
+    # nowhere to travel to -- it can only go out and come back -- so this is an
+    # excursion rather than a travel, and closes its loop at any value.
+    $amount *= 1 + $ctx->excursion( $p->{ pulse } );
+
     return if abs( $amount ) < 0.01;
 
-    my $rad = $p->{ angle } * $PI / 180;
-    my $dx  = $amount * cos( $rad );
-    my $dy  = $amount * sin( $rad );
+    # A turn of the angle, on the other hand, does travel: it goes round and
+    # arrives back where it started, so whole turns are what close the loop and
+    # travel() is what rounds to them.
+    # Whole turns discarded before the multiply, for the reason spelled out in
+    # GlitchVape::Effect::Signal's wave: they change nothing about the
+    # direction and everything about the last bit of the arithmetic.
+    my $turns = $ctx->travel( $p->{ drift }, 1 );
+    $turns -= int $turns;
+
+    my $angle = $p->{ angle } + 360 * $turns;
+    my $rad   = $angle * $PI / 180;
+    my $dx    = $amount * cos( $rad );
+    my $dy    = $amount * sin( $rad );
 
     my %move = (
         red   => [  1,  1 ],
@@ -224,6 +257,7 @@ DOC
             default => 'vapor',
             type    => 'str',
             doc     => 'Palette name, or inline "#FF71CE,#01CDFE,..."',
+            suggest => 'palette',
         },
         strength => {
             default => 1.0,
@@ -280,6 +314,7 @@ DOC
             default => 'pinkcyan',
             type    => 'str',
             doc     => 'Duotone or palette name, or "#RRGGBB,#RRGGBB"',
+            suggest => 'duotone',
         },
         strength => {
             default => 0.85,
@@ -341,6 +376,7 @@ DOC
             default => 'vapor',
             type    => 'str',
             doc     => 'Palette name or inline colour list',
+            suggest => 'palette',
         },
         strength => {
             default => 0.7,
@@ -765,10 +801,7 @@ sub _rgb_shift
     my $rng    = $ctx->rng_for( 'rgb_shift' );
     my $amount = $p->{ amount };
 
-    if ( $p->{ pulse } && $ctx->frames > 1 )
-    {
-        $amount *= 1 + $p->{ pulse } * sin( 2 * $PI * $ctx->phase );
-    }
+    $amount *= 1 + $ctx->excursion( $p->{ pulse } );
 
     # Each side gets its own draw. One shared draw would only rescale a
     # symmetric pair, which is the look this effect exists to avoid.

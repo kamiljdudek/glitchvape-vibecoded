@@ -1,0 +1,46 @@
+name: arcade
+title: Eight-bit game, dithered
+
+# The palette is committed at the format stage, before anything else runs, so
+# nothing here recolours: every effect after `bitmap` shapes the picture rather
+# than tinting it. A grade would pull pixels back off the palette and undo the
+# only thing this preset is actually claiming.
+#
+# Scanline spacing is deliberately not a multiple of the pixel size. Matched to
+# it, every dark line lands on the same row of every block and the picture
+# gains a stripe it never had; offset, the lines cross the blocks the way a
+# monitor's did.
+#
+# `--set bitmap.palette=NAME` is the whole dial: c64, ega, cga, nes, gameboy
+# for a machine, or laserwave and vapor for the same treatment in this
+# program's own colours.
+
+output:
+  max_dim: 1200
+
+effects:
+  bitmap:
+    factor: 5
+    palette: spectrum
+    matrix: o4x4
+    amount: 0.25
+    filter: point
+
+  scanlines:
+    opacity: 0.18
+    spacing: 4
+    thickness: 1
+
+  bloom:
+    strength: 0.35
+    radius: 6
+    threshold: 0.62
+
+  vignette:
+    strength: 0.3
+    size: 1.6
+
+  letterbox:
+    ratio: ''
+    border: 0.025
+    color: '#000000'

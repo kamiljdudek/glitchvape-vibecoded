@@ -40,6 +40,13 @@ Displaces each scanline by a sine of its vertical position. Physically this is
 a tape whose speed is oscillating slightly as it passes the head. Two waves at
 different frequencies are summed, because a single clean sine reads as a
 deliberate graphic effect rather than as a fault.
+
+C<phase> and C<drift> are the two halves of the same fact and are easy to
+confuse: C<phase> is where the wobble starts and does not move, C<drift> is how
+many whole cycles it travels while the loop plays. C<drift> defaults to one,
+which is the single cycle per loop this effect always did and had no way to
+change. Set it to 0 to freeze the wobble mid-stretch -- still bent, no longer
+crawling -- or higher to run it faster.
 DOC
     params => {
         amplitude => {
@@ -68,7 +75,14 @@ DOC
             type    => 'num',
             min     => -360,
             max     =>  360,
-            doc     => 'Starting phase in degrees',
+            doc     => 'Starting phase in degrees; does not move',
+        },
+        drift => {
+            default => 1,
+            type    => 'num',
+            min     => -16,
+            max     =>  16,
+            doc     => 'Whole cycles the wobble travels per loop',
         },
         edge => {
             default => 'wrap',
@@ -85,8 +99,20 @@ sub _wave
     my ( $ctx, $p ) = @_;
     return if $p->{ amplitude } <= 0;
 
+    # A cycle is the repeat, so whole cycles are what bring the wobble back to
+    # where the loop found it; travel() rounds to them and returns nothing at
+    # all for a still.
+    #
+    # Only the fraction of a turn is kept. A sine does not care about the whole
+    # ones, but the arithmetic does: 2*pi*7 is not seven times 2*pi to the last
+    # bit, and the error is enough to round one row's displacement to a
+    # different pixel on the frame that closes the loop. Discarding the turns
+    # before the multiply makes the last frame's phase exactly the first's.
+    my $turns = $ctx->travel( $p->{ drift }, 1 );
+    $turns -= int $turns;
+
     my $base = $p->{ phase } * $PI / 180;
-    $base += 2 * $PI * $ctx->phase if $ctx->frames > 1;
+    $base += 2 * $PI * $turns;
 
     my $wrap = $p->{ edge } eq 'wrap';
 
@@ -370,6 +396,13 @@ $R->register(
 Semi-transparent copies of the picture offset to one side, as when a broadcast
 signal arrives twice having bounced off something. Successive echoes get
 weaker and further away.
+
+C<drift> wanders the echo delay back and forth over a loop rather than sliding
+it one way. An echo is a single feature with nowhere to travel to -- pushed off
+one side it would have to reappear at the other, and with only one of it there
+is nothing to cover the jump. Wandering is also what the real thing does: the
+delay follows whatever the signal is bouncing off, and reflectors sway rather
+than orbit.
 DOC
     params => {
         offset => {
@@ -392,6 +425,13 @@ DOC
             min     => 1,
             max     => 8,
             doc     => 'Number of echoes',
+        },
+        drift => {
+            default => 0,
+            type    => 'num',
+            min     => -200,
+            max     =>  200,
+            doc     => 'Pixels the delay wanders either way over a loop',
         },
         strength => {
             default => 0.35,
@@ -418,6 +458,11 @@ sub _ghost
 
     my $opacity = $p->{ strength };
 
+    # Added to the nominal delay before it is multiplied out across the
+    # echoes, so a later echo wanders further than an earlier one -- which is
+    # what a changing path length does to a train of reflections.
+    my $wander = $ctx->excursion( $p->{ drift } );
+
     for my $i ( 1 .. $p->{ count } )
     {
         last if $opacity < 0.01;
@@ -426,7 +471,7 @@ sub _ghost
         my $pct  = int( ( 1 - $opacity ) * 100 + 0.5 );
 
         $echo->Roll(
-            x => int( $p->{ offset } * $i + 0.5 ),
+            x => int( ( $p->{ offset } + $wander ) * $i + 0.5 ),
             y => int( $p->{ vertical } * $i + 0.5 ),
         );
 
@@ -527,6 +572,14 @@ Interlaced video sends odd and even lines as separate fields taken at different
 instants. On anything moving, the two fields disagree -- which is why a paused
 tape shows a comb pattern along every edge. Offsetting alternate lines
 horizontally reproduces that.
+
+C<drift> travels the field pattern down the picture over a loop, snapped to
+whole pairs of rows. That is the interlace crawl -- the slow upward creep of
+the comb that a mistimed field rate gives -- and not the fifty-hertz field
+alternation, which at any frame rate this program writes would land as
+flicker rather than as anything anyone would recognise. Two rows per loop swaps
+the field once and swaps it back; set it to the frame count to alternate every
+frame and see why that is not the default.
 DOC
     params => {
         offset => {
@@ -549,6 +602,13 @@ DOC
             values  => [ qw(odd even) ],
             doc     => 'Which field gets displaced',
         },
+        drift => {
+            default => 0,
+            type    => 'num',
+            min     => -240,
+            max     =>  240,
+            doc     => 'Rows the field pattern crawls per loop, snapped to two',
+        },
     },
     apply => \&_interlace,
 );
@@ -564,6 +624,12 @@ sub _interlace
     {
         $want = 1;
     }
+
+    # Two rows is the whole pattern, so travelling any even number returns it
+    # to itself and the only thing a crawl can do between frames is swap which
+    # field is displaced.
+    $want = ( $want + int $ctx->travel( $p->{ drift }, 2 ) ) % 2;
+
     my $scale = 1 - $p->{ dim };
 
     GlitchVape::Pixels->edit(
