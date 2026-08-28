@@ -183,7 +183,8 @@ sub _comments
     }
 
     return
-        sprintf "Vaporwave and glitch-art transformations for photographs\n"
+          sprintf "Vaporwave and glitch-art transformations for photographs\n"
+        . "Vibe-coded but uses no AI-generated visuals, just photo filter presets\n"
         . "%d effects · %d presets", $effects, $presets;
 }
 

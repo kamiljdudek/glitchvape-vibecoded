@@ -153,7 +153,10 @@ Writes, choosing an encoder from the extension. Options:
     quality  => N       JPEG/HEIC quality (default 92)
     fit      => [W,H]   shrink to fit a box before writing
     colors   => N       quantise to an N-entry palette before writing
-    strip    => 1       drop all metadata (default: on)
+    strip    => 1       drop all metadata with ImageMagick (default: on)
+    metadata => 'strip' 'strip' removes what identifies the photographer,
+                        'keep' leaves everything (overrides strip)
+    credit   => 1       record GlitchVape as what made the file
     optimise => 1       run pngquant/gifsicle where applicable
 
 C<fit> here is the same box as L</load>'s and is what actually guarantees the
@@ -200,7 +203,13 @@ sub save
 
     _ensure_dir( $dir );
 
-    $img->Strip if $strip;
+    # 'keep' and 'strip' both mean "do not let ImageMagick flatten it here":
+    # keep because nothing should go, strip because what goes is chosen
+    # tag by tag afterwards, and Strip would already have taken the ones
+    # being kept.
+    my $metadata = $opt{ metadata } // q{};
+
+    $img->Strip if $strip && !$metadata;
     $img->Set( quality => $quality );
 
     _fit_box( $img, $opt{ fit } )     if $opt{ fit };
@@ -212,6 +221,9 @@ sub save
     }
 
     GlitchVape::Magick::check( $img->Write( $path ), "cannot write $path" );
+
+    _metadata( $path, $metadata, $opt{ credit } )
+        if $metadata || $opt{ credit };
 
     _optimise( $path, $ext, %opt ) if $opt{ optimise };
 
@@ -436,6 +448,83 @@ sub _save_via_heif_enc
         unless $rc == 0 && -s $path;
 
     return $path;
+}
+
+# What a saved file is allowed to say about where it came from.
+#
+# Not ImageMagick's Strip, which is all or nothing. The tags divide into two
+# kinds and only one of them is anybody's business: Orientation, colour space
+# and resolution describe how to read the pixels, and losing them damages the
+# file; GPS, the camera's make and model and serial, the dates and whatever
+# was typed into the comment fields describe the person who took it.
+#
+# exiftool's own idiom for that split is to delete everything and copy the
+# structural tags back from the file's previous state, which is what -all=
+# followed by -tagsfromfile @ does. Listing what to remove instead would mean
+# keeping up with every tag any camera might add, and being wrong quietly.
+#
+# Without exiftool nothing selective is possible, and the fallback is the
+# blunt one: strip the lot. That errs towards privacy rather than away from
+# it, which is the right way to be wrong here.
+my @STRUCTURAL = qw(
+    -Orientation
+    -ColorSpace
+    -ICC_Profile:all
+    -ResolutionUnit
+    -XResolution
+    -YResolution
+);
+
+sub _metadata
+{
+    my ( $path, $metadata, $credit ) = @_;
+
+    my $exiftool = GlitchVape::Tools::find( 'exiftool' );
+
+    unless ( $exiftool )
+    {
+        # Nothing to fall back to for 'keep' -- it is already kept -- and for
+        # 'strip' the image was written whole, so it is taken out here.
+        _strip_wholesale( $path ) if $metadata eq 'strip';
+        return;
+    }
+
+    my @argv = ( $exiftool, '-overwrite_original', '-q', '-q' );
+
+    push @argv, '-all=', '-tagsfromfile', '@', @STRUCTURAL
+        if $metadata eq 'strip';
+
+    if ( $credit )
+    {
+        my $said = "GlitchVape $GlitchVape::VERSION";
+
+        # After the deletion above, so that a strip does not take it out
+        # again -- exiftool applies its arguments in order.
+        push @argv, "-Software=$said", "-XMP:CreatorTool=$said";
+    }
+
+    push @argv, $path;
+
+    # A failure here is not worth losing the render over: the picture is
+    # written and correct, and what is wrong is a tag on it.
+    system( @argv );
+
+    return;
+}
+
+sub _strip_wholesale
+{
+    my ( $path ) = @_;
+
+    require Image::Magick;
+
+    my $img = Image::Magick->new;
+    return if "" . ( $img->Read( $path ) // q{} ) =~ /^Exception [45]/;
+
+    $img->Strip;
+    $img->Write( $path );
+
+    return;
 }
 
 sub _optimise

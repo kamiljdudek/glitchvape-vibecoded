@@ -10,6 +10,7 @@ use GlitchVape::Context    ();
 use GlitchVape::GUI::Cache ();
 use GlitchVape::IO         ();
 use GlitchVape::Pipeline   ();
+use GlitchVape::Watermark  ();
 use GlitchVape::Tools      ();
 
 our $VERSION = '0.01';
@@ -217,7 +218,14 @@ sub preview
         $suffix = '.mp4';
     }
 
-    my $key = $state->cache_key( size => $size, animate => $spec );
+    # The watermark is part of the picture when it is shown, so it is part of
+    # what the cache is keyed on. Without it, turning the bar on serves the
+    # unmarked render straight back out of the store.
+    my $key = $state->cache_key(
+        size    => $size,
+        animate => $spec,
+        extra   => [ 'watermark', $arg{ watermark } // 'none' ],
+    );
 
     return $key if $self->_serve_cached( $key, $suffix, \%arg );
 
@@ -258,12 +266,13 @@ sub preview
             my ( $report ) = @_;
 
             $self->_render_preview(
-                pipeline => $pipeline,
-                seed     => $state->seed,
-                size     => $size,
-                animate  => $spec,
-                output   => $staged,
-                report   => $report,
+                pipeline  => $pipeline,
+                seed      => $state->seed,
+                size      => $size,
+                animate   => $spec,
+                output    => $staged,
+                report    => $report,
+                watermark => $arg{ watermark },
             );
         },
     );
@@ -419,7 +428,7 @@ sub export
     # through by name rather than merged wholesale so that this stays a list
     # of what an export can be told, and a typo in a caller is a missing flag
     # here rather than a key GlitchVape::render silently ignores.
-    for my $key ( qw(max_dim fit colors codec) )
+    for my $key ( qw(max_dim fit colors codec watermark metadata credit) )
     {
         $render{ $key } = $arg{ $key } if defined $arg{ $key };
     }
@@ -474,6 +483,13 @@ sub _render_preview
 
     $arg{ pipeline }->run( $ctx );
 
+    # The same call the export makes, after the pipeline for the same reason:
+    # a preview that showed the mark somewhere else would be showing something
+    # the export is not going to produce.
+    $ctx->image(
+        GlitchVape::Watermark::apply( $ctx->image, $arg{ watermark } ) )
+        if $arg{ watermark };
+
     GlitchVape::IO::save( $ctx->image, $arg{ output }, quality => 92 );
 
     return $arg{ output };
@@ -508,6 +524,10 @@ sub _render_preview_loop
         $ctx->frame( $n );
 
         $arg{ pipeline }->run( $ctx );
+
+        $ctx->image(
+            GlitchVape::Watermark::apply( $ctx->image, $arg{ watermark } ) )
+            if $arg{ watermark };
 
         my $path = GlitchVape::Animate::frame_path( $dir, $n );
         GlitchVape::IO::save( $ctx->image, $path, quality => 100, strip => 1 );

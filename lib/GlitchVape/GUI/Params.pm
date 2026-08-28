@@ -333,12 +333,49 @@ sub _suggested
     return _combo_with_entry( $arg, \@values );
 }
 
+# A closed list, unlike the palette pickers above it. A palette parameter
+# takes an inline '#FF71CE,#01CDFE' that no list could enumerate, so its combo
+# has to stay typeable. A font parameter takes a role, the roles are a fixed
+# set, and anything else typed into it resolves to nothing -- so the entry
+# offered only the chance to get it wrong.
 sub _font
 {
     my ( $arg ) = @_;
 
     my @roles = map { $_->[ 0 ] } @{ GlitchVape::Fonts::available() };
-    return _combo_with_entry( $arg, \@roles );
+
+    return _combo_of( $arg, \@roles );
+}
+
+sub _combo_of
+{
+    my ( $arg, $values ) = @_;
+
+    my $combo = Gtk3::ComboBoxText->new;
+    $combo->set_hexpand( 1 );
+
+    my $current = _as_text( $arg->{ value } );
+    my $active  = 0;
+
+    for my $n ( 0 .. $#$values )
+    {
+        $combo->append_text( $values->[ $n ] );
+        $active = $n if $values->[ $n ] eq $current;
+    }
+
+    $combo->set_active( $active );
+
+    $combo->signal_connect(
+        changed => sub {
+            my $at = $combo->get_active;
+            return if !defined $at || $at < 0;
+
+            $arg->{ on_change }->( $values->[ $at ] ) if $arg->{ on_change };
+            return;
+        }
+    );
+
+    return { control => $combo, get => sub { $combo->get_active_text } };
 }
 
 sub _combo_with_entry

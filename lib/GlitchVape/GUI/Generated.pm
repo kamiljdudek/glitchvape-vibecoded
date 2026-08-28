@@ -249,14 +249,32 @@ sub _build_bottom
         }
     );
 
+    # Only the truncation is worth a word. "Hear it" beside a play button said
+    # what the button already said; what it does not say is that a long track
+    # is auditioned in part, and that is what is left here.
     my $hint = Gtk3::Label->new( q{} );
     $hint->get_style_context->add_class( 'dim-label' );
 
+    # Saving the track on its own, which is the one thing the dialog could not
+    # do: a generated track otherwise exists only inside an exported video, and
+    # a Geiger counter somebody spent ten minutes tuning is worth keeping.
+    my $save = Gtk3::Button->new_with_label( 'Save as…' );
+    $save->set_tooltip_text(
+        'Write this track to a WAV file, at its full length' );
+    $save->signal_connect(
+        clicked => sub {
+            $self->_save_track;
+            return;
+        }
+    );
+
     $row->pack_start( $play, 0, 0, 0 );
     $row->pack_start( $hint, 0, 0, 0 );
+    $row->pack_end( $save, 0, 0, 0 );
 
     $self->{ play } = $play;
     $self->{ hint } = $hint;
+    $self->{ save } = $save;
 
     return $row;
 }
@@ -394,10 +412,11 @@ sub _refresh
     $self->{ detail }->set_text( $detail );
 
     my $capped = q{};
-    $capped = sprintf ' (the first %ds of it)', AUDITION_CAP
+    $capped = sprintf 'Play auditions the first %ds; Save writes all of it.',
+        AUDITION_CAP
         if $seconds > AUDITION_CAP;
 
-    $self->{ hint }->set_text( "Hear it$capped" );
+    $self->{ hint }->set_text( $capped );
 
     $self->_allow( 1 );
 
@@ -450,6 +469,49 @@ sub _toggle_play
     }
 
     $self->{ player }->play( path => $out );
+
+    return;
+}
+
+# Write the track out on its own. At full length, not the audition cap: the
+# cap is there so that pressing Play does not commit you to four minutes, and
+# somebody asking for a file wants the file they configured.
+sub _save_track
+{
+    my ( $self ) = @_;
+
+    my $spec = $self->spec or return;
+
+    my $chooser = Gtk3::FileChooserDialog->new( 'Save track', $self->{ dialog },
+        'save', 'Cancel', 'cancel', 'Save', 'accept' );
+    $chooser->set_do_overwrite_confirmation( 1 );
+    $chooser->set_current_name( sprintf '%s.wav',
+        GlitchVape::Generator::filename( $spec ) );
+
+    my $answer = $chooser->run;
+    my $path   = $chooser->get_filename;
+    $chooser->destroy;
+
+    return unless $answer eq 'accept' && defined $path;
+
+    # Stopped first: the player holds the scratch file open, and on a slow
+    # disk writing a long track underneath a running pipeline is asking for
+    # the two to meet.
+    $self->{ player }->stop if $self->{ player }->playing;
+
+    local $@;
+    my $ok = eval {
+        GlitchVape::Generator::render( spec => $spec, output => $path );
+        1;
+    };
+
+    unless ( $ok )
+    {
+        $self->_report( $@ || 'the track could not be written' );
+        return;
+    }
+
+    $self->{ hint }->set_text( "Saved $path" );
 
     return;
 }

@@ -11,6 +11,8 @@ use File::Basename qw(fileparse);
 
 use Gtk3 ();
 
+use GlitchVape::GUI::Profiles ();
+
 use GlitchVape::Animate ();
 
 our $VERSION = '0.01';
@@ -138,16 +140,7 @@ The settings a fresh session starts with.
 
 =cut
 
-sub defaults
-{
-    return {
-        video_size   => 720,
-        video_format => 'mp4',
-        fps          => 12,
-        still_format => 'origin',
-        retro        => 0,
-    };
-}
+sub defaults { return GlitchVape::GUI::Profiles::defaults() }
 
 =head2 run( %arg )
 
@@ -160,46 +153,369 @@ at all if it is cancelled.
 
 =cut
 
-sub run
+sub manage
 {
     my ( $class, %arg ) = @_;
 
-    my %settings = ( %{ defaults() }, %{ $arg{ settings } || {} } );
+    my $profiles = GlitchVape::GUI::Profiles::load();
 
     my $dialog = Gtk3::Dialog->new_with_buttons(
-        'Export settings',
+        'Export profiles',
         $arg{ parent },
-        'modal', 'Cancel', 'cancel', 'Save', 'accept'
+        'modal', 'Close', 'close'
     );
-    $dialog->set_default_size( 460, -1 );
+    $dialog->set_default_size( 520, 420 );
 
     my $book = Gtk3::Notebook->new;
     $book->set_border_width( 10 );
 
-    my $video = _video_page( \%settings );
-    my $still = _still_page( \%settings );
+    my %pane;
+    for my $kind ( [ video => 'Videos' ], [ still => 'Stills' ] )
+    {
+        my ( $key, $label ) = @$kind;
 
-    $book->append_page( $video->{ page }, Gtk3::Label->new( 'Video' ) );
-    $book->append_page( $still->{ page }, Gtk3::Label->new( 'Stills' ) );
+        $pane{ $key } = _profile_pane( $dialog, $profiles, $key );
+        $book->append_page( $pane{ $key }{ page }, Gtk3::Label->new( $label ) );
+    }
+
+    # One list changing can add a name the other has to avoid, so both are
+    # rebuilt from the one array whenever either of them edits it.
+    my $refresh = sub {
+        $_->{ rebuild }->() for values %pane;
+        GlitchVape::GUI::Profiles::save( $profiles );
+        return;
+    };
+    $_->{ on_change }->( $refresh ) for values %pane;
 
     $dialog->get_content_area->add( $book );
+    $dialog->show_all;
+    $dialog->run;
+    $dialog->destroy;
+
+    $arg{ on_done }->( $profiles ) if $arg{ on_done };
+
+    return $profiles;
+}
+
+# One tab: the profiles of one kind, and the four things that can be done to
+# one. A list with an action bar under it rather than a row of buttons beside
+# each entry -- the actions are about whichever is selected, and repeating
+# them per row says the opposite.
+sub _profile_pane
+{
+    my ( $parent, $profiles, $kind ) = @_;
+
+    my $page = Gtk3::Box->new( 'vertical', 0 );
+
+    my $list = Gtk3::ListBox->new;
+    $list->set_activate_on_single_click( 0 );
+
+    my $scroll = Gtk3::ScrolledWindow->new;
+    $scroll->set_policy( 'never', 'automatic' );
+    $scroll->set_vexpand( 1 );
+    $scroll->add( $list );
+    $page->pack_start( $scroll, 1, 1, 0 );
+
+    my $bar = Gtk3::ActionBar->new;
+    $page->pack_start( $bar, 0, 0, 0 );
+
+    my %state  = ( rows => [] );
+    my $notify = sub { };
+
+    my $selected = sub {
+        my $row = $list->get_selected_row or return undef;
+        return $state{ rows }[ $row->get_index ];
+    };
+
+    my $rebuild = sub {
+        $_->destroy for $list->get_children;
+        @{ $state{ rows } } = ();
+
+        for my $one (
+            @{ GlitchVape::GUI::Profiles::of_kind( $profiles, $kind ) } )
+        {
+            push @{ $state{ rows } }, $one;
+            $list->add( _profile_row( $one, $kind ) );
+        }
+
+        $list->show_all;
+        return;
+    };
+
+    # A shipped profile is read-only, the same as it is unremovable, though for
+    # a better reason than symmetry. Removing one cannot work at all: it comes
+    # back on the next load. Editing one *did* work -- it turned the row into
+    # the user's own copy, which then overrode the shipped one by name -- and
+    # the way back was to notice that Remove had become available and that
+    # using it restored the original, which nothing said anywhere.
+    #
+    # A default that can be permanently changed by a route back nobody can
+    # find is worse than one that cannot be changed at all. Duplicate is how
+    # you get a profile like this one but different, and the greyed Edit says
+    # so rather than merely refusing.
+    my $edit = sub {
+        my ( $one ) = @_;
+        return unless $one && !$one->{ builtin };
+
+        my $edited = _edit_profile( $parent, $profiles, $one );
+        return unless $edited;
+
+        $one->{ $_ } = $edited->{ $_ } for keys %$edited;
+
+        $notify->();
+        return;
+    };
+
+    for my $action (
+        [
+            'Add',
+            'list-add-symbolic',
+            sub {
+                my $one = {
+                    name => GlitchVape::GUI::Profiles::unique_name(
+                        $profiles, ucfirst( $kind ) . ' profile'
+                    ),
+                    kind     => $kind,
+                    builtin  => 0,
+                    settings => {},
+                };
+
+                my $edited = _edit_profile( $parent, $profiles, $one );
+                return unless $edited;
+
+                push @$profiles, { %$edited, builtin => 0 };
+                $notify->();
+                return;
+            }
+        ],
+        [
+            'Duplicate',
+            'edit-copy-symbolic',
+            sub {
+                my $one = $selected->() or return;
+
+                push @$profiles,
+                    {
+                    name => GlitchVape::GUI::Profiles::unique_name(
+                        $profiles, $one->{ name }
+                    ),
+                    kind     => $one->{ kind },
+                    builtin  => 0,
+                    settings => { %{ $one->{ settings } } },
+                    };
+
+                $notify->();
+                return;
+            }
+        ],
+        [
+            'Edit',
+            'document-edit-symbolic',
+            sub { $edit->( $selected->() ); return }
+        ],
+        [
+            'Remove',
+            'user-trash-symbolic',
+            sub {
+                my $one = $selected->() or return;
+
+                # A built-in cannot be removed, only reset: it would come
+                # straight back on the next load, which would read as the
+                # button not working.
+                @$profiles = grep { $_ != $one } @$profiles;
+
+                $notify->();
+                return;
+            }
+        ],
+        )
+    {
+        my ( $label, $icon, $action_sub ) = @$action;
+
+        my $button = Gtk3::Button->new;
+        $button->set_image(
+            Gtk3::Image->new_from_icon_name( $icon, 'button' ) );
+        $button->signal_connect( clicked => $action_sub );
+
+        # Wrapped so the tooltip survives the button being greyed out. An
+        # insensitive widget stops taking pointer events and a tooltip is shown
+        # from the pointer being over something, so a tooltip on the button
+        # itself is the one nobody can read -- exactly the tooltip that has
+        # something to explain. The box around it stays sensitive and carries
+        # the words instead. set_visible_window(0) keeps it from drawing a
+        # background of its own over the bar.
+        my $around = Gtk3::EventBox->new;
+        $around->set_visible_window( 0 );
+        $around->add( $button );
+
+        $bar->pack_start( $around );
+
+        $state{ button }{ $label } = $button;
+        $state{ around }{ $label } = $around;
+    }
+
+    # Icons alone, so the words have to live somewhere. Each button says what
+    # it does, and when it cannot, says why not.
+    my $explain = sub {
+        my ( $label, $on, $why ) = @_;
+
+        $state{ button }{ $label }->set_sensitive( $on ? 1 : 0 );
+        $state{ around }{ $label }->set_tooltip_text( $why );
+
+        return;
+    };
+
+    my $sync = sub {
+        my $one = $selected->();
+
+        for my $action ( qw(Add Duplicate Edit Remove) )
+        {
+            my ( $on, $why ) = _availability( $action, $one );
+            $explain->( $action, $on, $why );
+        }
+
+        return;
+    };
+
+    $list->signal_connect( 'row-selected' => $sync );
+    $list->signal_connect(
+        'row-activated' => sub { $edit->( $selected->() ) } );
+
+    $rebuild->();
+    $sync->();
+
+    return {
+        page      => $page,
+        rebuild   => sub { $rebuild->(); $sync->(); return },
+        on_change => sub { $notify = $_[ 0 ]; return },
+    };
+}
+
+# Whether an action applies to the selected profile, and the sentence saying
+# why when it does not.
+#
+# Every one of these buttons is an icon, so the tooltip is the only place any
+# of it is written down -- and a greyed button with nothing to say is
+# indistinguishable from a broken one. The two reasons a thing can be
+# unavailable are kept apart: nothing selected is a different fact from this
+# one being a default, and sharing a vague sentence would answer neither.
+sub _availability
+{
+    my ( $action, $one ) = @_;
+
+    return ( 1, 'Add a profile' ) if $action eq 'Add';
+
+    return ( 0, "Select a profile to \L$action" ) unless $one;
+
+    my $name    = $one->{ name };
+    my $builtin = $one->{ builtin };
+
+    return ( 1,
+        $builtin
+        ? "Copy '$name' to a profile you can edit"
+        : "Duplicate '$name'" )
+        if $action eq 'Duplicate';
+
+    return ( !$builtin,
+        $builtin
+        ? 'A default profile cannot be edited. Duplicate it and edit the copy'
+        : "Edit '$name'" )
+        if $action eq 'Edit';
+
+    return ( !$builtin, $builtin
+        ? 'You cannot remove a default profile'
+        : "Remove '$name'" );
+}
+
+sub _profile_row
+{
+    my ( $one, $kind ) = @_;
+
+    my $row = Gtk3::ListBoxRow->new;
+
+    my $box = Gtk3::Box->new( 'vertical', 2 );
+    $box->set_border_width( 8 );
+
+    my $name = Gtk3::Label->new( $one->{ name } );
+    $name->set_xalign( 0 );
+    $box->pack_start( $name, 0, 0, 0 );
+
+    my $said = Gtk3::Label->new(
+        describe(
+            GlitchVape::GUI::Profiles::settings( $one ),
+            $kind eq 'video'
+        )
+    );
+    $said->set_xalign( 0 );
+    $said->get_style_context->add_class( 'dim-label' );
+    $box->pack_start( $said, 0, 0, 0 );
+
+    $row->add( $box );
+
+    return $row;
+}
+
+# One profile, in a dialog: its name, and the page for its kind. Returns the
+# edited copy, or nothing if it was cancelled.
+sub _edit_profile
+{
+    my ( $parent, $profiles, $one ) = @_;
+
+    my %settings = %{ GlitchVape::GUI::Profiles::settings( $one ) };
+
+    my $dialog = Gtk3::Dialog->new_with_buttons( 'Edit export profile',
+        $parent, 'modal', 'Cancel', 'cancel', 'Save', 'accept' );
+    $dialog->set_default_size( 460, -1 );
+
+    my $box = Gtk3::Box->new( 'vertical', 10 );
+    $box->set_border_width( 10 );
+
+    my $name = Gtk3::Entry->new;
+    $name->set_text( $one->{ name } );
+    $name->set_activates_default( 1 );
+
+    my $named = Gtk3::Box->new( 'horizontal', 10 );
+    $named->pack_start( Gtk3::Label->new( 'Name' ), 0, 0, 0 );
+    $named->pack_start( $name,                      1, 1, 0 );
+    $box->pack_start( $named, 0, 0, 0 );
+
+    my $body =
+        $one->{ kind } eq 'video'
+        ? _video_page( \%settings )
+        : _still_page( \%settings );
+
+    $box->pack_start( $body->{ page }, 1, 1, 0 );
+
+    $dialog->get_content_area->add( $box );
     $dialog->set_default_response( 'accept' );
     $dialog->show_all;
 
     my $answer = $dialog->run;
-
-    # Read back only on Save. The controls have been writing into their own
-    # copy all along, so Cancel is simply not passing it on.
-    my %out =
-        ( %settings, %{ $video->{ read }->() }, %{ $still->{ read }->() } );
+    my %read   = ( %settings, %{ $body->{ read }->() } );
+    my $typed  = $name->get_text;
 
     $dialog->destroy;
 
-    return unless $answer eq 'accept';
+    return undef unless $answer eq 'accept';
 
-    $arg{ on_done }->( \%out ) if $arg{ on_done };
+    # A profile stores only what its kind uses. Keeping the rest would write
+    # a frame rate into a PNG profile, where the next reader would reasonably
+    # wonder what it meant.
+    my @keep =
+        $one->{ kind } eq 'video'
+        ? qw(video_size video_format fps frames)
+        : qw(still_format retro);
 
-    return \%out;
+    my %kept = map { exists $read{ $_ } ? ( $_ => $read{ $_ } ) : () } @keep;
+
+    # Renaming onto another profile's name would make the saved file
+    # ambiguous about which one it is.
+    my $final = $typed;
+    $final = $one->{ name } unless length $final;
+    $final = GlitchVape::GUI::Profiles::unique_name( $profiles, $final )
+        if $final ne $one->{ name };
+
+    return { name => $final, kind => $one->{ kind }, settings => \%kept };
 }
 
 # ---------------------------------------------------------------------------
@@ -443,6 +759,48 @@ and for anything that needs to know what is on offer without building a combo.
 sub sizes
 {
     return [ map { [ @$_ ] } @SIZES ];
+}
+
+=head2 video_formats()
+
+=head2 still_formats()
+
+The format tables, as copies. Exposed for the same reason C<sizes> is: the
+wizard lays the same choices out its own way, and a second copy of the list
+would be a second thing to update when a format is added.
+
+=cut
+
+sub video_formats { return _copies( \@VIDEO_FORMATS ) }
+sub still_formats { return _copies( \@STILL_FORMATS ) }
+
+# Fresh hashes, not the module's own: a caller building a page from these is
+# entitled to annotate them without editing the format table underneath.
+sub _copies
+{
+    my ( $list ) = @_;
+
+    my @out;
+    push @out, { %$_ } for @$list;
+
+    return \@out;
+}
+
+=head2 format_note( $settings, $animated )
+
+What the chosen format is good for, in one line, or empty if it says nothing.
+
+=cut
+
+sub format_note
+{
+    my ( $settings, $animated ) = @_;
+
+    my $list = $animated ? \@VIDEO_FORMATS : \@STILL_FORMATS;
+    my $key =
+        $animated ? $settings->{ video_format } : $settings->{ still_format };
+
+    return _entry( $list, $key )->{ note } // q{};
 }
 
 # ---------------------------------------------------------------------------

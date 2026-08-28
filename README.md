@@ -367,425 +367,14 @@ cheaply.
 
 ## Graphical interface
 
-```bash
-glitchvape-gui                              # open empty
-glitchvape-gui -p vhs-decay Pictures/IMG_8111.HEIC
-```
-
-What goes into the render on the left, the render itself on the right, Apply
-between them, Export to write the result at full size.
-
-The left pane is two pages of a stack under a switcher, because effects and
-soundtrack are both answers to the same question:
-
-- **Image** — the effects in the pipeline, one row each: a checkbox for
-  whether it is in the render, its presentable name beside the identifier a
-  preset and `--set` would use, and a minus to take it out.
-- **Soundtrack** — the tracks mixed under an animation, the same shape. With
-  **Animate** off the page says so rather than disappearing; nothing is
-  discarded, so switching animation off to check a still frame and back on
-  again finds the mix as it was.
-
-The foot of the pane is an action bar shared by both pages:
-
-| | |
-|---|---|
-| **+** | adds to whichever page is showing — a popover offers *Single effect…* or *Effects from a preset…* on Image, and the file or a generated kind on Soundtrack |
-| **cog** | the settings of the selected row — a popover on Image, the track's own wizard on Soundtrack |
-| **camera** | **Animate**: whether the render is a loop or a still |
-| **Apply** | renders it |
-
-Only Apply keeps a label — four of them do not fit the pane, and it is the
-one with a render bill attached. The other three carry tooltips naming their
-keys, `Alt+D`, `Alt+J` and `Alt+N`, which are accelerators rather than
-mnemonics because a button with no label has nowhere to underline a letter.
-All four sit outside the scrolled list, so none can be scrolled away by a long
-pipeline, and Apply keeps the accent colour that marks it as the one action
-the rest of the pane is leading up to. Apply becomes **Stop** while a render
-is in flight, icon and tooltip along with the word, and the button is pinned
-to the wider of the two so the bar does not twitch.
-
-Switching page drops the effect selection, and the cog goes back to waiting
-for one: it acts on the effect list, and a selection kept across the switch
-would point at something not on screen.
-
-While a render runs, a spinner sits over the picture rather than in the bar,
-and the picture can still be panned and zoomed under it.
-
-### An effect's settings are a popover
-
-A row says whether an effect is in the render and what it is called. Its
-parameters are in a popover hung off the cog: select a row, press the cog,
-press it again to put the settings away.
-
-A popover rather than a window because there is no OK here and no Cancel — a
-control writes to the state the moment it moves. A window with a title bar and
-no confirming buttons looks like a dialog and behaves like a panel, and people
-go looking for the button that commits the change; the only one there is Apply,
-which belongs to the whole pipeline.
-
-It is deliberately **not** modal, which is not a popover's default. Rendering
-here is an explicit Apply, so one that closed the moment anything else was
-clicked would have to be reopened after every render. Left non-modal it stays
-up across an Apply, and it follows the selection: click another row and it
-shows that effect instead.
-
-It carries the effect's summary, its identifier, and a switch for whether it is
-in the render — the same fact as the row's checkbox, and the two move together.
-Removing the effect it is showing closes it, and an undo or a fresh preset
-rebuilds what it shows.
-
-The cost, paid knowingly: one effect at a time. Two sets of controls at once
-is genuinely the better way to decide how much `chroma_shift` answers this
-much `scanlines`.
-
-It is a front end, not a second implementation. The controls are generated
-from the same `register()` declarations that produce the CLI flags and
-`--explain`, so an effect added to the registry gets a widget without anyone
-editing the GUI — a `num` with a range becomes a slider marked at its default,
-an `enum` becomes a combo, a colour gets a picker beside its entry, and
-`osd.date` gets a calendar. Export calls the same `GlitchVape::render` that
-`bin/glitchvape` calls, and the result is byte-identical to the equivalent
-command line; there is a test that asserts exactly that.
-
-The two parameters with a second widget beside the entry — the colour picker
-and the calendar — keep the **entry** as the value, with the widget only a way
-of filling it in. Both have a meaning no picker can express: an empty colour
-means *no colour*, and an empty `osd.date` means *invent a plausible 1990s
-date, a different one per seed*, which is the effect's default and what most
-renders want. So the calendar writes `JAN 05 1995` into the field and offers
-an **Any 1990s date** button to empty it again, opening on whatever the field
-already says rather than on today — a present-day timestamp being exactly the
-anachronism the effect exists to avoid. A date it cannot parse is left alone:
-`osd.date` accepts any literal string, and somebody who typed `TUESDAY` meant
-it.
-
-### The menu
-
-The hamburger at the end of the header bar holds what is done rarely enough
-not to earn a button of its own — which is the test for whether something
-belongs behind one:
-
-| | |
-|---|---|
-| **Randomize** | a new seed — reshuffles every effect that draws on randomness, leaving the parameters alone |
-| **Animation settings…** | how many frames the loop is and how fast; it reports the resulting length |
-| **Export settings…** | what Export writes and at what size — a tab for video, a tab for stills |
-| **Clear all effects** | empties the pipeline without leaving the image; an ordinary edit, so undo steps back over it |
-| **Save as preset…** | writes the current settings to `presets/`, usable immediately as `-p <name>` |
-| **Copy command line…** | the `glitchvape` invocation that produces this export, to read and to copy |
-| **Check dependencies…** | what `--check-deps` and `--check-fonts` print, in a window — a graphical session being exactly where nobody has a terminal open |
-| **Clear preview cache** | empties the render store; nothing is lost but time |
-| **About GlitchVape** | version, licence, and how many effects and presets this copy can actually see |
-
-The seed is an action rather than a field. A seed is never typed in — what it
-is only matters *after* the fact, for reproducing a render that came out well
-— so it is reported in the status line after every render, and `Copy command
-line` carries it.
-
-Frames and rate are the same kind of thing: set once and then left, while the
-**Animate** toggle they govern sits beside **Apply**, because that is what it
-acts on. It changes what Apply *does* — twenty-four renders instead of one —
-and what Export then writes, rather than how the result is displayed. Put over
-with the preview controls it reads as another free adjustment like zoom, which
-it is not.
-
-A toggle rather than a checkbox because it is a mode the window is *in*, and a
-pressed button says that from across the room in a way a tick in a box does
-not.
-
-#### Export settings
-
-Export asks one question in a file chooser: *where*. Everything else could be
-inferred from the name typed there — letting the extension pick the encoder
-and the preset decide the size. A fine default and a poor only option, because
-the two things people actually change are the size and the format, and neither
-should require knowing that `.webm` means VP9.
-
-**Video**
-
-| | |
-|---|---|
-| Frame rate | the same setting as in Animation settings — see below |
-| Resolution | 512 / 720 / 900 / 1080 / 1440 / 1920 px, or **Native**. Default 720 |
-| Format | MP4 · H.264, WebM · VP9, WebM · AV1 |
-
-The sizes are the previewer's list extended upwards, and they mean what the
-previewer's mean: **a cap on the longer side**, aspect preserved, never
-enlarged. `720` is 720×540 for a 4:3 photograph and 540×720 for a portrait
-one. It is not the broadcast sense of 720p — nothing here pads a picture out
-to a frame it does not fill.
-
-**Native** is deliberately not the default. It means *no cap at all*, and on a
-modern phone photograph that is a 12-megapixel video, which is not what
-somebody who has not thought about it wants.
-
-The frame rate appears here *and* in Animation settings because it is
-genuinely both — how fast the loop plays, and the rate of the file. Rather
-than two numbers that can disagree, both dialogs read and write the same one.
-
-**Stills**
-
-| | |
-|---|---|
-| Same as the original | a JPEG in stays a JPEG out; a HEIC stays a HEIC |
-| PNG | lossless |
-| Windows Bitmap · 256 colours | an 8-bit `.bmp` with a dithered palette |
-| ☐ Keep retro-friendly dimensions | fit the result inside 640×480 |
-
-The retro box is `--fit 640x480` and turns with the photograph, so a portrait
-shot becomes 480×640 rather than being made tiny. It is applied to the
-*finished* picture, so a border or letterbox added by an effect is inside the
-box rather than pushing the result out of it.
-
-The chosen format also decides the filename Export opens with, so picking
-*Windows Bitmap* means `out/IMG_8111.gameboy.bmp` is already in the box rather
-than something to type over.
-
-#### Copy command line
-
-The interface claims to be a front end rather than a second implementation.
-This is that claim made legible — shown whole, in a monospaced box, with a
-Copy button:
-
-```
-glitchvape \
-    -p gameboy \
-    -s 7 \
-    --colors 256 \
-    --fit 640x480 \
-    -o out/IMG_8111.gameboy.bmp \
-    Pictures/IMG_8111.HEIC
-```
-
-Shown rather than only copied because the command is the one thing here worth
-reading: it names every effect that differs from the preset, so it doubles as
-a summary of what has been dialled in — and a clipboard is a poor place to
-read anything from.
-
-The breaks are not a column count. Each line is one flag and the value that
-belongs to it, so every line is a complete thought, the whole thing is still
-one command, and deleting a line removes exactly one setting rather than
-corrupting the syntax. Paste it into a shell and it runs.
-
-It carries the export settings too, and only the parts that apply to what is
-being written: a codec means nothing to a still and a palette means nothing to
-a video. `--max-dim` is absent when the size is Native, because the flag's
-absence is what leaves the preset's own limit standing — and `--codec` is
-absent for H.264 in an `.mp4`, because the extension already says it.
-
-It is also diffed rather than dumped:
-
-```
-glitchvape -p hotline -s 4242 -e vgatext --set vgatext.runs=7 \
-    -d bloom --set scanlines.opacity=0.55 -d grille photo.heic
-```
-
-The state holds a concrete value for every parameter of every effect, because
-a widget needs one. Emitting all of them would be correct and useless — a
-preset with nine effects is three hundred `--set` flags. So the command is
-compared against what `-p hotline` produces on its own and only the
-differences are printed, which is shorter *and* still exact: `--set` always
-wins over the file, so a parameter left out is one the preset already sets to
-that value. Generated tracks are diffed against their declared defaults the
-same way.
-
-The preview size and the mute button are deliberately absent: neither changes
-what is exported.
-
-### Adding an effect is a wizard
-
-Thirty-nine effects is too many for one list, so **+ → Single effect…** opens
-a three-page assistant that asks the questions in the order a person has them.
-
-**What kind of thing am I after?** The nine stages under their presentable
-titles, each with a line of description and a count of what is still free.
-Categories are the pipeline stages rather than a taxonomy invented alongside
-them, because where an effect runs and what it is for are the same fact.
-
-**Which one?** Everything unused in that category, by name and summary, with a
-search box. Search deliberately reaches outside the chosen category — someone
-who types `scanline` while standing in Colour meant the effect, not the
-category — and matches the presentable name, the summary *and* the identifier,
-so knowing either spelling is enough. A note under the list says which scope
-is in force.
-
-On both list pages a click **picks** a row; only a double click or Enter moves
-on. GtkListBox activates on a single click by default, which made touching a
-name indistinguishable from choosing it and pressing Continue — so nobody
-could look down the list.
-
-**How strong?** The declared parameters, built by the same code that builds
-them for the effects list, against a live preview.
-
-That preview is not an impression of the effect. It is the whole current
-pipeline plus the candidate, rendered at 320px through the same path and the
-same cache as every other preview, so what it shows is what Apply produces.
-Renders are coalesced rather than issued per slider step: a drag costs one
-render, when it stops, and dragging back to a value already seen redraws from
-disk.
-
-Nothing reaches the pipeline until Apply. The wizard previews against a
-detached copy of the state, so cancelling — at any point, however many
-previews have been rendered — leaves the settings exactly as they were. Once
-applied, the effect is an ordinary member of the list with no memory of having
-arrived through a wizard.
-
-### Watching a loop render
-
-A still gives a spinner over the picture and nothing else — there is one step
-and it is the whole render. A loop counts: **Frame 7 of 24**, a small bar
-under it, and after a few frames a rough estimate of how much longer.
-
-The estimate ignores the first frame. That one pays for decoding the source,
-which every frame after it reuses, so extrapolating from it alone promises a
-wait half again as long as the one that actually follows — and a figure that
-then falls steadily is worse than no figure at all.
-
-The bar stops short of full when the frames are done and the label changes to
-**Encoding…**, because after the last frame there is still an ffmpeg run, and
-with a soundtrack an audio render before it. Export counts the same way, and
-is the one that benefits: it renders at full size rather than preview size.
-
-The frame is as fine as the counting gets. Inside one is a chain of
-ImageMagick calls, none of which reports progress, so anything more precise
-would be made up.
-
-### The picture appears when you open it
-
-Opening a file puts the photograph on the screen straight away, with nothing
-applied to it. There is no pipeline to run, so it costs only the decode and
-the downscale — under a second on a twelve-megapixel HEIC, and a cache lookup
-the second time.
-
-Deliberately not the preset's render, even when one was named on the command
-line: that can be eight seconds, and the point of this is to be immediate.
-Apply is what renders the preset.
-
-### Why Apply is a button
-
-A render is one to eight seconds depending on size, so there is no live
-preview to be had. Making it explicit also gives undo something to be a step
-of: one Apply is one history entry, rather than fifty from dragging a slider.
-
-Renders happen in a forked child watched by the main loop, so the window stays
-responsive and a second Apply cancels the first.
-
-### Undo does not stack images
-
-Effects cannot be piled up on the result of the previous one, and the reason
-is the stage model. The pipeline sorts by declared stage because order is not
-a free choice — scanlines applied before a downsample get eaten by the
-resample — so an effect switched on later may still have to run earlier.
-Applying incrementally would also break the per-effect random streams that let
-one parameter be tuned without reshuffling the rest.
-
-So an undo step is a whole configuration, and every state re-renders from the
-source. That would be slow if it happened: each render is cached under a
-digest of the settings that produced it, and a state on the undo stack has
-been rendered before, so stepping back through history is a file lookup.
-
-### Adding a track
-
-The **Soundtrack** page lists what is mixed under the animation. **+** offers
-*Audio file…* — which asks for a file and then opens a three-page wizard:
-
-1. **Crop.** The whole file as a waveform, drawn in the `vapor` palette, with
-   a selection you drag by either edge or move as a block. Play auditions the
-   selection — the original file, seeked, so it starts instantly and you can
-   go on dragging while it plays. Past 30 seconds an exclamation appears
-   saying what that costs; it does not stop you, and it goes away again if you
-   drag back.
-2. **Filters.** The four under [Audio](#audio), each with a switch and an
-   amount, generated from the same declarations that drive `--audio-filter`.
-   Play here renders the crop through the chain and plays *that*, so nothing
-   has to be imagined. Four one-press chains — Slowed + reverb, Mallsoft,
-   Tape dub, Nothing.
-3. **Confirm.** What was chosen and how long the result will be.
-
-Below a separator the same popover lists the generated kinds — **Phone dial
-tones**, **TV static** — each opening the window for that one.
-
-Asking which kind first and configuring it afterwards, rather than one dialog
-with a kind combo at the top: the kind decides what every other control in the
-window is, so choosing it there would rebuild the dialog underneath the
-pointer. The window that opens is already the right one, and its title says
-which.
-
-Neither the popover nor the window knows what the kinds are. The popover is
-built from the generator registry and the controls are built from that kind's
-declaration by the same code that builds the effect pane, so a third generator
-appears in both without either being touched.
-
-The readout updates on every change. For a dialled phrase it shows the
-keypress sequence itself, which matters more than it looks: multi-tap makes
-`a` and `2` the same sound, and watching `2` appear three times for a `c` is
-what makes the encoding obvious rather than mysterious.
-
-There is one file at most, so that line of the popover goes away once it has
-been used. Generated tracks stack, so theirs never do — add as many as you
-like. The list then holds everything in the mix, each row with its own minus,
-so dropping the music does not take the static with it. Selecting a row and
-pressing the cog reopens whatever built it — the same gesture the effects use,
-which is why the rows carry no Edit button of their own. Removing is one press
-with no confirmation, because the wizards are quick to run again.
-
-Those stay dialogs rather than becoming popovers. A generated track has a real
-Cancel and only commits on Add: deciding whether to have a track at all is a
-decision you can back out of, in a way that moving a slider on one you already
-have is not. The audio file is a three-page wizard besides.
-
-### Mute in preview
-
-The speaker button in the toolbar plays the preview silently.
-
-Rendering a loop with a soundtrack and then watching it over and over while
-tuning an effect is how this interface actually gets used, and by the fifth
-repeat the tones are not telling anybody anything. Muting is a property of the
-player rather than of the render: it takes effect at once, costs no re-render,
-and the exported file still has its sound. It is playbin's own `mute`, not a
-volume of zero, so the audio is not decoded at all and cannot drift back in
-through a seek.
-
-The track is in the *preview*, not only the export: what a soundtrack does to
-a loop is exactly the thing a still cannot show.
-
-There is no zoom on the waveform. The whole file is always across the width,
-and the spin buttons beside it place an edge to a hundredth of a second — so
-the eye finds the section and the numbers place it, and no scroll offset has
-to exist.
-
-### Preview size
-
-Previews render at a reduced size, chosen under the preview. Effects work in
-pixels rather than fractions of the frame, so a small preview is a fair
-impression of the full-size render rather than a crop of it. Export is always
-full size.
-
-| | 512 px | 720 px | 900 px | full |
-|---|---|---|---|---|
-| `vhs-decay`, 12 MP source | 1.9 s | 2.8 s | 3.6 s | 8.0 s |
-
-### The cache
-
-`$XDG_CACHE_HOME/glitchvape`, or `~/.cache/glitchvape`. Working files go in a
-per-session subdirectory removed on exit — including on `INT`/`TERM`/`HUP` —
-directories left by a crashed session are swept at startup by checking whether
-their pid still exists, and the shared preview store is capped at 256 MB,
-discarding least-recently-used entries after every render.
-
-### One thing worth knowing
-
-The parent process never touches ImageMagick. It is built with OpenMP, and an
-OpenMP thread pool does not survive `fork`: the child inherits the pool's
-mutexes without the threads that would release them, and the first parallel
-operation deadlocks forever. Caching the decoded source in the parent — the
-obvious optimisation, worth 0.4 s per render — is therefore the one thing that
-cannot be done. Every image operation happens in a child that has not forked.
-
-The consolation is a more honest preview: it reads the source through
-`GlitchVape::IO::load` at the preview size, the same call the CLI makes, so it
-differs from the export only in the size it was rendered at.
+A window over the same pipeline: open a photograph, stack effects, watch
+the preview, export a still or a loop. Everything it can do, the command
+line can do too — `Copy command line` in the menu writes out the
+invocation for whatever is on screen.
+
+**[docs/interface.md](docs/interface.md)** covers it properly: the panes, the
+menu, the export wizard, the settings popover, and the arrangements that
+were tried and discarded on the way to this one.
 
 ---
 
@@ -805,6 +394,13 @@ differs from the export only in the size it was rendered at.
 | `deepfry` | reposted into oblivion |
 | `datamosh` | decoder given the wrong frame |
 | `anaglyph` | red/cyan misregistration, a 3D comic without the glasses |
+| `arcade` | eight-bit game: chunky pixels, a hardware palette, dithered |
+| `newspaper` | colour newsprint, screened at print angles and misregistered |
+
+`base-vhs` is also on the list but is not a look: it is the shared tape chain
+with the damage dialled low, for other presets to `extends` rather than
+restate. `--list-presets` shows it; picking it gives a very mild result, which
+is what it is for.
 
 A preset is a YAML file naming effects and their parameters:
 
@@ -841,19 +437,19 @@ whatever you changed on top.
 
 ## Effects
 
-39 effects, sorted automatically into a signal chain. Order is not a free
+41 effects, sorted automatically into a signal chain. Order is not a free
 choice — scanlines applied before a downsample get eaten by the resample — so
 each effect declares a stage and the pipeline sorts by it.
 
 | Stage | Shown as | Effects |
 |---|---|---|
-| **format** | Resolution & Format | `downsample` |
+| **format** | Resolution & Format | `downsample` `bitmap` |
 | **colour** | Colour | `grade` `palette` `duotone` `gradient_map` `posterize` `quantize` |
 | **channels** | Channel Separation | `chroma_shift` `rgb_shift` `chroma_bleed` |
 | **damage** | Data Damage | `pixelsort` `databend` `blockshift` `slice` `vgatext` `deepfry` |
 | **signal** | Signal & Tape | `wave` `tracking` `head_switch` `ghost` `vhold` `interlace` `dropout` `static` |
 | **grain** | Grain & Dither | `grain` `dither` |
-| **optics** | Screen & Optics | `scanlines` `grille` `bloom` `vignette` `curvature` `halftone` `glare` `softness` |
+| **optics** | Screen & Optics | `scanlines` `grille` `bloom` `vignette` `curvature` `halftone` `cmyk` `glare` `softness` |
 | **overlay** | Overlays | `text` `osd` `grid` `watermark` |
 | **framing** | Framing | `letterbox` |
 
@@ -916,8 +512,15 @@ glitchvape -e duotone -e scanlines -e grain --set duotone.name=hotline photo.hei
 
 ### Palettes
 
-`vapor` `hotline` `mallsoft` `laserwave` `sunset` `neontokyo` `crt` `amber`
-`gameboy` `broadcast` `seapunk` `fax`, plus inline lists:
+Moods: `vapor` `hotline` `mallsoft` `laserwave` `sunset` `neontokyo` `crt`
+`amber` `gameboy` `broadcast` `seapunk` `fax`.
+
+Real hardware, for the eight-bit end: `cga` `ega` `c64` `spectrum` `nes`.
+These are not moods somebody chose but the whole set of colours a machine
+could show, which is why they look the way they do.
+
+Anything that takes a palette takes any of them, and takes an inline list
+instead:
 
 ```bash
 glitchvape -e palette --set palette.name='#FF71CE,#01CDFE,#05FFA1' photo.png
@@ -950,385 +553,25 @@ position in the loop and complete exactly one cycle, so the result loops
 seamlessly; effects driven by randomness get a fresh pattern each frame, so
 static flickers rather than sitting still. The output extension picks the
 encoder (`.mp4`, `.webm`, `.gif`).
-
 ### Audio
 
-An animation can carry a soundtrack, and adding one changes what the length of
-the output means. The loop stays as many frames as `--frames` says; it is
-*repeated* for as long as the track lasts:
+A loop can carry a soundtrack: an audio file, or one of four generated
+tracks — dialling tones, radio static, a Geiger counter, a heartbeat. The
+loop repeats to cover the track rather than the track being cut to the
+loop.
 
-```bash
-glitchvape -p mallsoft --animate --audio track.mp3 \
-    --audio-start 30 --audio-end 52 \
-    --audio-filter slowed=0.75 --audio-filter reverb=0.5 photo.heic
-```
-
-That is a two-second loop over twenty-two seconds of music — eleven repeats.
-So the crop is what decides how long the finished piece is, which is why it is
-worth a wizard in the interface rather than two numbers.
-
-| Filter | | |
-|---|---|---|
-| `slowed` | 0.5–1.0, default 0.80 | resample slower and lower — the tape sound |
-| `wobble` | 0–1, default 0.25 | slow pitch wobble, a worn transport |
-| `muffled` | 0–1, default 0.65 | roll the top off, around 3 kHz at the default |
-| `reverb` | 0–1, default 0.40 | the other half of "slowed + reverb" |
-
-A filter not named is off. `--list-audio-filters` prints the ranges.
-
-Order is not a free choice here either, for the same kind of reason the effect
-pipeline sorts by stage: speed and wobble are tape, then tone, then the room.
-A bright reverb tail on a deliberately muffled source sounds like a mistake
-rather than like a room.
-
-`slowed` divides the length, so a twenty-second crop at 0.75 is a
-twenty-seven second video. Both the wizard and `--audio` say so before
-rendering.
-
-A GIF cannot carry audio; `.mp4` and `.webm` can, and both say so rather than
-dropping the track silently.
-
-### Generated tracks
-
-A soundtrack does not have to be a file. `--generate` adds a track the program
-makes up, and it is repeatable — static under a dialled phrase under a piece
-of music is an ordinary thing to want, and nothing in the mixer cares how many
-inputs it has:
-
-```bash
-glitchvape -p anaglyph --animate \
-    --generate static --gen tone=0.5 --gen seconds=20 \
-    --generate dtmf --gen 'text=call me maybe' --gen dial_tone=eu \
-    --generate heart --gen bpm=105 --gen sway=15 \
-    photo.heic
-```
-
-Each `--generate` starts a track and the `--gen` flags after it belong to it.
-That is clumsier than one flag with a comma-separated list, and deliberately:
-a dialled phrase is prose, full of spaces and commas, and this way it needs no
-quoting rules of its own. `--list-generators` prints the kinds and what each
-takes.
-
-#### `dtmf` — a dialled phrase
-
-Letters go in the multi-tap way a keypad took them before predictive text —
-`c` is key 2 pressed three times — a space is a single 0, and digits, `*` and
-`#` are already keys, so mixed input like `call 5551234` needs no flag.
-`mode=digits` takes the text literally instead, which is the only way to reach
-the `A`–`D` column at 1633 Hz.
-
-`dial_tone=eu` lifts the handset first: two seconds of the continuous tone an
-off-hook line makes, which is 425 Hz in most of Europe, 350+440 Hz in North
-America, 350+450 Hz on BT and 400 Hz on NTT.
-
-The cadence defaults to the Hayes S11 register — 95 ms, which on a real modem
-set *both* the tone length and the inter-digit pause during auto-dial, so the
-pair is one decision rather than two. `same_key_pause_ms` lengthens only the
-gap between two presses of the same key, which is what real multi-tap entry
-needed to tell `cc` from `f`.
-
-`--dtmf TEXT` and its `--dtmf-*` family are shorthand for one of these.
-
-#### `static` — an untuned television
-
-| | | |
-|---|---|---|
-| `seconds` | 10 | length, when nothing else sets it |
-| `tone` | 0.35 | how far open the top end is |
-| `drift` | 0.3 | slow swell in the level |
-| `hum` | 0.15 | 50 Hz mains buzz of the set itself |
-| `crackle` | 0.2 | how often the signal ticks and spits |
-| `gain` | 0.5 | level |
-| `seed` | 1 | the same seed gives the same static |
-
-It is **pink** noise rather than white, and band-limited to a television's
-audio path on top of that. White noise has equal power at every frequency,
-which puts most of its energy in the top octave — the octave where hearing
-tires fastest — and half a minute of it is unpleasant however quietly it is
-played. Pink falls 3 dB per octave, which is the distribution rain and
-waterfalls have and the reason those are restful. Real static is not white
-anyway: it arrives through a small speaker at the back of a wooden box.
-
-The result is unmistakably snow, and can be left running under a loop without
-anybody wanting it turned off. Mains hum and the occasional crackle are what
-stop it sounding like a synthesiser; `hum` is the single most evocative
-control, since hiss alone could be anything but hiss over 50 Hz is a
-television.
-
-Synthesised at 16 kHz rather than CD rate, because a television's audio has
-nothing above 8 kHz in it. That makes the buffer a third of the size and hands
-the final band limit to ffmpeg's resampler on the way into the mix, which is a
-better low-pass than the one-pole it would otherwise need, and free.
-
-#### `geiger` — a counter ticking
-
-| | | |
-|---|---|---|
-| `seconds` | 20 | length, when nothing else sets it |
-| `strength` | 60 | clicks per second at closest approach |
-| `baseline` | 2 | clicks per second with nothing nearby |
-| `speed` | 0.3 | how quickly you drift towards and away from the source |
-| `tone` | 0.5 | how bright each click is |
-| `gain` | 0.7 | level |
-| `seed` | 1 | the same seed gives the same clicks |
-
-The clicks are the easy half. The **timing** is what makes it recognisable,
-and the physically correct model is also the shortest code: radioactive decay
-has no memory, so the gap between clicks is exponentially distributed and is
-drawn as `-log(rand) / rate`. That is why the clicks *clump* — a burst, a
-pause, a double-tap — which is the whole character of the sound. Jittering
-around a fixed interval, the intuitive alternative, gives something that
-sounds like a failing metronome instead.
-
-A real tube is insensitive for a moment after each discharge, so it undercounts
-as the rate climbs. That is modelled too, which is why a strong source fuses
-into a buzz rather than merely ticking faster: the observed rate follows the
-standard `n / (1 + n·τ)` and there is a test pinning it against that formula.
-
-The distance to the source is a bounded random walk, and intensity follows the
-inverse square law, so the rate rises and falls on a Lorentzian — a sharp peak
-with long tails, which is far better to listen to than a sine sweep because a
-sine spends most of its travel doing nothing. Nothing repeats, and a track
-asked to cover three minutes simply wanders for three minutes.
-
-Synthesised at 44.1 kHz, unlike the static: the sharpness of a click *is* its
-content, and band-limiting one to 8 kHz turns a tick into a thud.
-
-#### `heart` — a heartbeat
-
-| | | |
-|---|---|---|
-| `seconds` | 20 | length, when nothing else sets it |
-| `bpm` | 70 | beats per minute, before any wandering |
-| `sway` | 8 | how far the rate may wander either side of that, in bpm |
-| `sway_rate` | 0.3 | how quickly it wanders within that ceiling |
-| `depth` | 0.5 | how much chest is around it |
-| `gain` | 0.8 | level |
-| `seed` | 1 | the same seed gives the same wandering |
-
-Two valve closures a beat — S1, the *lub*, and S2, the *dub*. **The two gaps
-are not equal**, and that is the whole thing: S1 to S2 is the beat itself,
-S2 to the next S1 is the heart refilling, and at rest the split is roughly a
-third and two thirds. Space them evenly and what comes out is a drum loop.
-
-The ratio is not fixed either. As the rate rises it is the *pause* that gets
-squeezed out, not the beat — the contraction takes about as long as it takes.
-At 60 bpm the pause is more than twice the beat; by 150 it has all but gone.
-That is why a racing heart sounds urgent rather than merely quick, so systole
-is scaled by the square root of the cycle length and the suite measures the
-ratio across the range.
-
-The rate wanders, because a heart held at exactly N beats a minute reads as a
-loop within about four beats. `sway` is a ceiling it never passes and
-`sway_rate` is how briskly it moves inside it; the wandering stays irregular
-at either setting, since what those shape is a random walk and not a waveform.
-
-Each thud is a burst of noise through a low-pass tuned low, not a sine: a
-valve closing is a broadband thud and a sine burst gives a synthesised kick
-drum. Almost none of it is above 200 Hz, so 16 kHz is generous rather than a
-compromise.
-
-### Mixing, and which one is in charge
-
-Give `--audio` and any number of `--generate` together and they are all
-summed. **The file decides the length.**
-
-What covering that length means is each generator's own business. Static
-simply carries on — it has no ending, so there is no seam to hide. A dialled
-phrase is not looped, because a sentence repeated is a stutter rather than a
-sentence: it plays once, stops, and after three seconds of silence the line
-opens again on a continuous tone for whatever is left.
-
-```
-dialling  [============]
-silence                 [===]
-open line                    [==========]
-static    [~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]
-rain      [~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]  40s, and 40s is the video
-```
-
-That is what a handset does once you have finished dialling, and it means the
-number the crop wizard showed you is the length of the finished video. With no
-file at all, the longest generated track sets the length and the rest fill out
-to it.
-
-Anything with an ending that is longer than the file gets cut, and both the
-command line and the interface say so rather than letting it happen quietly.
-
-The vaporwave filters apply to the file only. Slowing is a resample, and a
-resampled DTMF tone is no longer on the DTMF grid — it stops being a dialled
-number and becomes two detuned sine waves.
+**[docs/audio.md](docs/audio.md)** has the flags, the generators and their
+parameters, and how a mix of several tracks is balanced.
 
 ---
 
 ## Library
 
-```perl
-use GlitchVape;
+`GlitchVape::render()` is the whole public surface; every front end calls
+it with arguments in the same shape. Effects are declarations in
+`lib/GlitchVape/Effect/`, and one declaration produces the command-line
+flag, the help text, the preset key and the widget in the window.
 
-GlitchVape::render(
-    input  => 'Pictures/IMG_8111.HEIC',
-    output => 'out/render.png',
-    preset => 'vhs-decay',
-    seed   => 1337,
-);
-```
-
-| Module | |
-|---|---|
-| `GlitchVape` | facade: `render()`, `effect_list()` |
-| `GlitchVape::Registry` | effect declaration, stage model, presentable names, parameter validation |
-| `GlitchVape::Paths` | where the data files ended up, checkout or installed |
-| `GlitchVape::Pipeline` | ordered execution |
-| `GlitchVape::Config` | preset loading, inheritance, override merging |
-| `GlitchVape::Context` | per-render state: image, RNG, scratch dir |
-| `GlitchVape::Pixels` | raw RGB buffer access |
-| `GlitchVape::Magick` | PerlMagick error handling (warning vs. failure) |
-| `GlitchVape::IO` | decode, EXIF orientation, encode |
-| `GlitchVape::Palette` | named palettes, gradient and CLUT construction |
-| `GlitchVape::Random` | seeded, portable PRNG |
-| `GlitchVape::Assets` | finding the files that ship beside the code |
-| `GlitchVape::Fonts` | logical font roles to installed files |
-| `GlitchVape::VGA` | the 8x16 text-mode font and the CGA palette |
-| `GlitchVape::Animate` | frame sequences to MP4/GIF, and muxing a track |
-| `GlitchVape::Audio` | cropping, filtering and rendering a soundtrack |
-| `GlitchVape::Generator` | the registry of synthesised soundtrack kinds |
-| `GlitchVape::DTMF` | spelling a phrase out in dialpad tones |
-| `GlitchVape::Noise` | the hiss of an untuned television |
-| `GlitchVape::Wav` | packed samples into a RIFF file |
-
-The graphical interface is a separate set of modules that the library does not
-depend on:
-
-| Module | |
-|---|---|
-| `GlitchVape::GUI` | window assembly and the Apply/Export/undo actions |
-| `GlitchVape::GUI::State` | the edited configuration and its undo history |
-| `GlitchVape::GUI::Render` | forked background rendering |
-| `GlitchVape::GUI::Cache` | the preview store, and cleaning it |
-| `GlitchVape::GUI::Params` | registry declarations to Gtk widgets |
-| `GlitchVape::GUI::Wizard` | the three-page Add Effect assistant |
-| `GlitchVape::GUI::Preview` | the preview pane, still and animated |
-| `GlitchVape::GUI::Audio` | the crop-and-filter wizard |
-| `GlitchVape::GUI::About` | the about window |
-| `GlitchVape::GUI::CommandLine` | the state as a command you could have typed |
-| `GlitchVape::GUI::Generated` | the add-a-generated-track dialog |
-| `GlitchVape::GUI::Waveform` | the waveform with a draggable selection |
-| `GlitchVape::GUI::Player` | auditioning a stretch of a file |
-
-Adding an effect means one `register()` call — the CLI flags, `--explain`
-output and validation all derive from that declaration.
-
-### Why the font is in the source
-
-`vgatext` draws with an 8×16 bitmap font that lives in `GlitchVape::VGA` as
-sixteen bytes per glyph, rather than by handing ImageMagick a TrueType file.
-
-A TrueType renderer hints and antialiases: it produces grey edge pixels and
-nudges stems onto the pixel grid, and both are exactly what a text-mode
-display could not do. Blown up four times for a glitch block, an antialiased
-glyph looks like a photograph of a letter rather than like a letter a graphics
-card drew. One bit per pixel and pixel replication is the whole point.
-
-Keeping the bitmaps in the file also means the effect needs no font installed,
-which matters more than it sounds — the font *roles* above exist precisely
-because the program cannot assume any particular typeface is present, and an
-effect whose subject is one specific ROM font would be the worst thing to
-leave to fontconfig.
-
-The glyphs were extracted from Terminus at its native pixel size — a console
-font drawn on the same 8×16 grid for the same reasons — and then baked in.
-Terminus is under the SIL Open Font License; what is stored is a bitmap of it
-rather than the font.
-
-### A note on `GlitchVape::Pixels`
-
-PerlMagick's `SetPixels` is a **silent no-op** on ImageMagick 7 as packaged for
-Debian: it returns success and changes nothing. Every effect that moves or
-rewrites pixels therefore goes through `GlitchVape::Pixels`, which exports the
-image to a raw 8-bit RGB blob, works on it as a Perl string, and reads it back.
-
-That is also the faster path. A 1920x1440 image is 8 MB as a packed string but
-around 24 million scalars as a Perl list, and displacing a run of pixels is one
-`substr`.
-
----
-
-## Development
-
-```bash
-make test               # 1877 tests, or: prove -Ilib t/
-make check-split        # assert the CLI half needs no Gtk3
-make check-licenses     # assert every bundled font brought its licence
-make install PREFIX=…   # DESTDIR honoured
-make dist               # source tarball, into build/
-make deb                # the three .deb packages, into build/
-make rpm                # the three .rpm packages (make rpms adds the srpm)
-make clean              # removes build/ whole, plus the tools' leavings
-perlcritic lib/ bin/ t/ # clean at severity 1
-perltidy -b lib/**/*.pm # reformat to the house style
-```
-
-### Code style
-
-Two config files in the repo root define it, and both are read automatically
-when the tools are run from there.
-
-`.perltidyrc` — braces on their own line (Allman), wide spacing inside every
-bracket, no vertical tightness:
-
-```perl
-sub check
-{
-    my ( $err, $context ) = @_;
-
-    # PerlMagick hands back either an empty string, a plain string, or an
-    # object that stringifies. Force it to a string once, up front.
-    my $text = q{};
-    if ( defined $err )
-    {
-        $text = "$err";
-    }
-    ...
-}
-```
-
-`--converge` is set: without it a few long call sites oscillate between two
-equally-valid line breakings, so a second `perltidy` pass would produce a diff
-and the style would not be reproducible.
-
-**No ternaries.** Every conditional is a spelled-out `if`/`else`, which leaves
-somewhere to put the reason:
-
-```perl
-# Both default to on rather than being taken as plain truthiness, so that
-# an explicit quality => 0 or strip => 0 is honoured.
-my $quality = 92;
-if ( defined $opt{ quality } )
-{
-    $quality = $opt{ quality };
-}
-```
-
-Cascading ternaries became lookup tables rather than long `if`/`elsif` chains
-where the branches are unrelated — see `Fonts::resolve_or_die`.
-
-`.perlcriticrc` runs at severity 1 and has `RequireTidyCode` pointed at
-`.perltidyrc`, so the two tools enforce the same thing: a file `perltidy`
-would reformat is a `perlcritic` finding.
-
-`t/10-render.t` renders every registered effect and asserts each one measurably
-changes the image — the check that catches an effect silently doing nothing.
-`t/11-cli.t` renders the same Japanese string via `--set` and via a preset and
-asserts the two are byte-identical, since those paths differ in encoding.
-`t/12-gui-state.t` renders once through the interface's state model and once
-through the command-line entry point and asserts the same — the check that
-catches the GUI growing its own interpretation of a preset.
-
-`perlcritic` runs at severity 1, the harshest setting. Around 1100 findings
-appear there against the default policies; each is either fixed in the code or
-disabled in `.perlcriticrc` with the reason. Notably, `ProhibitMagicNumbers` is
-off — image processing is arithmetic on pixel values, and naming `255` or `0.5`
-adds indirection to formulae that read better as written — but the one genuinely
-opaque constant it pointed at, ImageMagick's severity-400 error threshold
-repeated at fourteen call sites, became `GlitchVape::Magick`.
+**[docs/library.md](docs/library.md)** lists the modules and what each is
+for, and covers the conventions for changing them.
+**[CLAUDE.md](CLAUDE.md)** records the invariants and what enforces each.

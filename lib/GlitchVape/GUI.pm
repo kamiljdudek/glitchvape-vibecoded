@@ -15,26 +15,31 @@ use File::Spec     ();
 use Glib ();
 use Gtk3 ();
 
-use GlitchVape                   ();
-use GlitchVape::Audio            ();
-use GlitchVape::Config           ();
-use GlitchVape::Fonts            ();
-use GlitchVape::Generator        ();
-use GlitchVape::IO               ();
-use GlitchVape::Registry         ();
-use GlitchVape::Tools            ();
-use GlitchVape::GUI::About       ();
-use GlitchVape::GUI::Adjust      ();
-use GlitchVape::GUI::Audio       ();
-use GlitchVape::GUI::CommandLine ();
-use GlitchVape::GUI::Cache       ();
-use GlitchVape::GUI::Export      ();
-use GlitchVape::GUI::Generated   ();
-use GlitchVape::GUI::Params      ();
-use GlitchVape::GUI::Preview     ();
-use GlitchVape::GUI::Render      ();
-use GlitchVape::GUI::State       ();
-use GlitchVape::GUI::Wizard      ();
+use GlitchVape                    ();
+use GlitchVape::Audio             ();
+use GlitchVape::Config            ();
+use GlitchVape::Fonts             ();
+use GlitchVape::Generator         ();
+use GlitchVape::IO                ();
+use GlitchVape::Registry          ();
+use GlitchVape::Tools             ();
+use GlitchVape::GUI::About        ();
+use GlitchVape::GUI::Adjust       ();
+use GlitchVape::GUI::Audio        ();
+use GlitchVape::GUI::CommandLine  ();
+use GlitchVape::GUI::Cache        ();
+use GlitchVape::GUI::Export       ();
+use GlitchVape::GUI::Preferences  ();
+use GlitchVape::GUI::Prefs        ();
+use GlitchVape::GUI::Deps         ();
+use GlitchVape::GUI::ExportWizard ();
+use GlitchVape::GUI::Profiles     ();
+use GlitchVape::GUI::Generated    ();
+use GlitchVape::GUI::Params       ();
+use GlitchVape::GUI::Preview      ();
+use GlitchVape::GUI::Render       ();
+use GlitchVape::GUI::State        ();
+use GlitchVape::GUI::Wizard       ();
 
 our $VERSION = '0.01';
 
@@ -246,17 +251,25 @@ sub new
         loading      => 0,
         preview_size => 720,
         animate      => 0,
-        frames       => 24,
-        fps          => 12,
         audio        => undef,
-        muted        => 0,
-        export       => GlitchVape::GUI::Export::defaults(),
+
+        # Read once, here, and written back whenever the Preferences window
+        # changes one. The three below are copies of preferences that the
+        # rest of the window already reads by these names; keeping the copies
+        # rather than reaching into the hash everywhere means the preference
+        # file is the only thing that had to learn about them.
+        prefs  => GlitchVape::GUI::Prefs::load(),
+        export => GlitchVape::GUI::Export::defaults(),
     }, $class;
+
+    $self->{ frames } = $self->{ prefs }{ frames };
+    $self->{ fps }    = $self->{ prefs }{ fps };
+    $self->{ muted }  = $self->{ prefs }{ muted };
 
     # The frame rate belongs to both dialogs -- see
     # GlitchVape::GUI::Export/Frame rate is one setting, shown twice -- and
     # this is the copy either of them edits.
-    $self->{ fps } = $self->{ export }{ fps };
+    $self->{ export }{ fps } = $self->{ fps };
 
     $self->_build_window;
 
@@ -289,7 +302,11 @@ sub run
 
     $self->{ preview }->stop_video;
     $self->{ render }->cancel if $self->{ render }->busy;
+
+    # cleanup always: it removes this session's scratch files, which nothing
+    # else will. purge is the cache itself, and that is the preference.
     $self->{ cache }->cleanup;
+    $self->{ cache }->purge if $self->{ prefs }{ clear_cache_on_exit };
 
     return 0;
 }
@@ -418,20 +435,35 @@ sub _build_menu
 
     my $menu = Gtk3::Menu->new;
 
+    # Grouped by what an entry is for rather than by how often it is reached:
+    # move through the picture, then change it, then keep it, then throw
+    # something away, then settings, then things that only tell you something,
+    # then About. A separator between each, so the grouping is visible rather
+    # than merely intended.
+    #
+    # Undo and Redo are in the header bar as well. They are here because a menu
+    # is where a keyboard-first user looks for them and because their being
+    # absent from a menu that has everything else reads as an omission, not as
+    # a statement that the buttons are enough.
     for my $item (
-        [ 'Randomize',         sub { return $self->_randomize },     'seed' ],
-        [ 'Clear all effects', sub { return $self->_clear_effects }, 'clear' ],
-        [ 'Animation settings…', sub { return $self->_animation_settings } ],
-        [ 'Export settings…',    sub { return $self->_export_settings } ],
+        [ 'Undo', sub { return $self->_step_history( 'undo' ) }, 'undo' ],
+        [ 'Redo', sub { return $self->_step_history( 'redo' ) }, 'redo' ],
+        undef,
+        [ 'Randomize', sub { return $self->_randomize }, 'seed' ],
         undef,
         [ 'Save as preset…', sub { return $self->_save_preset }, 'preset' ],
+        undef,
+        [ 'Clear all effects', sub { return $self->_clear_effects }, 'clear' ],
+        [ 'Clear preview cache', sub { return $self->_clear_cache } ],
+        undef,
+        [ 'Preferences…',     sub { return $self->_preferences } ],
+        [ 'Export profiles…', sub { return $self->_export_profiles } ],
+        undef,
+        [ 'Check dependencies…', sub { return $self->_show_deps } ],
         [
             'Copy command line…', sub { return $self->_copy_command },
             'command'
         ],
-        undef,
-        [ 'Check dependencies…', sub { return $self->_show_deps } ],
-        [ 'Clear preview cache', sub { return $self->_clear_cache } ],
         undef,
         [ 'About GlitchVape', sub { return $self->_show_about } ],
         )
@@ -1263,8 +1295,12 @@ sub _build_preview_bar
             'audio-volume-muted-symbolic', 'button'
         )
     );
-    $mute->set_tooltip_text( "Play the preview silently.\n"
-            . 'The soundtrack is still rendered, and still in the export' );
+
+    # Two lines, which t/26-gui-layout.t holds every tooltip to. The long
+    # version of this is next to the switch in Preview settings now, so this
+    # one keeps the fact that matters and points at the room.
+    $mute->set_tooltip_text( "Play the preview silently; the export keeps "
+            . "its sound.\nAlso in Preview settings." );
     $mute->signal_connect(
         toggled => sub {
             $self->{ muted } = $mute->get_active;
@@ -1272,6 +1308,7 @@ sub _build_preview_bar
             return;
         }
     );
+
     $bar->pack_start( $mute, 0, 0, 0 );
 
     $self->{ b_mute } = $mute;
@@ -1759,26 +1796,38 @@ sub _choose_output
 
     return unless $self->{ state };
 
-    my $suggested = $self->_suggested_output;
+    # The wizard, not a file chooser. Everything it asks used to be settled
+    # somewhere else and days earlier -- in a menu dialog that had to be
+    # visited first and said nothing about the export it was for. Asking on
+    # the way through puts the decisions where they are made.
+    GlitchVape::GUI::ExportWizard->run(
+        parent   => $self->{ window },
+        animated => $self->{ animate },
+        source   => $self->{ state }->source,
+        preset   => $self->{ state }->preset,
 
-    my $dialog = Gtk3::FileChooserDialog->new(
-        'Export render',
-        $self->{ window },
-        'save', 'Cancel', 'cancel', 'Export', 'accept'
+        # The frame rate lives in one place and two windows edit it, so the
+        # live value goes in rather than whatever this hash last held.
+        settings => {
+            %{ $self->{ export } },
+            fps    => $self->{ fps },
+            frames => $self->{ frames },
+        },
+
+        on_done => sub {
+            my ( $settings, $path ) = @_;
+
+            # Kept, so the next export opens where this one left off and the
+            # copied command line matches what was just written.
+            $self->{ export } = $settings;
+            $self->{ fps }    = $settings->{ fps }    if $settings->{ fps };
+            $self->{ frames } = $settings->{ frames } if $settings->{ frames };
+
+            $self->_export( $path );
+            return;
+        },
     );
-    $dialog->set_do_overwrite_confirmation( 1 );
-    $dialog->set_current_name( basename( $suggested ) );
 
-    if ( $dialog->run ne 'accept' )
-    {
-        $dialog->destroy;
-        return;
-    }
-
-    my $path = $dialog->get_filename;
-    $dialog->destroy;
-
-    $self->_export( $path );
     return;
 }
 
@@ -1849,6 +1898,11 @@ sub _export
         # unable to disagree.
         GlitchVape::GUI::Export::render_options( $self->{ export }, $spec ),
 
+        # Preferences rather than export settings: these are answers about
+        # the program, not about this file, so they are the same for every
+        # export until somebody changes them in Preferences.
+        $self->_export_prefs,
+
         # An export is the long one: full size rather than preview size, so
         # the frames it counts are the slowest this program renders.
         on_progress => sub {
@@ -1870,6 +1924,25 @@ sub _export
     );
 
     return;
+}
+
+# The preferences GlitchVape::render takes, as a list to splice into the call.
+#
+# Watermarking and metadata are both "what this program does to a file it
+# writes", and neither belongs in an export profile: a profile is a size and a
+# container, and somebody switching from MP4 to WebM is not saying anything
+# about whether their GPS coordinates should travel with it.
+sub _export_prefs
+{
+    my ( $self ) = @_;
+
+    my $prefs = $self->{ prefs } || {};
+
+    return (
+        watermark => $prefs->{ watermark },
+        metadata  => ( $prefs->{ metadata_keep }   ? 'keep' : 'strip' ),
+        credit    => ( $prefs->{ metadata_credit } ? 1      : 0 ),
+    );
 }
 
 # ---------------------------------------------------------------------------
@@ -2569,10 +2642,18 @@ sub _render
     my $started = time;
     $self->_busy( 1, 'Rendering…' );
 
+    # Only if the preference says to show it. Off, the preview is the picture
+    # the pipeline made and the mark appears in the exported file alone --
+    # which is the honest reading of "show watermark in preview" being a
+    # separate switch from the watermark itself.
+    my $mark = $self->{ prefs }{ watermark };
+    $mark = 'none' unless $self->{ prefs }{ watermark_preview };
+
     $self->{ render }->preview(
         state       => $self->{ state },
         size        => $size,
         animate     => $spec,
+        watermark   => $mark,
         on_progress => sub {
             $self->_progress( @_ );
             return;
@@ -2709,80 +2790,65 @@ sub _randomize
 # the default two-second loop is what almost every render uses -- while the
 # toggle they govern is in the preview bar, where the decision to animate at
 # all actually gets made.
-sub _animation_settings
+sub _preferences
 {
     my ( $self ) = @_;
 
-    my $dialog = Gtk3::Dialog->new_with_buttons(
-        'Animation settings',
-        $self->{ window },
-        'modal', 'Close', 'close'
-    );
+    GlitchVape::GUI::Preferences->run(
+        parent => $self->{ window },
+        prefs  => $self->{ prefs },
 
-    my $grid = Gtk3::Grid->new;
-    $grid->set_row_spacing( 8 );
-    $grid->set_column_spacing( 10 );
-    $grid->set_border_width( 14 );
+        on_change => sub {
+            my ( $prefs, $what ) = @_;
 
-    my $length = Gtk3::Label->new( q{} );
-    $length->set_xalign( 0 );
-    $length->get_style_context->add_class( 'dim-label' );
+            # Saved on every change rather than on Close, because Close is
+            # not a commit -- see GlitchVape::GUI::Preferences/CHANGES APPLY
+            # AS THEY ARE MADE. A window killed with the settings unwritten
+            # would be the one case where the dialog lied.
+            GlitchVape::GUI::Prefs::save( $prefs );
 
-    my $frames = Gtk3::SpinButton->new_with_range( 2, 120, 1 );
-    $frames->set_value( $self->{ frames } );
-    $frames->set_tooltip_text(
-        'How many frames the loop is made of. Each one is a whole render' );
-
-    my $fps = Gtk3::SpinButton->new_with_range( 1, 60, 1 );
-    $fps->set_value( $self->{ fps } );
-    $fps->set_tooltip_text( 'How fast they are played back' );
-
-    # The two numbers separately say very little; what they come to is the
-    # length of the loop, which is the thing being chosen.
-    my $describe = sub {
-        $length->set_text(
-            sprintf '%d frames at %d fps  ·  %.1f second loop',
-            $self->{ frames },
-            $self->{ fps },
-            $self->{ frames } / $self->{ fps }
-        );
-        return;
-    };
-
-    $frames->signal_connect(
-        'value-changed' => sub {
-            $self->{ frames } = int $frames->get_value;
-            $describe->();
+            $self->_adopt_prefs( $what );
             return;
-        }
+        },
     );
 
-    $fps->signal_connect(
-        'value-changed' => sub {
-            $self->{ fps } = int $fps->get_value;
-            $describe->();
-            return;
-        }
-    );
+    return;
+}
 
-    $describe->();
+# The preferences that something in the window is already holding a copy of,
+# put back where that copy lives. Called with the key that moved, or 'all'
+# after a restore.
+sub _adopt_prefs
+{
+    my ( $self, $what ) = @_;
 
-    my $frames_label = Gtk3::Label->new( 'Frames' );
-    $frames_label->set_xalign( 0 );
+    my $every = !defined $what || $what eq 'all';
 
-    my $fps_label = Gtk3::Label->new( 'Frame rate' );
-    $fps_label->set_xalign( 0 );
+    $self->{ frames } = $self->{ prefs }{ frames }
+        if $every || $what eq 'frames';
 
-    $grid->attach( $frames_label, 0, 0, 1, 1 );
-    $grid->attach( $frames,       1, 0, 1, 1 );
-    $grid->attach( $fps_label,    0, 1, 1, 1 );
-    $grid->attach( $fps,          1, 1, 1, 1 );
-    $grid->attach( $length,       0, 2, 2, 1 );
+    if ( $every || $what eq 'fps' )
+    {
+        $self->{ fps } = $self->{ prefs }{ fps };
+        $self->{ export }{ fps } = $self->{ fps };
+    }
 
-    $dialog->get_content_area->add( $grid );
-    $dialog->show_all;
-    $dialog->run;
-    $dialog->destroy;
+    if ( $every || $what eq 'muted' )
+    {
+        my $on = $self->{ prefs }{ muted } ? 1 : 0;
+
+        $self->{ muted } = $on;
+        $self->{ preview }->set_muted( $on );
+        $self->{ b_mute }->set_active( $on );
+    }
+
+    # A watermark shown in the preview is part of the picture as far as the
+    # cache is concerned, so changing either of these invalidates what is on
+    # screen and the render has to be asked for again.
+    if ( $every || $what =~ /^watermark/ )
+    {
+        $self->_status( 'Watermark changed. Press Apply to see it.' );
+    }
 
     return;
 }
@@ -2790,30 +2856,21 @@ sub _animation_settings
 # What Export writes and at what size. Behind the menu for the same reason the
 # animation settings are: set once, then left, while the button they govern is
 # in the header bar where the decision to export at all gets made.
-sub _export_settings
+sub _export_profiles
 {
     my ( $self ) = @_;
 
-    GlitchVape::GUI::Export->run(
+    GlitchVape::GUI::Export->manage(
         parent => $self->{ window },
 
-        # The frame rate lives in one place and two dialogs edit it, so the
-        # current value goes in rather than whatever this hash was last saved
-        # with -- Animation settings may have changed it since.
-        settings => { %{ $self->{ export } }, fps => $self->{ fps } },
-
         on_done => sub {
-            my ( $settings ) = @_;
+            my ( $profiles ) = @_;
 
-            $self->{ export } = $settings;
-            $self->{ fps }    = $settings->{ fps };
+            my $mine = grep { !$_->{ builtin } } @$profiles;
 
             $self->_status(
-                'Export settings: '
-                    . GlitchVape::GUI::Export::describe(
-                    $settings, $self->{ animate }
-                    )
-            );
+                sprintf 'Export profiles: %d in all, %d of them yours.',
+                scalar @$profiles, $mine );
             return;
         },
     );
@@ -2864,33 +2921,7 @@ sub _show_deps
 {
     my ( $self ) = @_;
 
-    my @lines = ( 'External tools' );
-
-    for my $tool ( GlitchVape::Tools::report() )
-    {
-        my ( $name, $path, $package ) = @$tool;
-
-        my $where = $path;
-        $where = "missing - sudo apt install $package" unless $path;
-
-        push @lines, sprintf '    %-10s %s', $name, $where;
-    }
-
-    push @lines, q{}, 'Animated preview';
-
-    my $gst = 'available';
-    $gst = 'unavailable - the still interface still works'
-        unless GlitchVape::GUI::Preview::gst_available();
-
-    push @lines, sprintf( '    %-10s %s', 'gstreamer', $gst ), q{}, 'Fonts';
-
-    for my $entry ( @{ GlitchVape::Fonts::available() } )
-    {
-        my ( $role, $path ) = @$entry;
-        push @lines, sprintf '    %-10s %s', $role, ( $path // 'missing' );
-    }
-
-    $self->_show_report( 'Dependencies', join "\n", @lines );
+    GlitchVape::GUI::Deps->run( parent => $self->{ window } );
 
     return;
 }
@@ -3247,8 +3278,7 @@ sub _confirm_close
     my $dialog = Gtk3::MessageDialog->new( $self->{ window },
         'modal', 'warning', 'none', '%s', 'Close without saving?' );
 
-    $dialog->format_secondary_text(
-              "This window holds $what.\n\n$advice" );
+    $dialog->format_secondary_text( "This window holds $what.\n\n$advice" );
 
     $dialog->add_button( 'Cancel', 'cancel' );
 
@@ -3273,8 +3303,16 @@ sub _sync_actions
     my $busy  = $self->{ render }->busy;
     my $ready = $have && !$busy;
 
-    $self->{ b_undo }->set_sensitive( $ready && $self->{ state }->can_undo );
-    $self->{ b_redo }->set_sensitive( $ready && $self->{ state }->can_redo );
+    my $can_undo = $ready && $self->{ state }->can_undo;
+    my $can_redo = $ready && $self->{ state }->can_redo;
+
+    # The button and the menu entry are the same action seen twice, so they
+    # are greyed together rather than one of them offering what the other
+    # already refuses.
+    $self->{ b_undo }->set_sensitive( $can_undo );
+    $self->{ b_redo }->set_sensitive( $can_redo );
+    $self->{ m_undo }->set_sensitive( $can_undo );
+    $self->{ m_redo }->set_sensitive( $can_redo );
     $self->{ b_export }->set_sensitive( $ready );
 
     my $soundtrack = $self->_on_soundtrack_page;

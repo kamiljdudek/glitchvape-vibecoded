@@ -7,7 +7,7 @@ without noticing, and how each of them is checked.
 
 ## What it is
 
-A Perl image pipeline that puts a photograph through a chain of thirty-nine
+A Perl image pipeline that puts a photograph through a chain of forty-one
 VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Pure Perl
 apart from the effects, which shell out to ImageMagick, and the animated
 writers, which shell out to ffmpeg.
@@ -21,7 +21,7 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 |---|---|
 | `bin/` | `glitchvape` (CLI), `glitchvape-batch`, `glitchvape-gui` |
 | `lib/GlitchVape.pm` | the façade — `render()`, which every front end calls |
-| `lib/GlitchVape/Effect/*.pm` | the thirty-nine effects, grouped by theme not by stage |
+| `lib/GlitchVape/Effect/*.pm` | the forty-one effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |

@@ -290,15 +290,22 @@ sub _thud
     my $level    = $sound->{ level };
     my $length_s = $sound->{ seconds };
 
-    my $length = int( RATE * $length_s * ( 1 + $depth * 0.5 ) );
+    my $length = int( RATE * $length_s * ( 1 + $depth * 0.6 ) );
 
-    # The corner comes down as depth goes up: 260 Hz against the chest wall,
-    # 90 Hz through it.
-    my $corner = 260 - $depth * 170;
+    # The corner comes down as depth goes up: 180 Hz against the chest wall,
+    # 60 Hz through it.
+    my $corner = 180 - $depth * 120;
     my $alpha  = 1 - exp( -2 * $PI * $corner / RATE );
 
-    my $decay = $length_s / 2.2;
-    my $low   = 0;
+    my $decay = $length_s / 1.9;
+
+    # Two poles, not one. A single pole rolls off at six decibels an octave,
+    # which at this corner still passes a fifth of what is at a kilohertz --
+    # and that residue is the whole difference between a heartbeat heard
+    # through someone's chest and one heard through a stethoscope pressed to
+    # it. Tissue is not a gentle shelf. Cascading two of the same filter
+    # doubles the slope and costs one more multiply-add per sample.
+    my ( $low, $lower ) = ( 0, 0 );
 
     for my $n ( 0 .. $length - 1 )
     {
@@ -307,17 +314,28 @@ sub _thud
 
         my $t = $n / RATE;
 
-        # A fast attack rather than an instant one: a step into a low-pass
-        # clicks, and a heart does not click.
+        # The attack softens with depth as well. A four-millisecond rise is
+        # already fast enough to read as a transient; through a chest wall
+        # there is no transient left to read, and keeping the sharp one is
+        # what made this sound like a recording of a valve rather than like a
+        # heartbeat somebody is standing near.
+        my $attack = 0.004 + $depth * 0.014;
+
         my $env = exp( -$t / $decay );
-        $env *= $t / 0.004 if $t < 0.004;
+        $env *= $t / $attack if $t < $attack;
 
         my $white = $rng->rand( 2 ) - 1;
-        $low += $alpha * ( $white - $low );
+        $low   += $alpha * ( $white - $low );
+        $lower += $alpha * ( $low - $lower );
 
         my $body = sin( 2 * $PI * $hz * $t ) * 0.5;
 
-        $sample->[ $i ] += ( $low * 1.6 + $body ) * $env * $level * 0.7;
+        # Weighted towards the body rather than the noise. The noise is what
+        # says "valve"; the body is what carries through anything between it
+        # and the ear, and past the first inch of chest there is far more of
+        # the second than the first.
+        $sample->[ $i ] +=
+            ( $lower * 2.6 + $body * 1.35 ) * $env * $level * 0.7;
     }
 
     return;

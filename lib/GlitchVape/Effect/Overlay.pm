@@ -837,6 +837,15 @@ DOC
             max     =>  32,
             doc     => 'Tiles the pattern slides per loop; negative reverses',
         },
+        direction => {
+            default => 'east',
+            type    => 'enum',
+            values  => [
+                qw(north northeast east southeast
+                    south southwest west northwest)
+            ],
+            doc => 'Compass direction the pattern slides, on the screen',
+        },
     },
     apply => \&_watermark,
 );
@@ -853,43 +862,56 @@ sub _watermark
     my $size = int( $h * $p->{ size } / 100 ) || 8;
 
     # Rotating the finished layer means building it on an oversized canvas so
-    # the corners are still covered afterwards.
+    # the corners are still covered afterwards. The diagonal is the minimum
+    # that can contain the frame at any angle; the margin on top covers the
+    # tile that is half in shot at the edge.
     my $diag = int( sqrt( $w * $w + $h * $h ) ) + $size * 4;
 
     my $layer = Image::Magick->new( size => "${diag}x${diag}" );
     $layer->Read( 'xc:transparent' );
 
-    my $step = int( $size * $p->{ spacing } ) || $size;
     my $text = Encode::encode( 'UTF-8', $p->{ string } );
+    my $gap  = int( $size * $p->{ spacing } ) || $size;
 
-    # One tile across. The inner loop below lays repetitions down at this
-    # interval, so it is also the distance the pattern has to slide to look
-    # untouched -- which is what makes the scroll loop exactly.
-    my $period = $step * 2;
+    # How wide the string actually comes out, rather than how wide a character
+    # of it is. Spacing the columns on the point size alone works only while
+    # the string is about as wide as it is tall: give it a sentence and every
+    # repetition is drawn across the next one, and the whole band turns into a
+    # smear. Asking the font settles it for any string in any face.
+    my @metrics = $layer->QueryFontMetrics(
+        text      => $text,
+        font      => $font,
+        pointsize => $size,
+        encoding  => 'UTF-8',
+    );
+    my $ink = $metrics[ 4 ] || $size;
 
-    # Wrapped into one tile: sliding by six tiles and by one look the same, so
-    # there is no reason to draw the other five off the edge of the canvas.
-    my $slide = $ctx->travel( $p->{ drift }, 1 ) * $period;
-    $slide -= $period * int( $slide / $period );
+    # The lattice. Horizontally a repetition plus its gap, so two of them
+    # never touch; vertically two rows, because the odd ones are staggered and
+    # it takes two to come back to the same offset.
+    my $xperiod = int( $ink + $gap );
+    my $yperiod = $gap * 2;
 
+    my ( $sx, $sy ) = _watermark_slide( $ctx, $p, $xperiod, $yperiod );
+
+    # Enough margin that whatever is sliding in from either side is already
+    # drawn by the time it arrives.
     my $row = 0;
-    for ( my $y = 0 ; $y < $diag ; $y += $step )
+    for ( my $y = -$yperiod ; $y < $diag + $yperiod ; $y += $gap )
     {
-        # Offset every other row by half a step so the tiling reads as a
+        # Every other row offset by half a tile, so the tiling reads as a
         # scatter rather than as columns.
-        my $stagger = $row++ % 2 ? int( $step / 2 ) : 0;
+        my $stagger = $row++ % 2 ? int( $xperiod / 2 ) : 0;
 
-        # A tile's margin either side, so the one sliding in at the left edge
-        # is already drawn when it gets there.
-        for ( my $x = -$period ; $x < $diag + $period ; $x += $period )
+        for ( my $x = -$xperiod ; $x < $diag + $xperiod ; $x += $xperiod )
         {
             $layer->Annotate(
                 text      => $text,
                 font      => $font,
                 pointsize => $size,
                 fill      => $p->{ color },
-                x         => $x + $stagger + $slide,
-                y         => $y,
+                x         => $x + $stagger + $sx,
+                y         => $y + $sy,
                 gravity   => 'NorthWest',
                 encoding  => 'UTF-8',
                 antialias => 'true',
@@ -898,6 +920,15 @@ sub _watermark
     }
 
     $layer->Rotate( degrees => $p->{ rotate }, background => 'transparent' );
+
+    # Before the crop, not after. Rotate leaves the layer with a virtual
+    # canvas offset describing where the original sat inside the new bounds,
+    # and Crop measures from that rather than from the pixels -- so the window
+    # comes off the corner of the rotated square instead of its middle, and a
+    # wedge of the frame ends up with no watermark on it at all. It is not a
+    # small wedge: at 45 degrees it was a seventh of the picture.
+    $layer->Set( page => '0x0+0+0' );
+
     $layer->Set( gravity => 'Center' );
     $layer->Crop( geometry => "${w}x${h}+0+0", gravity => 'Center' );
     $layer->Set( page => '0x0+0+0' );
@@ -914,6 +945,93 @@ sub _watermark
         gravity => 'Center',
     );
     return;
+}
+
+# Screen-space unit vectors, y downward as the raster has it.
+#
+# Written out rather than abbreviated, because the text effect's `gravity`
+# spells its compass in full and two effects naming the same eight directions
+# two different ways is a thing to remember for no reason. 'se' also has to be
+# decoded every time it is read, and a preset is read far more often than it
+# is written.
+my %COMPASS = (
+    north     => [  0, -1 ],
+    northeast => [  1, -1 ],
+    east      => [  1,  0 ],
+    southeast => [  1,  1 ],
+    south     => [  0,  1 ],
+    southwest => [ -1,  1 ],
+    west      => [ -1,  0 ],
+    northwest => [ -1, -1 ],
+);
+
+# Where the tiling has slid to by this frame, as ( x, y ) in layer pixels.
+#
+# The direction is asked for on the screen, but the sliding happens on the
+# layer, before it is turned by C<rotate>. So the compass vector is turned the
+# other way first, and then rounded to a whole number of tiles on each axis --
+# because only whole tiles bring the pattern back to itself, and a loop that
+# does not come back jolts once per repeat forever.
+#
+# Rounding is what makes the direction approximate whenever C<rotate> is not a
+# multiple of a right angle, and the approximation is better the further the
+# pattern travels: one tile of drift can only be rounded to one of eight
+# directions, six tiles to far more. At C<rotate> 0 nothing is approximated.
+sub _watermark_slide
+{
+    my ( $ctx, $p, $xperiod, $yperiod ) = @_;
+
+    my $compass = $COMPASS{ lc $p->{ direction } } or return ( 0, 0 );
+
+    my ( $dx, $dy ) = @$compass;
+
+    # Normalised, so a diagonal travels as fast as a cardinal rather than the
+    # square root of two times faster.
+    my $length = sqrt( $dx**2 + $dy**2 ) || 1;
+    $dx /= $length;
+    $dy /= $length;
+
+    # Undoing the rotation the layer has not had applied yet.
+    my $rad = -$p->{ rotate } * $PI / 180;
+    my $lx  = $dx * cos( $rad ) - $dy * sin( $rad );
+    my $ly  = $dx * sin( $rad ) + $dy * cos( $rad );
+
+    # In tiles, then rounded to whole ones.
+    my $tiles = $p->{ drift } || 0;
+    my $mx    = _round( $tiles * $lx );
+    my $my    = _round( $tiles * $ly * $xperiod / $yperiod );
+
+    # Rounding both to nothing would take a drift somebody asked for and make
+    # it stand still, which reads as a broken parameter. The larger component
+    # gets the one tile instead.
+    if ( $tiles && !$mx && !$my )
+    {
+        if   ( abs $lx >= abs $ly ) { $mx = $lx < 0 ? -1 : 1 }
+        else                        { $my = $ly < 0 ? -1 : 1 }
+    }
+
+    my $phase = $ctx->phase;
+
+    return (
+        _wrap( $mx * $xperiod * $phase, $xperiod ),
+        _wrap( $my * $yperiod * $phase, $yperiod )
+    );
+}
+
+sub _round { return int( $_[ 0 ] + ( $_[ 0 ] < 0 ? -0.5 : 0.5 ) ) }
+
+# Into one tile. Sliding by six tiles and by one look identical, so there is
+# no reason to draw the other five off the edge of the canvas.
+sub _wrap
+{
+    my ( $value, $period ) = @_;
+
+    return 0 unless $period;
+
+    $value -= $period * int( $value / $period );
+    $value += $period if $value < 0;
+
+    return $value;
 }
 
 # ---------------------------------------------------------------------------

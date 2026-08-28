@@ -275,6 +275,17 @@ sub _apply_override
     return;
 }
 
+=head2 read_yaml( $path )
+
+Load any YAML file, with whichever parser is installed. Presets are the reason
+this module has a YAML reader at all; the interface keeps its export profiles
+in one too, and a second reader would be a second set of bugs about the same
+file format.
+
+=cut
+
+sub read_yaml { return _read_yaml( @_ ) }
+
 sub _read_yaml
 {
     my ( $path ) = @_;

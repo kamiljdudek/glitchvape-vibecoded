@@ -218,7 +218,7 @@ make test
 
 
 %files
-%doc README.md
+%doc README.md docs
 # Tagged where the Makefile installed it rather than copied into
 # %%{_licensedir}, because this is the copy the program itself reads: the
 # about window and --licenses quote this file instead of restating it in Perl,

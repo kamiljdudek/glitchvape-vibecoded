@@ -227,45 +227,40 @@ sub click_times
 # Heart: the gap inside a beat is shorter than the gap between beats
 
 # This is the single thing that separates a heartbeat from a drum machine.
-# Read off the sample buffer, because at these rates the two thuds are far
-# enough apart to detect and the envelope is what a listener actually hears.
+#
+# Read off the schedule rather than out of the audio, the same way the Geiger
+# clicks above are. It used to detect onsets in the sample buffer, and that
+# worked only while the thuds were sharp: softening the attack and lengthening
+# the decay -- which is what makes a heartbeat sound like one heard through a
+# chest rather than through a stethoscope -- left the tail crossing the
+# threshold twice at the top of the rate range, and the timing tests failed on
+# a sound whose timing had not changed at all.
+#
+# What these tests are about is when the thuds are scheduled. Asking _thud
+# directly says exactly that, and says it whatever the thuds end up sounding
+# like.
+
+my @THUDS;
 
 sub thud_times
 {
     my ( %spec ) = @_;
 
-    my $pcm = GlitchVape::Heart::pcm( { seed => 1, sway => 0, %spec } );
-    my @s   = unpack 's<*', $pcm;
+    @THUDS = ();
 
-    my $peak = 0;
-    for my $v ( @s )
     {
-        my $a = abs $v;
-        $peak = $a if $a > $peak;
+        no warnings 'redefine';    ## no critic (TestingAndDebugging::ProhibitNoWarnings)
+        ## no critic (Variables::ProtectPrivateVars)
+        local *GlitchVape::Heart::_thud = sub {
+            push @THUDS, $_[ 1 ] / GlitchVape::Heart::RATE;
+            return;
+        };
+        ## use critic
+
+        GlitchVape::Heart::pcm( { seed => 1, sway => 0, %spec } );
     }
-    return () unless $peak > 0;
 
-    my $rate = GlitchVape::Heart::RATE;
-
-    # Re-arm well inside one systole so the two thuds of a beat are counted
-    # separately even at the top of the range.
-    my $cycle = 60 / ( $spec{ bpm } // 70 );
-    my $rearm = int( $rate * $cycle * 0.2 );
-
-    my @at;
-    my $armed = 1;
-    my $fired = -$rearm;
-
-    for my $i ( 0 .. $#s )
-    {
-        if ( abs( $s[ $i ] ) > $peak * 0.25 && $armed )
-        {
-            push @at, $i / $rate;
-            $armed = 0;
-            $fired = $i;
-        }
-        $armed = 1 if !$armed && $i - $fired > $rearm;
-    }
+    my @at = sort { $a <=> $b } @THUDS;
 
     return @at;
 }

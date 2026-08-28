@@ -6,12 +6,13 @@ use warnings;
 use File::Spec ();
 use File::Temp ();
 
-use GlitchVape::Config   ();
-use GlitchVape::Context  ();
-use GlitchVape::IO       ();
-use GlitchVape::Pipeline ();
-use GlitchVape::Registry ();
-use GlitchVape::Random   ();
+use GlitchVape::Config    ();
+use GlitchVape::Context   ();
+use GlitchVape::IO        ();
+use GlitchVape::Pipeline  ();
+use GlitchVape::Registry  ();
+use GlitchVape::Random    ();
+use GlitchVape::Watermark ();
 
 # Loading these registers every effect. Order does not matter; the registry
 # sorts by declared stage.
@@ -210,12 +211,22 @@ sub _render_still
 
     $job->{ pipeline }->run( $ctx );
 
+    # After the pipeline and before the write: the mark is not part of the
+    # look, so no effect should be able to glitch it, and the bar style makes
+    # the picture taller, so nothing downstream may assume the pipeline's
+    # dimensions are final.
+    $ctx->image(
+        GlitchVape::Watermark::apply( $ctx->image, $arg->{ watermark } ) )
+        if $arg->{ watermark };
+
     GlitchVape::IO::save(
         $ctx->image, $job->{ output },
         quality  => $arg->{ quality }  // $config->{ output }{ quality }  // 92,
         optimise => $arg->{ optimise } // $config->{ output }{ optimise } // 0,
         fit      => $arg->{ fit },
         colors   => $arg->{ colors },
+        metadata => $arg->{ metadata },
+        credit   => $arg->{ credit },
     );
 
     # Read after the write, not before it: save may shrink the image to fit
@@ -278,7 +289,18 @@ sub _render_animation
 
         $job->{ pipeline }->run( $ctx );
 
+        # Every frame, or the encoder is handed two shapes: the bar makes the
+        # picture taller and a loop whose first frame alone had one would not
+        # encode at all.
+        $ctx->image(
+            GlitchVape::Watermark::apply( $ctx->image, $arg->{ watermark } ) )
+            if $arg->{ watermark };
+
         my $path = GlitchVape::Animate::frame_path( "$dir", $n );
+
+        # Frames keep the blunt strip. They are intermediate files that exist
+        # for as long as the encode takes, and a per-frame exiftool run would
+        # be twenty-four subprocesses to scrub something nobody will read.
         GlitchVape::IO::save(
             $ctx->image, $path,
             quality => 100,

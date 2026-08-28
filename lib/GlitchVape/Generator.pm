@@ -302,6 +302,33 @@ sub describe
     return $line;
 }
 
+=head2 filename( $spec )
+
+A filename stem for a track, without an extension: the kind and how long it
+runs, as C<geiger-20s>.
+
+Built from those two rather than from C<describe>, which is the obvious source
+and the wrong one -- it is prose for a status bar, and squeezing it into a
+filename gives C<static-static-muffled-0-10-0-hum-crackle>, which repeats the
+kind and carries settings nobody is going to read off a directory listing. The
+length is enough to tell two saved tracks apart, and the chooser lets anyone
+who wants more type it.
+
+=cut
+
+sub filename
+{
+    my ( $spec ) = @_;
+
+    my $kind = ( ref $spec eq 'HASH' ? $spec->{ kind } : undef ) // 'track';
+    $kind =~ s/[^A-Za-z0-9]+/-/g;
+
+    my $seconds = int( eval { duration( $spec ) } // 0 );
+    return $kind unless $seconds > 0;
+
+    return "$kind-${seconds}s";
+}
+
 =head2 label( $kind )
 
 The kind's display name.

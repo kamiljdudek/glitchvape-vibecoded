@@ -363,7 +363,7 @@ dist: check-licenses
 	tar -cf - \
 	    --exclude='*.bak' --exclude='*.tdy' \
 	    --exclude='*.ERR' --exclude='*.LOG' \
-	    bin lib presets t Makefile README.md LICENSE $(PKGDIR) \
+	    bin lib presets t Makefile README.md docs LICENSE $(PKGDIR) \
 	    assets/artwork $(FONT_DIRS) $(EXTRA_FONT_DIRS) \
 	    .perlcriticrc .perltidyrc \
 	  | tar -xf - -C $(BUILDDIR)/$(DIST)

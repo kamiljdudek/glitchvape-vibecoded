@@ -554,6 +554,12 @@ sub cache_key
         $arg{ size },
     );
 
+    # Anything the caller says also changes the picture. The watermark is the
+    # first of these: it is not part of the configuration, so nothing else
+    # here would notice it, and a preview keyed without it hands back the
+    # unmarked render.
+    push @parts, @{ $arg{ extra } } if $arg{ extra };
+
     if ( my $spec = $arg{ animate } )
     {
         push @parts, 'animate', $spec->{ frames }, $spec->{ fps };
