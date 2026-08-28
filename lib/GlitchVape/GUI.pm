@@ -305,6 +305,15 @@ sub _build_window
     $win->set_default_size( 1180, 760 );
     $win->set_titlebar( $self->_build_header );
 
+    # delete-event fires before destroy and can refuse it: true stops the
+    # close. Hooking destroy instead would be too late, the window already
+    # being on its way out by the time anybody was asked.
+    $win->signal_connect(
+        'delete-event' => sub {
+            return $self->_confirm_close ? 0 : 1;
+        }
+    );
+
     $win->signal_connect(
         destroy => sub {
             Gtk3->main_quit;
@@ -3164,6 +3173,91 @@ sub _confirm
 
     my $dialog = Gtk3::MessageDialog->new( $self->{ window },
         'modal', 'question', 'ok-cancel', '%s', $question );
+
+    my $answer = $dialog->run;
+    $dialog->destroy;
+
+    return $answer eq 'ok';
+}
+
+# What closing the window would throw away, named so the warning can say it
+# rather than gesturing at "your work".
+#
+# Split out from the dialog because the decision is the interesting half and a
+# dialog cannot be asked what it would have said. This returns the list; the
+# dialog only arranges it into a sentence.
+sub _unsaved
+{
+    my ( $self ) = @_;
+
+    my @lost;
+
+    my $effects = $self->{ state } ? scalar $self->{ state }->effect_names : 0;
+    if ( $effects )
+    {
+        push @lost, $effects == 1 ? 'one effect' : "$effects effects";
+    }
+
+    my $tracks = scalar GlitchVape::Audio::generated( $self->{ audio } );
+    $tracks++ if GlitchVape::Audio::has_file( $self->{ audio } );
+    if ( $tracks )
+    {
+        push @lost, $tracks == 1 ? 'a soundtrack' : "$tracks tracks";
+    }
+
+    return @lost;
+}
+
+# Whether it is all right to close. False stops the window closing.
+#
+# Asked only when there is something to lose. A dialog on every close, most of
+# which have nothing behind them, is one people learn to dismiss without
+# reading -- and then it is not there when it matters.
+#
+# The source image is not in the list. Losing it costs one trip through Open,
+# and naming it alongside a pipeline somebody spent ten minutes on suggests
+# they are comparable.
+sub _confirm_close
+{
+    my ( $self ) = @_;
+
+    my @lost = $self->_unsaved;
+    return 1 unless @lost;
+
+    my $what = @lost > 1 ? join( ' and ', @lost ) : $lost[ 0 ];
+
+    # Says which of it can still be rescued and by which menu entry, because
+    # "are you sure" with no way back is a question the window already knows
+    # the answer to.
+    my $advice = '"Save as preset…" keeps the effects and their settings, '
+        . 'and "Copy command line…" records the seed with them.';
+
+    # Asked of the mix rather than of the sentence above it. Reading the answer
+    # back out of prose means rewording the prose silently drops the advice,
+    # and the wording is the part most likely to be revised.
+    my $soundtrack = GlitchVape::Audio::has_file( $self->{ audio } )
+        || scalar GlitchVape::Audio::generated( $self->{ audio } );
+
+    if ( $soundtrack )
+    {
+        $advice .= ' The soundtrack is not part of a preset and would have '
+            . 'to be put together again.';
+    }
+
+    my $dialog = Gtk3::MessageDialog->new( $self->{ window },
+        'modal', 'warning', 'none', '%s', 'Close without saving?' );
+
+    $dialog->format_secondary_text(
+              "This window holds $what.\n\n$advice" );
+
+    $dialog->add_button( 'Cancel', 'cancel' );
+
+    my $discard = $dialog->add_button( 'Close without saving', 'ok' );
+    $discard->get_style_context->add_class( 'destructive-action' );
+
+    # Cancel, so that Escape and Return both keep the window rather than one
+    # of them being the destructive answer.
+    $dialog->set_default_response( 'cancel' );
 
     my $answer = $dialog->run;
     $dialog->destroy;
