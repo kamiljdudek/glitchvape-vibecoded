@@ -5,6 +5,8 @@ use warnings;
 
 use Gtk3 ();
 
+use List::Util qw(any);
+
 use GlitchVape::Fonts    ();
 use GlitchVape::Palette  ();
 use GlitchVape::Registry ();
@@ -28,9 +30,9 @@ to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
     bool                  Gtk3::Switch
     enum                  Gtk3::ComboBoxText
     list                  Gtk3::Entry       comma separated
-    str                   Gtk3::Entry, or a combo where the accepted values
-                          are known, or an entry paired with a colour picker,
-                          a calendar or a clock
+    str                   Gtk3::Entry; a combo, open or closed, where the
+                          parameter says what it offers; or an entry paired
+                          with a colour picker, a calendar or a clock
 
 The five string cases are worth the special-casing: a parameter that declares
 a suggestion list takes one of those values I<or> anything else typed in,
@@ -60,7 +62,13 @@ window talking about the same string.
 
 =head1 A DECLARATION MAY SAY HOW IT IS PRESENTED
 
-Three keys are read here and nowhere in the render path: C<order>, which
+C<suggest> and C<choose> both name the values a parameter offers -- a source
+this module knows, or an inline list -- and differ in what typing something
+else would mean. C<suggest> gives a combo with an entry in it, for a value the
+list cannot enumerate; C<choose> gives a plain drop-down, for one where there
+is nothing else to say.
+
+Three more keys are read here and nowhere in the render path: C<order>, which
 L<GlitchVape::Registry/sorted_params> sorts by; C<label>, used in place of the
 bare parameter name where the key is not the clearest English; and C<needs>,
 which L</apply_needs> turns into a greyed-out control.
@@ -189,6 +197,7 @@ my %BUILDER = (
     date      => \&_date,
     time      => \&_time,
     suggested => \&_suggested,
+    chosen    => \&_chosen,
     font      => \&_font,
     text      => \&_text,
 );
@@ -245,7 +254,8 @@ sub _kind
     return 'colour'    if _is_colour( $arg );
     return 'date'      if $arg->{ name } eq 'date';
     return 'time'      if $arg->{ name } eq 'time';
-    return 'suggested' if _suggestions( $arg->{ spec } );
+    return 'chosen'    if _offered( $arg->{ spec }, 'choose' );
+    return 'suggested' if _offered( $arg->{ spec }, 'suggest' );
     return 'font'      if $arg->{ name } eq 'font';
     return 'text';
 }
@@ -423,29 +433,44 @@ sub _suggested
 {
     my ( $arg ) = @_;
 
-    my $values = _suggestions( $arg->{ spec } );
-    return _combo_with_entry( $arg, $values );
+    return _combo_with_entry( $arg, _offered( $arg->{ spec }, 'suggest' ) );
+}
+
+sub _chosen
+{
+    my ( $arg ) = @_;
+
+    return _combo_of( $arg, _offered( $arg->{ spec }, 'choose' ) );
 }
 
 # What a parameter offers, or undef if it offers nothing. Two spellings, and
-# the difference is whether the list is a fact about this parameter or about
-# the program: `suggest => 'palette'` asks for whatever palettes are
-# registered, while `suggest => [qw(SP LP HD)]` is three tape speeds that no
-# other part of the program has an opinion about.
+# the difference is what typing something else would mean:
 #
-# The inline form matters for invariant 1. A named source needs a line in
-# %SUGGEST_SOURCE, so an effect wanting to offer three strings of its own
-# would otherwise have to edit this file to do it.
-sub _suggestions
+#   suggest => ...   these, or anything else you can think of
+#   choose  => ...   these, and there is nothing else to say
+#
+# Which of the two a parameter wants is a fact about the parameter and not
+# about the widget, so it is declared rather than decided here. bitmap.palette
+# chooses: five settings make a bitmap look like a machine, and the palette is
+# which machine, so a list is the whole question. palette.name suggests: that
+# effect is *about* the colours, so an inline '#FF71CE,#01CDFE' that no list
+# could enumerate is exactly what somebody might mean.
+#
+# Either spelling takes a named source or an inline list, and the difference
+# there is whether the values are a fact about the program or about this one
+# parameter. The inline form matters for invariant 1: a named source needs a
+# line in %SUGGEST_SOURCE, so an effect wanting to offer three strings of its
+# own would otherwise have to edit this file to do it.
+sub _offered
 {
-    my ( $spec ) = @_;
+    my ( $spec, $key ) = @_;
 
-    my $suggest = $spec->{ suggest };
-    return undef unless defined $suggest;
+    my $offer = $spec->{ $key };
+    return undef unless defined $offer;
 
-    return [ @$suggest ] if ref $suggest eq 'ARRAY';
+    return [ @$offer ] if ref $offer eq 'ARRAY';
 
-    my $source = $SUGGEST_SOURCE{ $suggest } or return undef;
+    my $source = $SUGGEST_SOURCE{ $offer } or return undef;
     return [ $source->() ];
 }
 
@@ -471,7 +496,21 @@ sub _combo_of
     $combo->set_hexpand( 1 );
 
     my $current = _as_text( $arg->{ value } );
-    my $active  = 0;
+
+    # A value the list does not hold is still the value. Shown as an entry of
+    # its own rather than left to fall through to the first one, which would
+    # have the control naming a palette the render is not using -- and a
+    # closed list is the one place that can happen, since the CLI and the
+    # presets accept things the list was never meant to enumerate.
+    my @all = @$values;
+    if ( length $current && !any { $_ eq $current } @all )
+    {
+        unshift @all, $current;
+    }
+
+    $values = \@all;
+
+    my $active = 0;
 
     for my $n ( 0 .. $#$values )
     {

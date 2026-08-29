@@ -82,7 +82,11 @@ from the same `register()` declarations that produce the CLI flags and
 `--explain`, so an effect added to the registry gets a widget without anyone
 editing the GUI — a `num` with a range becomes a slider marked at its default,
 an `enum` becomes a combo, a colour gets a picker beside its entry, and
-`osd.date` gets a calendar. Export calls the same `GlitchVape::render` that
+`osd.date` gets a calendar. A parameter that offers a list of values says
+whether that list is everything: `bitmap.palette` is a plain drop-down of the
+palettes, while `palette.name` keeps an entry beside its list, because that
+effect is about the colours and an inline `#FF71CE,#01CDFE` is exactly what
+somebody might mean. Export calls the same `GlitchVape::render` that
 `bin/glitchvape` calls, and the result is byte-identical to the equivalent
 command line; there is a test that asserts exactly that.
 

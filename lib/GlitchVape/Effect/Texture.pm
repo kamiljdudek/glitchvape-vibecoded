@@ -156,14 +156,27 @@ DOC
             default => 6,
             type    => 'num',
             min     => 1,
-            max     => 64,
-            doc     => 'Divide resolution by this before the palette lookup',
+
+            # Sixteen is already a 1920-pixel photograph reduced to 120
+            # blocks across, which is coarser than any machine this is
+            # imitating. It was 64, where the whole of the usable range sat
+            # in the first quarter of the slider.
+            max => 16,
+            doc => 'Divide resolution by this before the palette lookup',
         },
         palette => {
             default => 'laserwave',
             type    => 'str',
-            suggest => 'palette',
-            doc     => 'Palette name, or inline "#FF71CE,#01CDFE,..."',
+
+            # Chosen rather than suggested: five settings here make a picture
+            # look like a machine, and the palette is which machine. The
+            # inline form still works from the command line, and a preset
+            # that uses one still shows it -- see
+            # GlitchVape::GUI::Params/_combo_of -- but it is not what this
+            # control is for, and an entry beside a list of the machines
+            # invites typing where picking is the whole question.
+            choose => 'palette',
+            doc    => 'Palette name, or inline "#FF71CE,#01CDFE,..."',
         },
         matrix => {
             default => 'o4x4',

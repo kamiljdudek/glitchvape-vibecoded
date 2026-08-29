@@ -72,7 +72,8 @@ the window and by `--explain` alike — never by the render:
 | `order` | where it sits among its siblings; the default is alphabetical |
 | `label` | what to call the row, where the key is not the clearest English |
 | `needs` | which other parameters must hold before this one means anything |
-| `suggest` | a named source (`palette`) or an inline list the effect owns |
+| `suggest` | values to offer, typeable: a named source (`palette`) or an inline list |
+| `choose` | the same, but closed — a plain drop-down with nothing to type into |
 
 `needs => { timestamp => 1, invent => 0 }` greys the control until both hold,
 without hiding it and without touching the value — `osd` is what these exist

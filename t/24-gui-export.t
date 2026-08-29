@@ -317,11 +317,7 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 # palette names needed a line adding to the GUI -- which is exactly the
 # coupling the invariant exists to forbid.
 {
-    my @palette_params = (
-        [ 'palette',      'name' ],
-        [ 'gradient_map', 'name' ],
-        [ 'bitmap',       'palette' ],
-    );
+    my @palette_params = ( [ 'palette', 'name' ], [ 'gradient_map', 'name' ], );
 
     my $offered = scalar GlitchVape::Palette::names();
 
@@ -347,11 +343,73 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
         $built->{ control }->get_model->foreach( sub { $rows++; return 0 } );
         is $rows, $offered, 'offering every registered palette';
 
-        # An entry as well as a list, because a palette parameter also takes
-        # an inline '#FF71CE,#01CDFE' that no list could enumerate.
+        # An entry as well as a list, because these two effects are about the
+        # colours, so an inline '#FF71CE,#01CDFE' that no list could
+        # enumerate is exactly what somebody might mean.
         ok $built->{ control }->get_child->isa( 'Gtk3::Entry' ),
             'and still takes an inline colour list';
     }
+}
+
+# ---------------------------------------------------------------------------
+# A parameter can offer a list and mean only that list
+
+# The same declaration-driven mechanism, and the difference is what typing
+# something else would mean. bitmap has five settings that together make a
+# picture look like a machine, and the palette is which machine -- so an entry
+# beside a list of the machines invites typing where picking is the question.
+{
+    my $spec = GlitchVape::Registry->get( 'bitmap' )->{ params }{ palette };
+
+    is $spec->{ choose }, 'palette',
+        'bitmap.palette declares a closed list rather than a suggestion';
+    ok !$spec->{ suggest }, 'and does not declare both';
+
+    my $built = GlitchVape::GUI::Params->build(
+        effect => 'bitmap',
+        name   => 'palette',
+        spec   => $spec,
+        value  => 'laserwave',
+    );
+
+    isa_ok $built->{ control }, 'Gtk3::ComboBoxText', 'so it gets a combo';
+    ok !$built->{ control }->get_child->isa( 'Gtk3::Entry' ),
+        'with nothing to type into';
+
+    my $rows = 0;
+    $built->{ control }->get_model->foreach( sub { $rows++; return 0 } );
+    is $rows, scalar GlitchVape::Palette::names(),
+        'offering every registered palette and no more';
+
+    is $built->{ get }->(), 'laserwave', 'and it opens on the current value';
+}
+
+# ---------------------------------------------------------------------------
+# A closed list still tells the truth about a value it does not hold
+
+# The command line and the presets accept things a list was never meant to
+# enumerate -- bitmap.palette still takes an inline '#FF71CE,#01CDFE' there --
+# and a combo that quietly showed the first entry instead would be naming a
+# palette the render is not using.
+{
+    my $spec = GlitchVape::Registry->get( 'bitmap' )->{ params }{ palette };
+
+    my $inline = '#FF71CE,#01CDFE,#05FFA1';
+
+    my $built = GlitchVape::GUI::Params->build(
+        effect => 'bitmap',
+        name   => 'palette',
+        spec   => $spec,
+        value  => $inline,
+    );
+
+    is $built->{ get }->(), $inline,
+        'a value the list does not hold is what the control reads back';
+
+    my $rows = 0;
+    $built->{ control }->get_model->foreach( sub { $rows++; return 0 } );
+    is $rows, scalar( GlitchVape::Palette::names() ) + 1,
+        'shown as an entry of its own, added to the offered ones';
 }
 
 # ---------------------------------------------------------------------------
