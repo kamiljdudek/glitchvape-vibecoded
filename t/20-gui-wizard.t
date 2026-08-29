@@ -275,4 +275,135 @@ sub wizard
     $wizard->_finish;
 }
 
+# ---------------------------------------------------------------------------
+# Putting the settings back
+
+# The controls are rebuilt rather than written into: GlitchVape::GUI::Params
+# returns a control and a way to hear about changes, never a way to set one,
+# and a setter per widget kind is the switch on type that module exists to
+# avoid.
+{
+    my $state  = GlitchVape::GUI::State->new( source => undef, seed => 5 );
+    my $render = FakeRender->new;
+
+    my $wizard = GlitchVape::GUI::Wizard->run(
+        state    => $state,
+        render   => $render,
+        on_apply => sub { return },
+    );
+
+    $wizard->{ effect } = 'vignette';
+    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
+
+    my $defaults = GlitchVape::Registry->resolve_params( 'vignette', {} );
+
+    ok !$wizard->{ reset_button }->get_sensitive,
+        'nothing to reset on a page that has just been opened';
+
+    $wizard->_set_param( 'strength', 0.9 );
+    is $wizard->{ params }{ strength }, 0.9, 'a setting moved';
+    ok $wizard->{ reset_button }->get_sensitive,
+        'and now there is something to put back';
+
+    $wizard->_reset_params;
+
+    is_deeply $wizard->{ params }, $defaults,
+        'reset puts every parameter back to what the effect declares';
+    ok !$wizard->{ reset_button }->get_sensitive,
+        'and says there is nothing left to reset';
+
+    # Rebuilt, not merely re-recorded: a control still showing 0.9 over a
+    # parameter holding the default is the worst of both.
+    is $wizard->{ controls }{ strength }{ get }->(), $defaults->{ strength },
+        'the control on screen shows the default too';
+
+    $wizard->_finish;
+}
+
+# ---------------------------------------------------------------------------
+# A preview belongs to the effect it was asked for
+
+# Back, a different effect, forward again takes well under the second a
+# preview costs, so the render started for the first one can land in the pane
+# above the second one's controls. Cancelling is not enough on its own: a
+# preview served from the cache never starts a child at all, so there is no
+# job to cancel and its on_done is already queued on an idle.
+{
+    my $state = GlitchVape::GUI::State->new( source => 'photo.png', seed => 5 );
+    my $render = FakeRender->new;
+
+    my $wizard = GlitchVape::GUI::Wizard->run(
+        state    => $state,
+        render   => $render,
+        on_apply => sub { return },
+    );
+
+    $wizard->{ effect } = 'vignette';
+    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
+    $wizard->_preview;
+
+    my $stale = $render->{ asked }[ -1 ];
+    ok $stale, 'a preview was asked for';
+
+    # Back, and a different effect.
+    $wizard->{ effect } = 'bloom';
+    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
+
+    is $wizard->{ preview_note }->get_text, 'Rendering…',
+        'the pane says it is working on the new effect';
+
+    # The first effect's render arriving now. The path is not a picture, so
+    # honouring it would say so in the note -- which is how this tells the
+    # difference between dropped and merely failed.
+    $stale->{ on_done }->( 'no-such-file.png' );
+
+    is $wizard->{ preview_note }->get_text, 'Rendering…',
+        'a render of the effect that has left is dropped, not shown';
+
+    # While the one asked for now is not.
+    $wizard->_preview;
+    $render->{ asked }[ -1 ]{ on_done }->( 'no-such-file.png' );
+
+    is $wizard->{ preview_note }->get_text, 'Preview could not be loaded.',
+        'and the current effect\'s render is still honoured';
+
+    # An error from a departed render is dropped for the same reason: it
+    # would otherwise replace the note the new effect had just set.
+    my $orphan = $render->{ asked }[ -1 ];
+    $wizard->{ effect } = 'vignette';
+    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
+    $orphan->{ on_error }->( 'something went wrong' );
+
+    is $wizard->{ preview_note }->get_text, 'Rendering…',
+        'an error from a departed render is dropped too';
+
+    $wizard->_finish;
+}
+
+# ---------------------------------------------------------------------------
+# With no image open, the pane says so rather than blinking
+
+# The message is set when the page is filled as well as when the render is
+# asked for, so it does not disappear for the third of a second the settle
+# timer takes -- in a session with no image that is the only thing explaining
+# why the pane is empty.
+{
+    my $state = GlitchVape::GUI::State->new( source => undef, seed => 5 );
+
+    my $wizard = GlitchVape::GUI::Wizard->run(
+        state    => $state,
+        render   => FakeRender->new,
+        on_apply => sub { return },
+    );
+
+    $wizard->{ effect } = 'vignette';
+    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
+
+    is $wizard->{ preview_note }->get_text,
+        GlitchVape::GUI::Wizard::NO_SOURCE_NOTE,
+        'a wizard with no image says why the pane is empty';
+
+    $wizard->_finish;
+}
+
 done_testing;

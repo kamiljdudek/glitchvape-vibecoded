@@ -59,7 +59,7 @@ count as being set -- otherwise the two would answer each other forever.
 
 =cut
 
-# Taller than this and the popover runs off the screen. osd declares nine
+# Taller than this and the popover runs off the screen. osd declares twelve
 # parameters, which is the one that makes this necessary.
 use constant MAX_HEIGHT => 420;
 
@@ -83,6 +83,7 @@ sub new
         on_change  => $arg{ on_change },
         on_enabled => $arg{ on_enabled },
         effect     => undef,
+        controls   => {},
         shown      => 0,
         loading    => 0,
     }, $class;
@@ -256,6 +257,10 @@ sub _build
     $_->destroy for $self->{ header }->get_children;
     $_->destroy for $self->{ body }->get_children;
 
+    # Destroyed with the grid they were in, so the map has to go with them:
+    # kept, it would be a list of widgets to grey out that no longer exist.
+    $self->{ controls } = {};
+
     $self->{ header }->pack_start( $self->_titles( $name, $spec ), 1, 1, 0 );
     $self->{ header }->pack_start( $self->_switch( $name, $spec ), 0, 0, 0 );
 
@@ -351,9 +356,35 @@ sub _params
         return $grid;
     }
 
+    my ( $ordinary, $animation ) = GlitchVape::GUI::Params::split( $params );
+
     my $row = 0;
-    for my $key ( sort keys %$params )
+    for my $key ( @$ordinary, @$animation )
     {
+        # Everything that only means something in a loop goes below the rest,
+        # under a line saying so. Mixed in, a drift of zero reads as a control
+        # that does nothing -- which is true of the still on screen and false
+        # of the effect, and there is no way to tell those apart from a row in
+        # a grid.
+        if ( @$animation && $key eq $animation->[ 0 ] )
+        {
+            # Only if there is something above it to separate. An effect
+            # that is entirely about motion -- flicker is one -- would
+            # otherwise open with a rule across an empty space.
+            if ( @$ordinary )
+            {
+                $grid->attach( Gtk3::Separator->new( 'horizontal' ),
+                    0, $row, 2, 1 );
+                $row++;
+            }
+
+            my $heading = Gtk3::Label->new( 'Only in an animation' );
+            $heading->set_xalign( 0 );
+            $heading->get_style_context->add_class( 'dim-label' );
+            $grid->attach( $heading, 0, $row, 2, 1 );
+            $row++;
+        }
+
         my $built = GlitchVape::GUI::Params->build(
             effect    => $name,
             name      => $key,
@@ -379,12 +410,38 @@ sub _params
             $built->{ control }->set_halign( 'start' );
         }
 
+        $self->{ controls }{ $key } = $built;
+
         $grid->attach( $built->{ label },   0, $row, 1, 1 );
         $grid->attach( $built->{ control }, 1, $row, 1, 1 );
         $row++;
     }
 
+    $self->_sync_needs;
+
     return $grid;
+}
+
+# A control whose declared needs are not met is greyed rather than left
+# looking usable. Done for the whole effect on every change rather than
+# wiring each dependency to its dependants: one parameter can gate several
+# and be gated itself -- osd.reroll needs the timestamp on and the timestamp
+# invented -- so the cheap complete answer beats a graph of signals.
+sub _sync_needs
+{
+    my ( $self ) = @_;
+
+    my $name = $self->{ effect }                  or return;
+    my $spec = GlitchVape::Registry->get( $name ) or return;
+
+    my %values =
+        map { $_ => $self->{ state }->param( $name, $_ ) }
+        keys %{ $spec->{ params } };
+
+    GlitchVape::GUI::Params::apply_needs( $spec->{ params },
+        $self->{ controls }, \%values );
+
+    return;
 }
 
 sub _set_param
@@ -403,6 +460,10 @@ sub _set_param
         1;
     };
     return unless $ok;
+
+    # Before the render, not after: the switch that was just moved may have
+    # decided whether the four controls under it mean anything.
+    $self->_sync_needs;
 
     $self->{ on_change }->() if $self->{ on_change };
     return;

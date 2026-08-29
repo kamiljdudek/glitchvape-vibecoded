@@ -5,8 +5,9 @@ use warnings;
 
 use Gtk3 ();
 
-use GlitchVape::Fonts   ();
-use GlitchVape::Palette ();
+use GlitchVape::Fonts    ();
+use GlitchVape::Palette  ();
+use GlitchVape::Registry ();
 
 our $VERSION = '0.01';
 
@@ -28,28 +29,44 @@ to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
     enum                  Gtk3::ComboBoxText
     list                  Gtk3::Entry       comma separated
     str                   Gtk3::Entry, or a combo where the accepted values
-                          are known, or an entry paired with a colour picker
-                          or a calendar
+                          are known, or an entry paired with a colour picker,
+                          a calendar or a clock
 
-The four string cases are worth the special-casing: a palette parameter takes
-one of the named palettes I<or> an inline list of hex colours, C<text.font>
-takes a font role rather than a font name, a colour parameter typed by hand is
-the one most likely to be got wrong, and C<osd.date> is a date, which is a
-thing people pick rather than spell.
+The five string cases are worth the special-casing: a parameter that declares
+a suggestion list takes one of those values I<or> anything else typed in,
+C<text.font> takes a font role rather than a font name, a colour parameter
+typed by hand is the one most likely to be got wrong, and C<osd.date> and
+C<osd.time> are a date and a time, which are things people pick rather than
+spell.
+
+Gtk3 has a calendar and no clock, so the time picker is built here out of two
+spin buttons and a combo. It is the same shape as the calendar deliberately:
+a button beside the entry, a popover, and the entry still holding the value.
 
 =head1 THE ENTRY STAYS AUTHORITATIVE
 
-Two parameters get a second widget beside the entry -- a colour picker and a
-calendar -- and in both cases the entry is the value and the widget is a way
-of filling it in, never the other way round.
+Three parameters get a second widget beside the entry -- a colour picker, a
+calendar and a clock -- and in all three the entry is the value and the widget
+is a way of filling it in, never the other way round.
 
-That is not symmetry for its own sake. Both parameters have a meaning that no
-picker can express: an empty colour means "no colour", and an empty
-C<osd.date> means "invent a plausible 1990s date, a different one per seed",
-which is the effect's default and the thing most renders want. A calendar has
-no way to be set to nothing. So it writes into the entry and the entry is what
-the pipeline reads, which keeps the emptiable states reachable and keeps
-C<--set osd.date='JAN 05 1995'> and the window talking about the same string.
+That is not symmetry for its own sake. Each has meanings no picker can
+express: an empty colour means "no colour", an empty C<osd.date> means "draw
+no date line", and both C<osd.date> and C<osd.time> take any literal string at
+all -- C<TUESDAY> is a legal timestamp and somebody who typed it meant it. A
+calendar has no way to be set to nothing and no way to say TUESDAY. So it
+writes into the entry and the entry is what the pipeline reads, which keeps
+those states reachable and keeps C<--set osd.date='JAN 05 1995'> and the
+window talking about the same string.
+
+=head1 A DECLARATION MAY SAY HOW IT IS PRESENTED
+
+Three keys are read here and nowhere in the render path: C<order>, which
+L<GlitchVape::Registry/sorted_params> sorts by; C<label>, used in place of the
+bare parameter name where the key is not the clearest English; and C<needs>,
+which L</apply_needs> turns into a greyed-out control.
+
+They are all on the declaration rather than in a table here, for invariant 1's
+reason: a table keyed on 'effect.param' means adding an effect edits the GUI.
 
 =cut
 
@@ -73,6 +90,72 @@ my %SUGGEST_SOURCE = (
     duotone => sub { GlitchVape::Palette::duotone_names() },
     ratio   => sub { qw(16:9 2.35:1 4:3 1:1 9:16) },
 );
+
+=head2 split( $params )
+
+C<< ( \@ordinary, \@animation ) >>, both in presentation order, from an
+effect's parameter hash.
+
+The split is on the declaration's C<animation> flag rather than on the name, so
+a new parameter that only bites in a loop says so where its type and range are
+declared and is grouped without anything here learning about it.
+
+Two lists rather than one sorted with the animation ones last, because the
+caller has to put something between them: a C<drift> sitting under an opacity
+with nothing to say it is different is a control that does nothing on the
+still somebody is looking at.
+
+=cut
+
+sub split
+{
+    my ( $params ) = @_;
+
+    my ( @ordinary, @animation );
+
+    for my $key ( GlitchVape::Registry::sorted_params( $params ) )
+    {
+        if   ( $params->{ $key }{ animation } ) { push @animation, $key }
+        else                                    { push @ordinary,  $key }
+    }
+
+    return ( \@ordinary, \@animation );
+}
+
+=head2 apply_needs( $params, $built, $values )
+
+Grey out the controls whose declared C<needs> are not met, given the effect's
+current values. C<$built> is what L</build> returned, keyed by parameter name.
+
+Greyed rather than hidden, and rather than nothing at all. Nothing at all is
+what osd used to do, and it is how a date field that quietly stopped mattering
+the moment the timestamp switch went off could sit there inviting somebody to
+type into it. Hidden would fix that and introduce a worse one: a control that
+appears and disappears teaches nobody what turned it on, and every row below
+it moves while you are reading it. Greyed says both things at once -- this
+exists, and something else has to change before it counts.
+
+The value is left alone, so switching a controlling parameter back on gives
+back the date that was already typed.
+
+=cut
+
+sub apply_needs
+{
+    my ( $params, $built, $values ) = @_;
+
+    for my $key ( keys %{ $built || {} } )
+    {
+        my $spec = $params->{ $key } or next;
+
+        my $on = GlitchVape::Registry::needs_met( $spec, $values ) ? 1 : 0;
+
+        $built->{ $key }{ label }->set_sensitive( $on );
+        $built->{ $key }{ control }->set_sensitive( $on );
+    }
+
+    return;
+}
 
 =head2 build( %arg )
 
@@ -104,6 +187,7 @@ my %BUILDER = (
     numeric   => \&_numeric,
     colour    => \&_colour,
     date      => \&_date,
+    time      => \&_time,
     suggested => \&_suggested,
     font      => \&_font,
     text      => \&_text,
@@ -115,9 +199,18 @@ sub build
 
     my $spec = $arg{ spec };
 
-    my $label = Gtk3::Label->new( $arg{ name } );
+    # The declaration's own words where it has them. 'rec_mode' is what the
+    # preset key and --set flag are called and has to stay visible somewhere,
+    # which is what the popover's header line does; the row itself can afford
+    # to say 'DV REC mode'.
+    my $label = Gtk3::Label->new( $spec->{ label } // $arg{ name } );
     $label->set_xalign( 0 );
     $label->set_width_chars( 13 );
+
+    # Not wrapped: the column is only as wide as the longest label in it, and
+    # a two-line row beside a one-line control reads as a layout that has
+    # given up rather than as a name that is long. A label wide enough to
+    # widen the popover is a label to shorten, in the declaration.
 
     my $doc = $spec->{ doc };
     if ( defined $doc && length $doc )
@@ -151,7 +244,8 @@ sub _kind
     return 'numeric'   if $type eq 'int'  || $type eq 'num';
     return 'colour'    if _is_colour( $arg );
     return 'date'      if $arg->{ name } eq 'date';
-    return 'suggested' if $SUGGEST_SOURCE{ $arg->{ spec }{ suggest } // q{} };
+    return 'time'      if $arg->{ name } eq 'time';
+    return 'suggested' if _suggestions( $arg->{ spec } );
     return 'font'      if $arg->{ name } eq 'font';
     return 'text';
 }
@@ -329,8 +423,30 @@ sub _suggested
 {
     my ( $arg ) = @_;
 
-    my @values = $SUGGEST_SOURCE{ $arg->{ spec }{ suggest } }->();
-    return _combo_with_entry( $arg, \@values );
+    my $values = _suggestions( $arg->{ spec } );
+    return _combo_with_entry( $arg, $values );
+}
+
+# What a parameter offers, or undef if it offers nothing. Two spellings, and
+# the difference is whether the list is a fact about this parameter or about
+# the program: `suggest => 'palette'` asks for whatever palettes are
+# registered, while `suggest => [qw(SP LP HD)]` is three tape speeds that no
+# other part of the program has an opinion about.
+#
+# The inline form matters for invariant 1. A named source needs a line in
+# %SUGGEST_SOURCE, so an effect wanting to offer three strings of its own
+# would otherwise have to edit this file to do it.
+sub _suggestions
+{
+    my ( $spec ) = @_;
+
+    my $suggest = $spec->{ suggest };
+    return undef unless defined $suggest;
+
+    return [ @$suggest ] if ref $suggest eq 'ARRAY';
+
+    my $source = $SUGGEST_SOURCE{ $suggest } or return undef;
+    return [ $source->() ];
 }
 
 # A closed list, unlike the palette pickers above it. A palette parameter
@@ -472,83 +588,182 @@ use constant DEFAULT_YEAR  => 1995;
 use constant DEFAULT_MONTH => 5;      # zero-based, so June
 use constant DEFAULT_DAY   => 15;
 
+# And where the clock opens, for the same reason and to match osd.time's own
+# default, so a picker opened on an unreadable string lands where the
+# declaration would have put it.
+use constant DEFAULT_MERIDIEM => 'PM';
+use constant DEFAULT_HOUR     => 3;
+use constant DEFAULT_MINUTE   => 47;
+
 sub _date
 {
     my ( $arg ) = @_;
+
+    return _picker(
+        $arg,
+        icon        => 'x-office-calendar-symbolic',
+        tooltip     => 'Pick a date',
+        placeholder => 'Not shown',
+        build       => sub {
+            my ( $entry ) = @_;
+
+            my $calendar = Gtk3::Calendar->new;
+
+            # Pointing the calendar at the entry's value is itself a
+            # day-selected -- twice, in fact, since select_month and
+            # select_day each emit one -- and without this the act of opening
+            # the picker would write the date back over whatever was typed.
+            # That is not a cosmetic difference: 'TUESDAY' is a legal
+            # osd.date, and a picker that silently replaced it with JUN 15
+            # 1995 on the way past would be destroying the value it was
+            # opened to show. It would also fire on_change and cost a render
+            # nobody asked for.
+            my $seeking = 0;
+
+            # Writing into the entry is what commits the choice, and the
+            # entry's own changed handler is what tells the caller -- so this
+            # does not call on_change itself and cannot report a value twice.
+            $calendar->signal_connect(
+                'day-selected' => sub {
+                    return if $seeking;
+
+                    my ( $year, $month, $day ) = $calendar->get_date;
+                    $entry->set_text(
+                        sprintf '%s %02d %d',
+                        $MONTH[ $month ],
+                        $day, $year
+                    );
+                    return;
+                }
+            );
+
+            my $inner = Gtk3::Box->new( 'vertical', 6 );
+            $inner->pack_start( $calendar, 1, 1, 0 );
+
+            return (
+                $inner,
+                sub {
+                    $seeking = 1;
+                    _seek_calendar( $calendar, $_[ 0 ] );
+                    $seeking = 0;
+                    return;
+                }
+            );
+        },
+    );
+}
+
+# Gtk3 has GtkCalendar and nothing for a time of day, so this is two spin
+# buttons and a meridiem combo. Same shape as the date picker on purpose: a
+# button beside the entry, a popover, and the entry still holding the value,
+# because osd.time takes any literal string too.
+sub _time
+{
+    my ( $arg ) = @_;
+
+    return _picker(
+        $arg,
+        icon        => 'preferences-system-time-symbolic',
+        tooltip     => 'Pick a time',
+        placeholder => 'Not shown',
+        build       => sub {
+            my ( $entry ) = @_;
+
+            my $seeking = 0;
+
+            my $hour   = Gtk3::SpinButton->new_with_range( 1, 12, 1 );
+            my $minute = Gtk3::SpinButton->new_with_range( 0, 59, 1 );
+
+            # Both wrap, because 12:59 and 1:00 are a minute apart and a
+            # picker that stops dead between them is asking to be typed round.
+            $_->set_wrap( 1 ) for $hour, $minute;
+
+            # The minutes are half of a clock reading, not a number: 3:7 is
+            # not a time anybody writes.
+            $minute->signal_connect(
+                output => sub {
+                    my ( $spin ) = @_;
+                    $spin->set_text( sprintf '%02d', $spin->get_value );
+                    return 1;
+                }
+            );
+
+            my $meridiem = Gtk3::ComboBoxText->new;
+            $meridiem->append_text( $_ ) for qw(AM PM);
+
+            my $commit = sub {
+                return if $seeking;
+
+                $entry->set_text(
+                    _format_time(
+                        $meridiem->get_active_text // DEFAULT_MERIDIEM,
+                        $hour->get_value,
+                        $minute->get_value
+                    )
+                );
+                return;
+            };
+
+            $_->signal_connect( 'value-changed' => $commit ) for $hour, $minute;
+            $meridiem->signal_connect( changed => $commit );
+
+            my $inner = Gtk3::Box->new( 'horizontal', 4 );
+            $inner->pack_start( $meridiem,               0, 0, 0 );
+            $inner->pack_start( $hour,                   0, 0, 0 );
+            $inner->pack_start( Gtk3::Label->new( ':' ), 0, 0, 0 );
+            $inner->pack_start( $minute,                 0, 0, 0 );
+
+            return (
+                $inner,
+                sub {
+                    my ( $m, $h, $n ) = _parse_time( $_[ 0 ] );
+
+                    $seeking = 1;
+                    $meridiem->set_active( $m eq 'AM' ? 0 : 1 );
+                    $hour->set_value( $h );
+                    $minute->set_value( $n );
+                    $seeking = 0;
+                    return;
+                }
+            );
+        },
+    );
+}
+
+# What the date and time pickers have in common, which is everything except
+# what is inside the popover: the entry is the value, the button is a way of
+# filling it in, and opening the picker points it at what the entry currently
+# says rather than at wherever it was left last time.
+#
+# `build` is handed the entry and returns the popover's contents and a way to
+# seek them, which is what lets the guard against writing back over a literal
+# live in the closure that needs it.
+sub _picker
+{
+    my ( $arg, %opt ) = @_;
 
     my $box = Gtk3::Box->new( 'horizontal', 4 );
 
     my $entry = Gtk3::Entry->new;
     $entry->set_text( _as_text( $arg->{ value } ) );
     $entry->set_hexpand( 1 );
-    $entry->set_placeholder_text( 'Any 1990s date' );
+    $entry->set_placeholder_text( $opt{ placeholder } );
 
     my $button = Gtk3::Button->new;
     $button->set_image(
-        Gtk3::Image->new_from_icon_name(
-            'x-office-calendar-symbolic', 'button'
-        )
-    );
-    $button->set_tooltip_text( 'Pick a date' );
+        Gtk3::Image->new_from_icon_name( $opt{ icon }, 'button' ) );
+    $button->set_tooltip_text( $opt{ tooltip } );
 
-    my $calendar = Gtk3::Calendar->new;
-
-    # Pointing the calendar at the entry's value is itself a day-selected --
-    # twice, in fact, since select_month and select_day each emit one -- and
-    # without this the act of opening the picker would write the date back
-    # over whatever was typed. That is not a cosmetic difference: 'TUESDAY' is
-    # a legal osd.date, and a picker that silently replaced it with JUN 15
-    # 1995 on the way past would be destroying the value it was opened to
-    # show. It would also fire on_change and cost a render nobody asked for.
-    my $seeking = 0;
-
-    # Writing into the entry is what commits the choice, and the entry's own
-    # changed handler is what tells the caller -- so this does not call
-    # on_change itself and cannot report a value twice.
-    $calendar->signal_connect(
-        'day-selected' => sub {
-            return if $seeking;
-
-            my ( $year, $month, $day ) = $calendar->get_date;
-            $entry->set_text(
-                sprintf '%s %02d %d',
-                $MONTH[ $month ],
-                $day, $year
-            );
-            return;
-        }
-    );
-
-    my $any = Gtk3::Button->new_with_label( 'Any 1990s date' );
-    $any->set_tooltip_text(
-              "Leave it to the seed: a different plausible date per render.\n"
-            . 'This is what an empty field means' );
+    my ( $inner, $seek ) = $opt{ build }->( $entry );
+    $inner->set_border_width( 8 );
 
     my $popover = Gtk3::Popover->new( $button );
     $popover->set_position( 'bottom' );
-
-    my $inner = Gtk3::Box->new( 'vertical', 6 );
-    $inner->set_border_width( 8 );
-    $inner->pack_start( $calendar, 1, 1, 0 );
-    $inner->pack_start( $any,      0, 0, 0 );
     $popover->add( $inner );
-
-    $any->signal_connect(
-        clicked => sub {
-            $entry->set_text( q{} );
-            $popover->popdown;
-            return;
-        }
-    );
 
     $button->signal_connect(
         clicked => sub {
-
-            # Opened on whatever the entry says, so the calendar is showing
-            # the current value rather than wherever it was left last time.
-            $seeking = 1;
-            _seek_calendar( $calendar, $entry->get_text );
-            $seeking = 0;
+            $seek->( $entry->get_text );
 
             $popover->show_all;
             $popover->popup;
@@ -567,6 +782,35 @@ sub _date
     $box->pack_start( $button, 0, 0, 0 );
 
     return { control => $box, get => sub { return $entry->get_text } };
+}
+
+# Matches GlitchVape::Effect::Overlay's _fake_time, down to the space that
+# pads a single-digit hour: a time picked here and a time it invented have to
+# be the same kind of string, or switching between them changes the width of
+# the overlay.
+sub _format_time
+{
+    my ( $meridiem, $hour, $minute ) = @_;
+
+    return sprintf '%s %2d:%02d', uc $meridiem, $hour, $minute;
+}
+
+sub _parse_time
+{
+    my ( $text ) = @_;
+
+    my @fallback = ( DEFAULT_MERIDIEM, DEFAULT_HOUR, DEFAULT_MINUTE );
+
+    return @fallback unless defined $text;
+
+    my ( $meridiem, $hour, $minute ) =
+        $text =~ /\A\s*([AP]M)\s+(\d{1,2}):(\d{2})\s*\z/i;
+
+    return @fallback unless defined $meridiem;
+    return @fallback if $hour < 1 || $hour > 12;
+    return @fallback if $minute > 59;
+
+    return ( uc $meridiem, 0 + $hour, 0 + $minute );
 }
 
 # Point the calendar at what the entry holds. A string it cannot read is not

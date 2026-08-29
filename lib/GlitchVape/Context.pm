@@ -195,6 +195,31 @@ sub rng_for
     return $self->{ _rngs }{ $key } ||= $self->{ rng }->derive( $key );
 }
 
+=head2 rng_fixed( $name )
+
+Like C<rng_for>, but the same stream on every frame of a loop.
+
+C<rng_for> folds the frame index in, which is what makes static flicker and
+grain move. Some choices are not that kind of random: which phrase a text
+effect draws is decided once about the picture, and re-rolling it per frame
+gives a caption that changes twenty-four times a second. This is for those --
+still derived from the seed, so still reproducible, and still its own stream so
+that using it does not disturb anybody else's.
+
+=cut
+
+sub rng_fixed
+{
+    my ( $self, $name ) = @_;
+
+    # Cached apart from rng_for's stream but derived from the same label, so
+    # that on a still the two are the same numbers. Otherwise moving an effect
+    # onto this would change what a still renders -- a different fake date on
+    # the camcorder display, say -- for no reason anybody could see.
+    return $self->{ _rngs }{ "fixed:$name" } ||=
+        $self->{ rng }->derive( $name );
+}
+
 =head2 dims()
 
 C<< ($width, $height) >> of the working image.

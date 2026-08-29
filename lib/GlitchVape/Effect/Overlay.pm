@@ -59,7 +59,9 @@ $R->register(
     summary => 'Draw text over the image',
     doc     => <<'DOC',
 Renders a string, defaulting to a randomly chosen Japanese phrase from a built
-in list. The C<shadow> offset draws the same text in a contrasting colour
+in list. C<random> says what that choice does across a loop -- redrawn every
+frame, which is the default and is what makes the text flicker; held for the
+whole render; or not made at all. The C<shadow> offset draws the same text in a contrasting colour
 behind the main copy, which is what stops light text disappearing into a light
 background.
 DOC
@@ -68,6 +70,14 @@ DOC
             default => '',
             type    => 'str',
             doc     => 'Text to draw; empty picks a random Japanese phrase',
+        },
+        random => {
+            default => 'frame',
+            type    => 'enum',
+            values  => [ qw(frame once off) ],
+            doc     => 'What an empty string means: frame, a new phrase every '
+                . 'frame; once, one phrase held for the whole render; off, '
+                . 'nothing drawn at all',
         },
         font => {
             default => 'cjk',
@@ -151,13 +161,30 @@ sub _text
     my ( $ctx, $p ) = @_;
     return if $p->{ opacity } <= 0;
 
-    my $rng = $ctx->rng_for( 'text' );
-
     # An empty string means "surprise me", which is how the presets get
     # varied Japanese text without naming a phrase in every one.
+    #
+    # What it left unsaid was how often the surprise is repeated. rng_for
+    # folds the frame index in, so a loop drew a new phrase on every frame --
+    # which is the wanted behaviour and stays the default, but was arrived at
+    # by accident of which stream the effect happened to ask for rather than
+    # by anybody choosing it. It is a stated choice now, and 'once' is there
+    # for a caption that is supposed to sit still.
     my $str = $p->{ string };
+
     if ( !length $str )
     {
+        my $when = $p->{ random } // 'frame';
+
+        return if $when eq 'off';
+
+        # rng_fixed for 'once', which is the same stream on every frame of the
+        # loop; rng_for for 'frame', which is not.
+        my $rng =
+              $when eq 'frame'
+            ? $ctx->rng_for( 'text' )
+            : $ctx->rng_fixed( 'text' );
+
         $str = $rng->pick( @PHRASES );
     }
 
@@ -212,71 +239,130 @@ The furniture a 1990s camcorder burned into the picture. Defaults place a
 blinking record indicator top-left and a date/time bottom-right, which is where
 most consumer models actually put them.
 
-The date defaults to a random day in the 1990s, since a real timestamp on a
-vaporwave image is an anachronism that undercuts the whole effect.
+The timestamp is invented by default -- a real present-day date on a vaporwave
+image is an anachronism that undercuts the whole effect. Turn `invent` off and
+`date` and `time` are drawn exactly as they are typed; either of them left
+empty is simply not drawn, which is how to have a time and no date.
 DOC
     params => {
-        rec => {
-            default => 1,
-            type    => 'bool',
-            doc     => 'Draw the record indicator',
-        },
-        rec_text => {
-            default => 'REC',
+        color => {
+            order   => 10,
+            label   => 'Colour',
+            default => '#FFFFFF',
             type    => 'str',
-            doc     => 'Label beside the record dot',
-        },
-        timestamp => {
-            default => 1,
-            type    => 'bool',
-            doc     => 'Draw the date and time',
-        },
-        date => {
-            default => '',
-            type    => 'str',
-            doc     => 'Literal date string; empty generates a 1990s date',
-        },
-        time => {
-            default => '',
-            type    => 'str',
-            doc     => 'Literal time string; empty generates one',
-        },
-        mode => {
-            default => 'SP',
-            type    => 'str',
-            doc     => 'Tape speed indicator; empty to omit',
-        },
-        play => {
-            default => 0,
-            type    => 'bool',
-            doc     => 'Draw a PLAY transport indicator',
+            doc     => 'Text colour',
         },
         font => {
+            order   => 20,
+            label   => 'Font',
             default => 'vcr',
             type    => 'str',
             doc     => 'Font role or path',
         },
         size => {
+            order   => 30,
+            label   => 'Text size',
             default => 4.5,
             type    => 'num',
             min     => 0.5,
-            max     => 50,
-            doc     => 'Height of the type as a percentage of the image height',
-        },
-        color => {
-            default => '#FFFFFF',
-            type    => 'str',
-            doc     => 'Text colour',
+
+            # It was 50, which is an SP that fills half the frame -- and a
+            # slider whose every usable value sat in its first tenth. This is
+            # camcorder furniture, so it has a size: roughly the 4.5% below,
+            # and 12 is already taller than anything a deck ever burned in.
+            # The caption effects keep their 100, because oversized type is
+            # the point of a caption and not of an OSD.
+            max => 12,
+            doc => 'Height of the type as a percentage of the image height',
         },
         margin => {
+            order   => 40,
+            label   => 'Margin',
             default => 0.045,
             type    => 'num',
             min     => 0,
             max     => 0.5,
             doc     => 'Inset from the edges',
         },
+        timestamp => {
+            order   => 50,
+            label   => 'Timestamp',
+            default => 1,
+            type    => 'bool',
+            doc     => 'Draw the date and time',
+        },
+        invent => {
+            order   => 60,
+            label   => 'Invent timestamp',
+            default => 1,
+            type    => 'bool',
+            needs   => { timestamp => 1 },
+            doc     => 'Make up a 1990s date and time from the seed, '
+                . 'ignoring the two fields below',
+        },
+        date => {
+            order   => 70,
+            label   => 'Date',
+            default => 'JUN 15 1995',
+            type    => 'str',
+            needs   => { timestamp => 1, invent => 0 },
+            doc     => 'Date as it should read; empty draws no date',
+        },
+        time => {
+            order   => 80,
+            label   => 'Time',
+            default => 'PM  3:47',
+            type    => 'str',
+            needs   => { timestamp => 1, invent => 0 },
+            doc     => 'Time as it should read; empty draws no time',
+        },
+        camera => {
+            order   => 90,
+            label   => 'Camera mode',
+            default => 'REC',
+            type    => 'str',
+            suggest => [ 'REC', 'PLAY', 'PLAY-FF' ],
+            doc     => 'Transport indicator, top left; empty draws none',
+        },
+        rec_mode => {
+            order   => 100,
+            label   => 'DV REC mode',
+            default => 'SP',
+            type    => 'str',
+            suggest => [ qw(SP LP HD) ],
+            doc     => 'Tape speed, top right; empty to omit',
+        },
+        reroll => {
+            order     => 110,
+            label     => 'Varying timestamp',
+            default   => 0,
+            type      => 'bool',
+            animation => 1,
+            needs     => { timestamp => 1, invent => 1 },
+            doc       => 'Invent a new timestamp on every frame, so the '
+                . 'clock cannot settle on a date',
+        },
+        blink => {
+            order     => 120,
+            label     => 'Icon blink',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            needs     => { camera => 1 },
+            doc       => 'Flash the camera indicator across the loop',
+        },
     },
     apply => \&_osd,
+);
+
+# What a camera mode draws beside its label. A known transport state has a
+# glyph the hardware drew; anything typed in is text alone, because a glyph
+# guessed from an unrecognised word would be inventing a claim about what the
+# deck is doing.
+my %CAMERA_GLYPH = (
+    'REC'     => 'dot',
+    'PLAY'    => 'play',
+    'PLAY-FF' => 'ff',
 );
 
 sub _osd
@@ -284,57 +370,131 @@ sub _osd
     my ( $ctx, $p ) = @_;
 
     my ( $w, $h ) = $ctx->dims;
-    my $rng = $ctx->rng_for( 'osd' );
+
+    # Which stream the invented date comes out of is the whole of `reroll`.
+    #
+    # rng_fixed is the same numbers on every frame, and is the default because
+    # a camcorder's clock is a fact about when the tape was made: it does not
+    # change within two seconds of footage, and one that did read as a bug.
+    #
+    # rng_for folds the frame index in, so the display cannot settle on a date
+    # at all. That was what this did by accident, and it turns out to be worth
+    # keeping: a timestamp riffling through a decade is a picture of not
+    # remembering when something happened, which is a thing several of these
+    # presets are about. It is an answer to a different question, so it is a
+    # setting rather than the default.
+    my $rng =
+          $p->{ reroll }
+        ? $ctx->rng_for( 'osd' )
+        : $ctx->rng_fixed( 'osd' );
     my $font =
         GlitchVape::Fonts::resolve_or_die( $p->{ font }, "effect 'osd'" );
     my $size = int( $h * $p->{ size } / 100 ) || 10;
-
-    my $mx = int( $w * $p->{ margin } );
-    my $my = int( $h * $p->{ margin } );
 
     # Every piece of on-screen display shares its face, size and colour; only
     # the string and corner change.
     my %osd = ( font => $font, size => $size, color => $p->{ color } );
 
-    if ( $p->{ rec } )
+    # Where the corners are, kept beside the type it has to line up with:
+    # three numbers that every piece of the display needs and none of them
+    # varies, which is one argument rather than three at each call.
+    my $box = {
+        mx   => int( $w * $p->{ margin } ),
+        my   => int( $h * $p->{ margin } ),
+        size => $size,
+        osd  => \%osd,
+    };
+
+    _osd_camera( $ctx, $p, $box );
+    _osd_timestamp( $ctx, $p, $box, $rng );
+
+    if ( length $p->{ rec_mode } )
     {
-        # The dot blinks across an animation, as the real indicator does.
-        # The record dot blinks across an animation, as the real indicator
-        # does, and is simply always lit on a still.
-        my $on = 1;
-        if ( $ctx->frames > 1 )
-        {
-            $on = 0;
-            if ( $ctx->phase < 0.6 )
-            {
-                $on = 1;
-            }
-        }
-
-        if ( $on )
-        {
-            my $r  = int( $size * 0.32 );
-            my $cx = $mx + $r;
-            my $cy = $my + int( $size * 0.42 );
-            $ctx->magick( '-fill', '#FF2020', '-stroke', 'none', '-draw',
-                sprintf( 'circle %d,%d %d,%d', $cx, $cy, $cx + $r, $cy ),
-            );
-        }
-
         _annotate(
             $ctx, %osd,
-            string  => $p->{ rec_text },
-            gravity => 'NorthWest',
-            x       => $mx + int( $size * 0.95 ),
-            y       => $my,
+            string  => $p->{ rec_mode },
+            gravity => 'NorthEast',
+            x       => $box->{ mx },
+            y       => $box->{ my },
         );
     }
+    return;
+}
 
-    if ( $p->{ play } )
+# One indicator, not one per transport state. rec and play were separate
+# switches with a separate label each, which made "REC and PLAY at once" a
+# reachable setting -- a deck is in one transport state, and offering the
+# other thing was offering a picture no camcorder ever showed.
+sub _osd_camera
+{
+    my ( $ctx, $p, $box ) = @_;
+
+    my ( $mx, $my, $size ) = @{ $box }{ qw(mx my size) };
+
+    my $mode = $p->{ camera };
+    return unless length $mode;
+
+    # The whole indicator blinks, glyph and label together, which is what a
+    # camcorder in standby actually does -- and what makes the setting mean
+    # something for a mode typed in by hand, which has no glyph to flash.
+    if ( $ctx->frames > 1 && $p->{ blink } && $ctx->phase >= 0.6 )
     {
-        my $y   = $my + int( $size * 1.6 );
-        my $tri = int( $size * 0.45 );
-        my $x0  = $mx;
+        return;
+    }
+
+    my $glyph = $CAMERA_GLYPH{ uc $mode };
+    my $x     = $mx;
+
+    if ( $glyph )
+    {
+        _osd_glyph( $ctx, $p, $glyph, $box );
+
+        # Past whatever was drawn, which is wider for the two triangles of a
+        # fast wind than for the one of a play.
+        $x = $mx + int( $size * ( $glyph eq 'ff' ? 1.4 : 0.95 ) );
+    }
+
+    _annotate(
+        $ctx, %{ $box->{ osd } },
+        string  => $mode,
+        gravity => 'NorthWest',
+        x       => $x,
+        y       => $my,
+    );
+
+    return;
+}
+
+sub _osd_glyph
+{
+    my ( $ctx, $p, $glyph, $box ) = @_;
+
+    my ( $mx, $my, $size ) = @{ $box }{ qw(mx my size) };
+
+    my $r  = int( $size * 0.32 );
+    my $cy = $my + int( $size * 0.42 );
+
+    if ( $glyph eq 'dot' )
+    {
+        # Red whatever the text colour is: the record lamp was a red LED, and
+        # a white one reads as a full stop.
+        my $cx = $mx + $r;
+        $ctx->magick( '-fill', '#FF2020', '-stroke', 'none', '-draw',
+            sprintf( 'circle %d,%d %d,%d', $cx, $cy, $cx + $r, $cy ),
+        );
+        return;
+    }
+
+    my $tri = int( $size * 0.45 );
+    my $top = $cy - $tri;
+
+    # Two triangles for a fast wind, one for play -- the same shorthand as the
+    # buttons on the deck, so the picture reads without the label.
+    my @x = ( $mx );
+    push @x, $mx + int( $tri * 1.05 ) if $glyph eq 'ff';
+
+    for my $x0 ( @x )
+    {
         $ctx->magick(
             '-fill',
             $p->{ color },
@@ -342,46 +502,50 @@ sub _osd
             'none', '-draw',
             sprintf(
                 'polygon %d,%d %d,%d %d,%d',
-                $x0, $y, $x0,
-                $y + $tri * 2,
-                $x0 + $tri * 1.7,
-                $y + $tri
+                $x0,             $top,             $x0,
+                $top + $tri * 2, $x0 + $tri * 1.7, $top + $tri
             ),
-        );
-        _annotate(
-            $ctx, %osd,
-            string  => 'PLAY',
-            gravity => 'NorthWest',
-            x       => $mx + int( $size * 0.95 ),
-            y       => $y - int( $size * 0.15 ),
         );
     }
 
-    if ( $p->{ timestamp } )
+    return;
+}
+
+sub _osd_timestamp
+{
+    my ( $ctx, $p, $box, $rng ) = @_;
+
+    my ( $mx, $my, $size ) = @{ $box }{ qw(mx my size) };
+
+    return unless $p->{ timestamp };
+
+    # Invented or literal, never a mixture. It used to be that an empty field
+    # meant "invent this one", which made the difference between a made-up
+    # date and a typed one invisible in the interface and impossible to state
+    # in --explain: the switch says it instead, and an empty field now means
+    # the one plain thing it looks like it means.
+    my ( $date, $time ) = ( $p->{ date }, $p->{ time } );
+    if ( $p->{ invent } )
     {
-        # A literal date wins; otherwise invent a plausible 1990s one, since
-        # a real present-day timestamp undercuts the whole conceit.
-        my $date = $p->{ date };
-        if ( !length $date )
-        {
-            $date = _fake_date( $rng );
-        }
+        $date = _fake_date( $rng );
+        $time = _fake_time( $rng );
+    }
 
-        my $time = $p->{ time };
-        if ( !length $time )
-        {
-            $time = _fake_time( $rng );
-        }
-
+    if ( length $time )
+    {
         _annotate(
-            $ctx, %osd,
+            $ctx, %{ $box->{ osd } },
             string  => $time,
             gravity => 'SouthEast',
             x       => $mx,
             y       => $my,
         );
+    }
+
+    if ( length $date )
+    {
         _annotate(
-            $ctx, %osd,
+            $ctx, %{ $box->{ osd } },
             string  => $date,
             gravity => 'SouthEast',
             x       => $mx,
@@ -389,16 +553,6 @@ sub _osd
         );
     }
 
-    if ( length $p->{ mode } )
-    {
-        _annotate(
-            $ctx, %osd,
-            string  => $p->{ mode },
-            gravity => 'NorthEast',
-            x       => $mx,
-            y       => $my,
-        );
-    }
     return;
 }
 
@@ -492,11 +646,12 @@ DOC
             doc => 'How hard the horizontal lines bunch towards the horizon',
         },
         drift => {
-            default => 0,
-            type    => 'num',
-            min     => -64,
-            max     =>  64,
-            doc     => 'Grid lines travelled per loop; negative recedes',
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => -64,
+            max       =>  64,
+            doc       => 'Grid lines travelled per loop; negative recedes',
         },
         sun => {
             default => 1,
@@ -831,16 +986,18 @@ DOC
             doc     => 'Gap between repetitions, in multiples of text size',
         },
         drift => {
-            default => 0,
-            type    => 'num',
-            min     => -32,
-            max     =>  32,
-            doc     => 'Tiles the pattern slides per loop; negative reverses',
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => -32,
+            max       =>  32,
+            doc       => 'Tiles the pattern slides per loop; negative reverses',
         },
         direction => {
-            default => 'east',
-            type    => 'enum',
-            values  => [
+            animation => 1,
+            default   => 'east',
+            type      => 'enum',
+            values    => [
                 qw(north northeast east southeast
                     south southwest west northwest)
             ],

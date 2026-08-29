@@ -170,8 +170,8 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 
     my $bool = GlitchVape::GUI::Params->build(
         effect => 'osd',
-        name   => 'rec',
-        spec   => $spec->{ params }{ rec },
+        name   => 'timestamp',
+        spec   => $spec->{ params }{ timestamp },
         value  => 1,
     );
 
@@ -188,13 +188,123 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
     ok $num->{ stretch }, 'a slider does want the width';
 
     my $text = GlitchVape::GUI::Params->build(
-        effect => 'osd',
-        name   => 'rec_text',
-        spec   => $spec->{ params }{ rec_text },
-        value  => 'REC',
+        effect => 'text',
+        name   => 'string',
+        spec   => GlitchVape::Registry->get( 'text' )->{ params }{ string },
+        value  => 'HELLO',
     );
 
     ok $text->{ stretch }, 'so does an entry';
+}
+
+# ---------------------------------------------------------------------------
+# A row is called what the declaration calls it
+
+# The key is what --set and the preset write, and the popover's header says it
+# already. The row can afford English, and where an effect offers it the whole
+# point is that it reads without a manual: 'rec_mode' is what a preset writes,
+# 'DV REC mode' is what the tape said.
+{
+    my $spec = GlitchVape::Registry->get( 'osd' )->{ params }{ rec_mode };
+
+    my $built = GlitchVape::GUI::Params->build(
+        effect => 'osd',
+        name   => 'rec_mode',
+        spec   => $spec,
+        value  => 'SP',
+    );
+
+    is $built->{ label }->get_text, 'DV REC mode',
+        'a declared label is what the row is called';
+
+    # And a parameter that declares none is still called by its key, so this
+    # costs the other forty effects nothing.
+    my $plain = GlitchVape::Registry->get( 'scanlines' )->{ params }{ opacity };
+    my $bare  = GlitchVape::GUI::Params->build(
+        effect => 'scanlines',
+        name   => 'opacity',
+        spec   => $plain,
+        value  => 0.35,
+    );
+
+    is $bare->{ label }->get_text, 'opacity',
+        'and a parameter with nothing to say keeps its key';
+}
+
+# ---------------------------------------------------------------------------
+# A suggestion list may be three strings the effect made up
+
+# The named sources below are program-wide facts -- every registered palette,
+# every duotone ramp. Three tape speeds are not: nothing else in the program
+# has an opinion about them, and requiring a %SUGGEST_SOURCE entry for them
+# would mean an effect that wants to offer three strings has to edit the GUI,
+# which is the coupling invariant 1 forbids.
+{
+    my $spec = GlitchVape::Registry->get( 'osd' )->{ params }{ rec_mode };
+
+    is_deeply $spec->{ suggest }, [ qw(SP LP HD) ],
+        'osd.rec_mode carries its own suggestions';
+
+    my $built = GlitchVape::GUI::Params->build(
+        effect => 'osd',
+        name   => 'rec_mode',
+        spec   => $spec,
+        value  => 'SP',
+    );
+
+    isa_ok $built->{ control }, 'Gtk3::ComboBoxText', 'so it gets a combo';
+
+    my $rows = 0;
+    $built->{ control }->get_model->foreach( sub { $rows++; return 0 } );
+    is $rows, 3, 'offering the three the effect named';
+
+    # Typeable, because the point of the editable combo is that the list is an
+    # offer: a deck with a mode nobody here thought of is still a deck.
+    ok $built->{ control }->get_child->isa( 'Gtk3::Entry' ),
+        'and still takes a mode of your own';
+}
+
+# ---------------------------------------------------------------------------
+# Settings that only bite in a loop are kept apart from the rest
+
+# The same invariant as the suggestion lists below: the declaration decides,
+# not a list in the GUI. A parameter that does nothing to the still on screen
+# reads as a broken control when it sits between two that work, so they are
+# grouped -- and the grouping has to follow the flag rather than the name, or
+# the next one added is grouped only if somebody remembers.
+{
+    my ( $ordinary, $animation ) = GlitchVape::GUI::Params::split(
+        GlitchVape::Registry->get( 'watermark' )->{ params } );
+
+    is_deeply $animation, [ 'direction', 'drift' ],
+        'the watermark keeps its two loop-only settings together';
+
+    ok scalar @$ordinary,                      'and still has ordinary ones';
+    ok !( grep { $_ eq 'drift' } @$ordinary ), 'with the drift not among them';
+
+    my ( undef, $none ) = GlitchVape::GUI::Params::split(
+        GlitchVape::Registry->get( 'grade' )->{ params } );
+
+    is_deeply $none, [],
+        'an effect with nothing loop-only gets no second group';
+
+    # Every one of them, so a drift declared without the flag is caught here
+    # rather than by somebody wondering why one effect looks different.
+    my @unflagged;
+    for my $effect ( GlitchVape::Registry->names )
+    {
+        my $params = GlitchVape::Registry->get( $effect )->{ params };
+
+        for my $key ( sort keys %$params )
+        {
+            next unless $key eq 'drift' || $key eq 'pulse';
+            next if $params->{ $key }{ animation };
+            push @unflagged, "$effect.$key";
+        }
+    }
+
+    is_deeply \@unflagged, [],
+        'every drift and pulse in the registry is marked as loop-only';
 }
 
 # ---------------------------------------------------------------------------

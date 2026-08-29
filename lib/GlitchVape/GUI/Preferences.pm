@@ -30,13 +30,6 @@ and the frame count is "already obeying you", because those are live.
 So every control writes through on the spot and the caller is told, and Close
 means the window is in the way rather than that anything is being committed.
 
-=head1 RESTORE DEFAULTS FORGETS THE FILE
-
-It does not walk the controls setting each back. The defaults are one list in
-GlitchVape::GUI::Prefs, deleting the saved file is what makes them stand
-again, and the page is rebuilt from what comes back -- so a preference added
-later cannot be one somebody forgot to add to the reset.
-
 =cut
 
 =head2 run( %arg )
@@ -137,22 +130,16 @@ sub _page_general
 
     $box->pack_start( Gtk3::Separator->new( 'horizontal' ), 0, 0, 6 );
 
-    my $reset = Gtk3::Button->new_with_label( 'Restore defaults' );
-    $reset->set_halign( 'start' );
-    $reset->get_style_context->add_class( 'destructive-action' );
-    $reset->signal_connect(
-        clicked => sub {
-            $self->_restore_defaults;
-            return;
-        }
-    );
-
-    $box->pack_start( $reset, 0, 0, 0 );
     $box->pack_start(
-        _note(
-                  'Puts every preference on every page back to what it was '
-                . 'when the program was installed. Presets and export '
-                . 'profiles are not preferences and are left alone.'
+        $self->_check(
+            'randomize_each_render',
+            'Draw a new seed every time you press Apply',
+            'Every effect that uses randomness -- the static, the dropouts, '
+                . 'the block displacement, which phrase the text picks -- '
+                . 'comes out differently each render, so Apply becomes a way '
+                . 'of looking for a version you like. Off, pressing it twice '
+                . 'gives the same picture twice, which is what makes it safe '
+                . 'to press after moving one slider.'
         ),
         0, 0, 0
     );
@@ -300,28 +287,6 @@ sub _page_watermark
 }
 
 # ---------------------------------------------------------------------------
-
-sub _restore_defaults
-{
-    my ( $self ) = @_;
-
-    GlitchVape::GUI::Prefs::forget();
-
-    my $fresh = GlitchVape::GUI::Prefs::load();
-    %{ $self->{ prefs } } = %$fresh;
-
-    # The pages are thrown away and built again rather than each control being
-    # set back by hand: the second of those is a list of every preference
-    # written out twice, and the copy that gets forgotten is always the one in
-    # the reset.
-    $_->destroy for $self->{ stack }->get_children;
-    $self->_build_pages;
-    $self->{ stack }->show_all;
-
-    $self->{ on_change }->( $self->{ prefs }, 'all' );
-
-    return;
-}
 
 sub _set
 {

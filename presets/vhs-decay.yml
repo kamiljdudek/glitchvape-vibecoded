@@ -71,7 +71,7 @@ effects:
     size: 1.4
 
   osd:
-    rec: 1
+    camera: REC
     timestamp: 1
-    mode: SP
+    rec_mode: SP
     size: 4

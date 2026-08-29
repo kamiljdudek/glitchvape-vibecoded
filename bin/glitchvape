@@ -651,7 +651,13 @@ sub explain_effect
     }
 
     print "\nParameters:\n";
-    for my $p ( sort keys %$params )
+
+    # The order the effect declared, which is the order the window shows them
+    # in. Alphabetical here and grouped there would be two answers to the same
+    # question, and this is the one people read while holding the other.
+    my @order = GlitchVape::Registry::sorted_params( $params );
+
+    for my $p ( @order )
     {
         my $d = $params->{ $p };
 
@@ -665,7 +671,7 @@ sub explain_effect
     }
 
     printf "\nExample:\n  glitchvape --set %s.%s=<value> input.heic\n",
-        $name, ( sort keys %$params )[ 0 ];
+        $name, $order[ 0 ];
     exit 0;
 }
 

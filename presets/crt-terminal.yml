@@ -28,17 +28,27 @@ effects:
     strength: 1.1
     tint: '#39FF14'
 
+    # The glow swelling and the focus below softening are one event, not two:
+    # more beam current makes the spot brighter and wider at the same time.
+    # Both are excursions, so they share a phase without being told to.
+    pulse: 0.15
+
   softness:
     blur: 1.2
     sharpen: 0.8
     radius: 2
+    pulse: 0.2
 
   scanlines:
     opacity: 0.45
     spacing: 3
     thickness: 1
     softness: 1
-    drift: 3
+
+    # Six rather than three. The offset is whole pixels, so at a spacing of
+    # three a drift of three has only four positions to be in across a loop
+    # and the crawl steps rather than slides.
+    drift: 6
 
   grille:
     width: 2
@@ -53,6 +63,12 @@ effects:
   curvature:
     amount: 0.075
     zoom: 1.1
+
+  # A working monitor, so barely there -- enough that the picture is never
+  # quite still, not enough to read as a fault.
+  flicker:
+    amount: 0.04
+    rate: 3
 
   glare:
     strength: 0.12

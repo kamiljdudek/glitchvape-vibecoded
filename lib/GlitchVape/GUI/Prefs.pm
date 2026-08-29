@@ -66,6 +66,11 @@ sub defaults
         # General
         clear_cache_on_exit => 1,
 
+        # Off, because a render that changes every time it is asked for is
+        # not what Apply usually means: the ordinary use of pressing it twice
+        # is to see the same thing again after moving a slider.
+        randomize_each_render => 0,
+
         # Preview
         frames => 24,
         fps    => 12,
@@ -187,6 +192,10 @@ sub save
 
 Remove the saved file, so the defaults stand again. Missing is success: the
 point is that there is nothing there afterwards.
+
+Nothing in the interface calls this -- there is no reset button -- but it is
+how the defaults are got back, and deleting one file is a thing somebody can
+be told to do.
 
 =cut
 

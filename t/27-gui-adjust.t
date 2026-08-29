@@ -347,4 +347,73 @@ sub select_effect
     $gui->_sync_actions;
 }
 
+# ---------------------------------------------------------------------------
+# A setting that cannot matter yet says so
+
+# osd is the effect this exists for. Its date and time did nothing at all
+# unless the timestamp was switched on and left un-invented, and neither fact
+# was said anywhere: the fields sat there looking typeable, and typing in one
+# changed nothing about the render. Greyed rather than hidden, because a row
+# that vanishes teaches nobody what turned it on -- and greyed rather than
+# removed from the state, because ticking the switch back on has to give back
+# the date that was already there.
+{
+    $gui->{ state }->add_effect( 'osd' );
+    $gui->_rebuild_effects;
+    open_on( 'osd' );
+
+    my $controls = $gui->{ adjust }{ controls };
+
+    my $sensitive = sub {
+        my ( $key ) = @_;
+        return $controls->{ $key }{ control }->get_sensitive ? 1 : 0;
+    };
+
+    # The default: a timestamp, invented. So the two fields it would be typed
+    # into are inert, and the reroll under them is not.
+    is $sensitive->( 'timestamp' ), 1, 'the timestamp switch is always live';
+    is $sensitive->( 'date' ), 0, 'an invented timestamp greys the date field';
+    is $sensitive->( 'time' ), 0, 'and the time field';
+    is $sensitive->( 'reroll' ), 1,
+        'while rerolling it is exactly what an invented one can do';
+
+    # The label goes with the control. A live label beside a dead field reads
+    # as a widget that failed to draw rather than as a setting waiting on
+    # another.
+    is $controls->{ date }{ label }->get_sensitive, '',
+        'the label is greyed with its control';
+
+    $gui->{ state }->param( 'osd', 'invent', 0 );
+    $gui->{ adjust }->refresh;
+    $controls = $gui->{ adjust }{ controls };
+
+    is $sensitive->( 'date' ),   1, 'turning invent off wakes the date field';
+    is $sensitive->( 'time' ),   1, 'and the time field';
+    is $sensitive->( 'reroll' ), 0, 'and there is nothing left to reroll';
+
+    # And the switch above them takes all four with it.
+    $gui->{ state }->param( 'osd', 'timestamp', 0 );
+    $gui->{ adjust }->refresh;
+    $controls = $gui->{ adjust }{ controls };
+
+    is $sensitive->( 'date' ),   0, 'no timestamp, no date to set';
+    is $sensitive->( 'time' ),   0, 'nor time';
+    is $sensitive->( 'invent' ), 0, 'nor anything to invent';
+
+    # Nothing was thrown away on the way: the value is still there to come
+    # back to, which is the whole argument for greying rather than clearing.
+    is $gui->{ state }->param( 'osd', 'date' ), 'JUN 15 1995',
+        'and the greyed-out value is still what it was';
+
+    # Moving a control re-evaluates the rest, rather than waiting for the
+    # popover to be rebuilt: the switch and the fields under it are in the
+    # same popover and the answer has to arrive with the click.
+    $gui->{ adjust }->_set_param( 'timestamp', 1 );
+    is $sensitive->( 'invent' ), 1,
+        'moving a switch wakes what it gates, without a rebuild';
+
+    $gui->{ state }->remove_effect( 'osd' );
+    $gui->_rebuild_effects;
+}
+
 done_testing;

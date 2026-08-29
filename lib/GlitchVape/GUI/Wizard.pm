@@ -71,6 +71,10 @@ several previews have been rendered -- leaves the pipeline exactly as it was.
 # grain are actually visible in it.
 use constant PREVIEW_SIZE => 320;
 
+# What the preview pane says when there is nothing to render from. Named
+# because it is set from two places, which have to agree.
+use constant NO_SOURCE_NOTE => 'Open an image to see this effect previewed.';
+
 # How long a control must be still before its preview is rendered. A slider
 # drag emits a value-changed per pixel of travel; without this, letting go of
 # one would leave a queue of renders nobody wants to see.
@@ -569,7 +573,12 @@ sub _settings_page
     $grid->set_column_spacing( 8 );
 
     $scroll->add( $grid );
-    $split->pack_start( $scroll,              1, 1, 0 );
+
+    my $column = Gtk3::Box->new( 'vertical', 6 );
+    $column->pack_start( $scroll,              1, 1, 0 );
+    $column->pack_start( $self->_reset_button, 0, 0, 0 );
+
+    $split->pack_start( $column,              1, 1, 0 );
     $split->pack_start( $self->_preview_pane, 0, 0, 0 );
 
     $box->pack_start( $split, 1, 1, 0 );
@@ -580,6 +589,111 @@ sub _settings_page
     $self->{ settings_page }    = $box;
 
     return $box;
+}
+
+# Under the controls rather than beside the heading, because it acts on the
+# list above it and reads as belonging to it. Not in the assistant's button
+# row: that row is Cancel, Back and Apply -- decisions about the whole
+# assistant -- and Reset is a decision about one page of it.
+#
+# At the foot of the column rather than immediately under the last control,
+# which would put it in a different place for every effect: the settings are
+# a scrolling list, and a button that follows the end of one is a button that
+# moves as the list is browsed.
+sub _reset_button
+{
+    my ( $self ) = @_;
+
+    my $button = Gtk3::Button->new_with_mnemonic( '_Reset to defaults' );
+    $button->set_halign( 'end' );
+    $button->set_tooltip_text(
+        'Put every setting back to the value the effect declares' );
+
+    $button->signal_connect( clicked => sub { $self->_reset_params; return } );
+
+    $self->{ reset_button } = $button;
+
+    return $button;
+}
+
+# Insensitive while there is nothing to undo, which is the same argument as
+# the greyed parameters beside it: a button that would do nothing should say
+# so rather than being pressed to find out.
+sub _sync_reset
+{
+    my ( $self ) = @_;
+
+    my $button = $self->{ reset_button } or return;
+
+    $button->set_sensitive( $self->_at_defaults ? 0 : 1 );
+
+    return;
+}
+
+# Against a freshly resolved set rather than against the raw declaration, so
+# both sides have been through the same coercion -- otherwise a slider that
+# handed back 0.35 would compare unequal to a declared '0.35'.
+sub _at_defaults
+{
+    my ( $self ) = @_;
+
+    my $name = $self->{ effect } or return 1;
+
+    my $defaults = eval { GlitchVape::Registry->resolve_params( $name, {} ) }
+        or return 1;
+
+    my $spec = GlitchVape::Registry->get( $name );
+
+    for my $key ( keys %$defaults )
+    {
+        my $type = $spec->{ params }{ $key }{ type } // 'str';
+
+        my $now = $self->{ params }{ $key };
+        my $was = $defaults->{ $key };
+
+        return 0 if defined $now xor defined $was;
+        next unless defined $now;
+
+        if ( $type eq 'list' )
+        {
+            return 0 if join( ',', @$now ) ne join( ',', @$was );
+        }
+        elsif ( $type eq 'num' || $type eq 'int' )
+        {
+            return 0 if $now != $was;
+        }
+        else
+        {
+            return 0 if $now ne $was;
+        }
+    }
+
+    return 1;
+}
+
+=head2 _reset_params
+
+Put every parameter back to what the effect declares.
+
+Done by rebuilding the page rather than by writing values into the controls
+that are already there: L<GlitchVape::GUI::Params> hands back a control and a
+way to hear about changes, never a way to set one, and a setter per widget
+kind is the switch on type that the whole design of that module exists to
+avoid. Clearing C<settings_for> is what gets past the guard that normally
+stops a rebuild.
+
+=cut
+
+sub _reset_params
+{
+    my ( $self ) = @_;
+
+    return unless $self->{ effect };
+
+    $self->{ settings_for } = undef;
+    $self->_fill_settings;
+
+    return;
 }
 
 sub _preview_pane
@@ -623,6 +737,10 @@ sub _fill_settings
 
     $self->{ params } = GlitchVape::Registry->resolve_params( $name, {} );
 
+    # Everything about the preview belongs to the effect that was on this
+    # page a moment ago, and none of it survives the change.
+    $self->_invalidate_preview;
+
     $self->{ settings_heading }->set_markup( '<b>'
             . _escape( $spec->{ title } ) . '</b>'
             . "  <span alpha='45%'><tt>"
@@ -632,6 +750,10 @@ sub _fill_settings
 
     my $grid = $self->{ settings_grid };
     $_->destroy for $grid->get_children;
+
+    # Destroyed with the grid, so the map of them goes too: kept, it would be
+    # a list of widgets to grey out that no longer exist.
+    $self->{ controls } = {};
 
     my $params = $spec->{ params };
     my $row    = 0;
@@ -644,8 +766,32 @@ sub _fill_settings
         $grid->attach( $none, 0, 0, 2, 1 );
     }
 
-    for my $key ( sort keys %$params )
+    my ( $ordinary, $animation ) = GlitchVape::GUI::Params::split( $params );
+
+    for my $key ( @$ordinary, @$animation )
     {
+        # Grouped as in the settings popover, and for the same reason: these
+        # do nothing to the preview beside them, and a control that appears
+        # not to work is worse than one that says when it will.
+        if ( @$animation && $key eq $animation->[ 0 ] )
+        {
+            # Only if there is something above it to separate. An effect
+            # that is entirely about motion -- flicker is one -- would
+            # otherwise open with a rule across an empty space.
+            if ( @$ordinary )
+            {
+                $grid->attach( Gtk3::Separator->new( 'horizontal' ),
+                    0, $row, 2, 1 );
+                $row++;
+            }
+
+            my $heading = Gtk3::Label->new( 'Only in an animation' );
+            $heading->set_xalign( 0 );
+            $heading->get_style_context->add_class( 'dim-label' );
+            $grid->attach( $heading, 0, $row, 2, 1 );
+            $row++;
+        }
+
         my $built = GlitchVape::GUI::Params->build(
             effect    => $name,
             name      => $key,
@@ -674,10 +820,15 @@ sub _fill_settings
             $built->{ control }->set_halign( 'start' );
         }
 
+        $self->{ controls }{ $key } = $built;
+
         $grid->attach( $built->{ label },   0, $row, 1, 1 );
         $grid->attach( $built->{ control }, 1, $row, 1, 1 );
         $row++;
     }
+
+    $self->_sync_needs;
+    $self->_sync_reset;
 
     $grid->show_all;
 
@@ -704,7 +855,29 @@ sub _set_param
     return unless $resolved;
 
     $self->{ params } = $resolved;
+
+    # A switch that has just been moved may have decided whether the controls
+    # under it mean anything yet -- the same greying the settings popover
+    # does, from the same declaration.
+    $self->_sync_needs;
+    $self->_sync_reset;
+
     $self->_schedule_preview;
+    return;
+}
+
+sub _sync_needs
+{
+    my ( $self ) = @_;
+
+    my $spec = GlitchVape::Registry->get( $self->{ effect } ) or return;
+
+    GlitchVape::GUI::Params::apply_needs(
+        $spec->{ params },
+        $self->{ controls },
+        $self->{ params }
+    );
+
     return;
 }
 
@@ -746,6 +919,57 @@ sub _cancel_settle
     return;
 }
 
+=head2 THE PREVIEW BELONGS TO ONE EFFECT
+
+A render started for one effect can arrive while a different one is on the
+page. Going Back, choosing something else and coming forward again takes well
+under the second a preview costs, and the result then lands in the pane above
+the new effect's controls -- a picture of the effect you did not choose,
+labelled as the one you did, until the next render happens to replace it.
+
+Cancelling the in-flight render is not enough on its own. A preview that hits
+the cache never starts a child at all: it answers from an idle callback, which
+C<cancel> knows nothing about because there is no job to cancel.
+
+So every request carries a token, and a result whose token is no longer the
+current one is dropped. L</_invalidate_preview> bumps it, which is what makes
+"this pane is out of date" one statement rather than a list of things to
+remember to undo.
+
+=cut
+
+sub _invalidate_preview
+{
+    my ( $self ) = @_;
+
+    # Anything already asked for is of the effect that has just left, so its
+    # answer is dropped whenever it arrives.
+    $self->{ preview_token } = ( $self->{ preview_token } // 0 ) + 1;
+
+    $self->_cancel_settle;
+    $self->{ render }->cancel if $self->{ render }->busy;
+
+    # And the picture already in the pane is of that same effect. Left up, it
+    # is not merely stale but mislabelled, since the heading beside it has
+    # already changed.
+    $self->{ preview_image }->clear;
+    $self->{ preview_note }->set_text( $self->_pending_note );
+
+    return;
+}
+
+# What the pane says while there is no picture in it. Asked here as well as in
+# _preview so that the answer does not change 350ms after the page is shown:
+# a session with no image open would otherwise blank the one message that
+# explains why there is nothing to see.
+sub _pending_note
+{
+    my ( $self ) = @_;
+
+    return NO_SOURCE_NOTE unless $self->{ state }->source;
+    return 'Rendering…';
+}
+
 sub _preview
 {
     my ( $self ) = @_;
@@ -754,8 +978,7 @@ sub _preview
 
     unless ( $self->{ state }->source )
     {
-        $self->{ preview_note }
-            ->set_text( 'Open an image to see this effect previewed.' );
+        $self->{ preview_note }->set_text( NO_SOURCE_NOTE );
         return;
     }
 
@@ -769,17 +992,22 @@ sub _preview
 
     $self->{ preview_note }->set_text( 'Rendering…' );
 
+    my $token = $self->{ preview_token } =
+        ( $self->{ preview_token } // 0 ) + 1;
+
     $self->{ render }->preview(
         state   => $candidate,
         size    => PREVIEW_SIZE,
         on_done => sub {
             my ( $path ) = @_;
+            return unless $self->_current_preview( $token );
             $self->_show_preview( $path );
             return;
         },
         on_error => sub {
             my ( $message ) = @_;
             return if $self->{ gone };
+            return unless $self->_current_preview( $token );
             $message =~ s/\s+\z//;
             $self->{ preview_note }->set_text( $message );
             return;
@@ -787,6 +1015,13 @@ sub _preview
     );
 
     return;
+}
+
+sub _current_preview
+{
+    my ( $self, $token ) = @_;
+
+    return ( $self->{ preview_token } // 0 ) == $token ? 1 : 0;
 }
 
 sub _show_preview

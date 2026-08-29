@@ -86,17 +86,25 @@ an `enum` becomes a combo, a colour gets a picker beside its entry, and
 `bin/glitchvape` calls, and the result is byte-identical to the equivalent
 command line; there is a test that asserts exactly that.
 
-The two parameters with a second widget beside the entry — the colour picker
-and the calendar — keep the **entry** as the value, with the widget only a way
-of filling it in. Both have a meaning no picker can express: an empty colour
-means *no colour*, and an empty `osd.date` means *invent a plausible 1990s
-date, a different one per seed*, which is the effect's default and what most
-renders want. So the calendar writes `JAN 05 1995` into the field and offers
-an **Any 1990s date** button to empty it again, opening on whatever the field
-already says rather than on today — a present-day timestamp being exactly the
-anachronism the effect exists to avoid. A date it cannot parse is left alone:
-`osd.date` accepts any literal string, and somebody who typed `TUESDAY` meant
-it.
+The declaration also decides the *order* of the rows and what they are
+**called**, and which of them are greyed out. A parameter can say that it
+needs another to hold first — `osd.date` needs a timestamp that is not being
+invented — and the control is greyed rather than hidden while that is not
+true: a row that vanishes teaches nobody what turned it on, and one that sits
+there looking typeable while nothing it says reaches the render is worse. The
+value is left alone, so switching the gate back on gives back what was typed.
+
+The three parameters with a second widget beside the entry — the colour
+picker, the calendar and the clock — keep the **entry** as the value, with the
+widget only a way of filling it in. Each has meanings no picker can express:
+an empty colour means *no colour*, an empty `osd.date` means *draw no date*,
+and both the date and the time take any literal string at all. So the calendar
+writes `JAN 05 1995` into the field, opening on whatever the field already
+says rather than on today — a present-day timestamp being exactly the
+anachronism the effect exists to avoid — and the clock, which Gtk3 does not
+have and which is two spin buttons and a meridiem here, writes `PM  3:47` the
+same way. A value they cannot parse is left alone: somebody who typed
+`TUESDAY` meant it.
 
 ### The menu
 
@@ -291,7 +299,14 @@ pipeline plus the candidate, rendered at 320px through the same path and the
 same cache as every other preview, so what it shows is what Apply produces.
 Renders are coalesced rather than issued per slider step: a drag costs one
 render, when it stops, and dragging back to a value already seen redraws from
-disk.
+disk. It also belongs to one effect: Back, a different choice and forward
+again is far quicker than a render, so every request carries a token and a
+result that arrives after the page has moved on is dropped rather than shown
+under the wrong heading.
+
+**Reset to defaults**, at the foot of the settings, puts every parameter back
+to what the effect declares — and greys itself out while there is nothing to
+put back, the same argument as the greyed parameters above it.
 
 Nothing reaches the pipeline until Apply. The wizard previews against a
 detached copy of the state, so cancelling — at any point, however many
@@ -329,6 +344,26 @@ the second time.
 Deliberately not the preset's render, even when one was named on the command
 line: that can be eight seconds, and the point of this is to be immediate.
 Apply is what renders the preset.
+
+### Another photograph is another window
+
+Open used to replace what was in the window, which threw away the pipeline,
+the soundtrack and the whole undo history of the previous photograph — in one
+click, with no way back, since the history went with it. Nothing else in the
+program can destroy that much at once.
+
+So Open starts a second copy of the program on the new file and leaves this
+one alone; the dialog says **Open image in a new window** when that is what
+it is about to do. The exception is the first Open in a window, where there is
+nothing to lose and an empty window would otherwise be left behind.
+
+That is a rule about whether anything is open, not about whether anything has
+been *done* to it. Whether a pipeline is worth keeping is not a question the
+program can answer for you, and a window that sometimes replaces what is in it
+is worse than one that never does — the only way to find out which you have is
+to lose the work. If the second instance cannot be started, it says so and
+nothing is opened: falling back to opening it here would be the exact thing
+this avoids.
 
 ### Why Apply is a button
 

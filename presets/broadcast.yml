@@ -62,6 +62,14 @@ effects:
     shadow_bias: 0.4
     mono: 1
 
+  # The one preset where this is the subject rather than the furniture: a weak
+  # aerial is a signal the receiver keeps hunting for, and the picture breathes
+  # as it does. Slower and deeper than the terminal's, which is a monitor
+  # working properly.
+  flicker:
+    amount: 0.08
+    rate: 2
+
   scanlines:
     opacity: 0.32
     spacing: 2
@@ -76,7 +84,7 @@ effects:
     size: 1.35
 
   osd:
-    rec: 0
+    camera: ''
     timestamp: 1
-    mode: ''
+    rec_mode: ''
     size: 3.8

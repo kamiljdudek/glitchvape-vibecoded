@@ -63,18 +63,20 @@ DOC
             doc     => 'Random per-render variation added to amount',
         },
         pulse => {
-            default => 0.35,
-            type    => 'num',
-            min     => 0,
-            max     => 1,
-            doc     => 'Breathing of the separation width across a loop',
+            animation => 1,
+            default   => 0.35,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            doc       => 'Breathing of the separation width across a loop',
         },
         drift => {
-            default => 0,
-            type    => 'num',
-            min     => -8,
-            max     =>  8,
-            doc     => 'Turns the separation angle travels per loop',
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => -8,
+            max       =>  8,
+            doc       => 'Turns the separation angle travels per loop',
         },
         anchor => {
             default => 'green',
@@ -777,11 +779,12 @@ DOC
             doc     => 'Direction of separation in degrees (0 = horizontal)',
         },
         pulse => {
-            default => 0,
-            type    => 'num',
-            min     => 0,
-            max     => 1,
-            doc     => 'Smooth breathing of the separation across an '
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            doc       => 'Smooth breathing of the separation across an '
                 . 'animation loop; 0 leaves only the per-frame jitter',
         },
         edge => {

@@ -7,6 +7,8 @@ use utf8;
 use FindBin ();
 use lib "$FindBin::Bin/../lib";
 
+use File::Spec ();
+
 use Encode       ();
 use Getopt::Long qw(GetOptions :config no_ignore_case bundling pass_through);
 use Pod::Usage   qw(pod2usage);
@@ -75,10 +77,17 @@ if ( defined $input && !-f $input )
 
 require GlitchVape::GUI;
 
+# Where this program is, for opening a second photograph in a window of its
+# own. FindBin has already resolved it, symlinks and relative invocation
+# included, and the window has no business working that out from $0 -- which
+# is the launcher's fact and would be wrong the moment anything chdir'd.
+my $program = File::Spec->catfile( $FindBin::RealBin, $FindBin::RealScript );
+
 my $app = GlitchVape::GUI->new(
-    input  => $input,
-    preset => $opt{ preset },
-    seed   => $opt{ seed },
+    input   => $input,
+    preset  => $opt{ preset },
+    seed    => $opt{ seed },
+    program => $program,
 );
 
 exit $app->run;
@@ -141,6 +150,13 @@ is no pipeline to run, so it costs only the decode -- and a cache lookup the
 second time. Deliberately not the preset's render even when one was named:
 that can be eight seconds, and this is meant to be the thing that happens at
 once. Apply is what renders the preset.
+
+=head2 Another photograph is another window
+
+Opening a second file starts a second copy of this program rather than
+replacing what is on screen, because replacing it would throw away the
+pipeline, the soundtrack and the undo history of the first one. The first Open
+in a window is the exception: there is nothing to lose yet.
 
 =head2 Undo
 

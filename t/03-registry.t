@@ -140,4 +140,111 @@ use GlitchVape::Registry;
     is_deeply \@orders, \@sorted, 'names() returns effects in pipeline order';
 }
 
+# ---------------------------------------------------------------------------
+# A parameter may say where it sits, and everything that lists them agrees
+
+# Alphabetical is the right default and stays the default: it is stable and it
+# needs no decision from an effect that has none to make. What it cannot do is
+# group, and osd is the effect that proves it -- a timestamp switch has to sit
+# above the four settings that only mean anything once it is on, and no
+# spelling of their names puts them there.
+{
+    my $params = GlitchVape::Registry->get( 'osd' )->{ params };
+
+    my @order = GlitchVape::Registry::sorted_params( $params );
+
+    is_deeply \@order, [
+        qw(color font size margin timestamp invent date time camera rec_mode
+            reroll blink)
+        ],
+        'osd is presented in the order it declared, not alphabetically';
+
+    # An effect that declares nothing is sorted as it always was, so the
+    # feature costs the other forty effects nothing.
+    my $grade = GlitchVape::Registry->get( 'grade' )->{ params };
+    is_deeply [ GlitchVape::Registry::sorted_params( $grade ) ],
+        [ sort keys %$grade ],
+        'an effect with no declared order is still alphabetical';
+
+    # Mixed: the numbered ones first, in their numbers, then the rest.
+    my %mixed = (
+        zebra => { default => 1, order => 10 },
+        alpha => { default => 1 },
+        yak   => { default => 1, order => 20 },
+        beta  => { default => 1 },
+    );
+    is_deeply [ GlitchVape::Registry::sorted_params( \%mixed ) ],
+        [ qw(zebra yak alpha beta) ],
+        'numbered parameters lead, and the unnumbered follow alphabetically';
+}
+
+# ---------------------------------------------------------------------------
+# A parameter can say what has to hold before it means anything
+
+# The interface greys a control whose needs are not met, but the question is a
+# fact about the declaration rather than about Gtk, so the answer lives here
+# and this test runs without a display.
+{
+    my $params = GlitchVape::Registry->get( 'osd' )->{ params };
+
+    my $met = sub {
+        my ( $key, %values ) = @_;
+        return GlitchVape::Registry::needs_met( $params->{ $key }, \%values );
+    };
+
+    ok $met->( 'color', timestamp => 0 ),
+        'a parameter declaring no needs always means something';
+
+    ok $met->( 'date', timestamp => 1, invent => 0 ),
+        'the date matters with a timestamp that is not invented';
+    ok !$met->( 'date', timestamp => 1, invent => 1 ),
+        'and not when the timestamp is being invented';
+    ok !$met->( 'date', timestamp => 0, invent => 0 ),
+        'and not when there is no timestamp at all';
+
+    # Every clause has to hold, which is what makes reroll -- wanted on only
+    # when there is an invented timestamp to reroll -- expressible at all.
+    ok $met->( 'reroll', timestamp => 1, invent => 1 ),
+        'reroll needs both of the switches above it';
+    ok !$met->( 'reroll', timestamp => 1, invent => 0 ), 'and says so';
+
+    # A wanted 1 asks about truth, so one spelling serves a switch that is on
+    # and a string that is not empty.
+    ok $met->( 'blink', camera => 'REC' ),
+        'a blink matters while there is an indicator to flash';
+    ok !$met->( 'blink', camera => q{} ),
+        'and not when the camera mode is empty';
+
+    # A wanted string is compared as one, so a future needs => { mode => 'x' }
+    # reads as it looks rather than asking about truth.
+    my $spec = { needs => { mode => 'frame' } };
+    ok GlitchVape::Registry::needs_met( $spec, { mode => 'frame' } ),
+        'a wanted value other than 0 or 1 is an equality test';
+    ok !GlitchVape::Registry::needs_met( $spec, { mode => 'once' } ),
+        'which a different value fails';
+}
+
+# ---------------------------------------------------------------------------
+# A need on a parameter that does not exist is caught at load time
+
+# Left unchecked it produces a control greyed out for ever, which looks like a
+# bug in the widget rather than a typo in the declaration.
+{
+    my $ok = eval {
+        GlitchVape::Registry->register(
+            name   => 'test_bad_needs',
+            stage  => 'overlay',
+            params => {
+                one => { default => 1, type  => 'bool' },
+                two => { default => 1, needs => { none => 1 } },
+            },
+            apply => sub { return },
+        );
+        1;
+    };
+
+    ok !$ok, 'a needs naming a parameter the effect lacks is fatal';
+    like $@, qr/needs 'none'/, 'and says which one it could not find';
+}
+
 done_testing;

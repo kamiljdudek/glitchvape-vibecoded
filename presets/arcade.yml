@@ -36,6 +36,12 @@ effects:
     radius: 6
     threshold: 0.62
 
+  # A cabinet monitor is a tube like any other. Gentle, because the picture is
+  # already loud.
+  flicker:
+    amount: 0.035
+    rate: 4
+
   vignette:
     strength: 0.3
     size: 1.6

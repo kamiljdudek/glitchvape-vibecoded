@@ -139,6 +139,31 @@ and never changes. C<title> is what a person is shown. An effect that omits
 one gets a title derived from its name, so the two never drift apart by
 accident, only on purpose.
 
+=head2 WHAT A PARAMETER MAY DECLARE
+
+Beyond C<type>, C<default>, C<min>, C<max> and C<doc>, three keys exist purely
+so that an effect can say how it wants to be presented without anything
+outside it learning the effect's name:
+
+    order   where it sits among its siblings; see L</sorted_params>
+    label   what to call it, when the key is not the clearest English
+    needs   which other parameters have to hold for this one to mean anything
+
+C<needs> is a hash of C<< parameter => wanted >>, and all of it must hold:
+
+    needs => { timestamp => 1, invent => 0 }
+
+A wanted 0 or 1 asks about truth -- a switch that is on, a string that is not
+empty. Anything else is compared as a string, so C<< { mode => 'frame' } >>
+reads as it looks. A parameter whose C<needs> are not met is still passed to
+the effect and still validated; what changes is that the interface greys its
+control, because a value that cannot matter yet should say so rather than
+inviting somebody to set it and wonder why nothing moved.
+
+Naming a parameter the effect does not declare is fatal at load time. Left
+unchecked it would produce a control greyed out for ever, which looks exactly
+like a bug in the widget rather than a typo in the declaration.
+
 =cut
 
 sub register
@@ -183,6 +208,8 @@ sub register
             unless exists $d->{ default };
     }
 
+    _check_needs( $name, $params );
+
     $EFFECT{ $name } = {
         name     => $name,
         title    => $spec{ title } // _titlecase( $name ),
@@ -196,6 +223,25 @@ sub register
     };
 
     return $EFFECT{ $name };
+}
+
+sub _check_needs
+{
+    my ( $name, $params ) = @_;
+
+    for my $p ( sort keys %$params )
+    {
+        my $needs = $params->{ $p }{ needs } or next;
+
+        for my $key ( sort keys %$needs )
+        {
+            next if $params->{ $key };
+            die "GlitchVape::Registry: $name.$p needs '$key', "
+                . "which '$name' does not declare\n";
+        }
+    }
+
+    return;
 }
 
 # 'chroma_shift' -> 'Chroma Shift'. Only a fallback: every shipped effect
@@ -288,6 +334,85 @@ sub stage_info
 
     my $info = STAGE_INFO->{ $stage } or return undef;
     return { name => $stage, %$info };
+}
+
+=head2 sorted_params( $params )
+
+One effect's parameter names, in the order they should be presented: declared
+C<order> first, then alphabetically among the ones that share it or declare
+none.
+
+A plain function taking the parameter hash rather than a method taking an
+effect name, because both callers already hold the hash -- and because it has
+to be reachable from C<bin/glitchvape>, which cannot see the GUI.
+
+Alphabetical was the old answer everywhere, and it is the right default: it is
+stable, and it needs no decision from an effect that has none to make. What it
+cannot do is group. C<osd> has a colour, a font and a size that are about how
+the display looks, and a timestamp that is switched on before any of the four
+settings under it mean anything -- an order that comes from the effect, so it
+is declared by the effect.
+
+=cut
+
+# Where a parameter with nothing to say about its position sorts. Comfortably
+# past anything an effect is likely to number, so declaring an order on some
+# parameters and not others puts the numbered ones first rather than
+# interleaving them by accident.
+use constant DEFAULT_ORDER => 1_000;
+
+sub sorted_params
+{
+    my ( $params ) = @_;
+    $params ||= {};
+
+    my @names = sort {
+        ( $params->{ $a }{ order } // DEFAULT_ORDER )
+            <=> ( $params->{ $b }{ order } // DEFAULT_ORDER )
+            || $a cmp $b
+    } keys %$params;
+
+    return @names;
+}
+
+=head2 needs_met( $spec, $values )
+
+Whether one parameter's declared C<needs> hold, given the effect's current
+values. True for a parameter that declares none.
+
+Pure logic, and here rather than in the interface for the usual reason: the
+question "does this setting mean anything yet" is a fact about the
+declaration, not about Gtk.
+
+=cut
+
+sub needs_met
+{
+    my ( $spec, $values ) = @_;
+
+    my $needs = $spec->{ needs } or return 1;
+    $values ||= {};
+
+    for my $key ( sort keys %$needs )
+    {
+        my $want = $needs->{ $key };
+        my $have = $values->{ $key };
+
+        # A wanted 0 or 1 is a question about truth, which is what makes one
+        # spelling serve both a bool that is off and a string that is empty.
+        if ( $want eq '0' || $want eq '1' )
+        {
+            my $got = ( defined $have && length $have && $have ne '0' ) ? 1 : 0;
+            return 0 if $got != $want;
+        }
+        else
+        {
+            return 0 unless defined $have;
+            return 0 unless lc "$have" eq lc $want;
+        }
+    }
+
+    return 1;
 }
 
 =head2 resolve_params( $name, $given )

@@ -241,4 +241,261 @@ sub _sign
     return $value < 0 ? -1 : 1;
 }
 
+# ---------------------------------------------------------------------------
+# The text effect says how random it is, instead of being random by surprise
+
+# An empty string means "pick me a phrase", and what it left unsaid was how
+# often. Every frame, as it turns out, which is a good answer -- but it was the
+# answer because of which random stream the effect happened to ask for, not
+# because anybody chose it, and there was no way to ask for the other one.
+{
+    my $frames = 6;
+
+    my $render = sub {
+        my ( %params ) = @_;
+
+        my @seen;
+        for my $n ( 0 .. $frames - 1 )
+        {
+            my $img = Image::Magick->new;
+            $img->Read( $src );
+
+            my $ctx = GlitchVape::Context->new(
+                image  => $img,
+                source => $src,
+                seed   => 7,
+            );
+            $ctx->frames( $frames );
+            $ctx->frame( $n );
+
+            GlitchVape::Pipeline->new( effects => { text => { %params } } )
+                ->run( $ctx );
+
+            push @seen, $ctx->image->Get( 'signature' );
+        }
+
+        my %distinct = map { $_ => 1 } @seen;
+        return scalar keys %distinct;
+    };
+
+    is $render->( size => 20 ), $frames,
+        'by default a new phrase is drawn on every frame of a loop';
+
+    is $render->( size => 20, random => 'once' ), 1,
+        'and one held for the whole render is available for a caption that '
+        . 'is meant to sit still';
+
+    my $blank = do
+    {
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+        $img->Get( 'signature' );
+    };
+
+    my $img = Image::Magick->new;
+    $img->Read( $src );
+    my $ctx =
+        GlitchVape::Context->new( image => $img, source => $src, seed => 7 );
+    GlitchVape::Pipeline->new(
+        effects => { text => { size => 20, random => 'off' } } )->run( $ctx );
+
+    is $ctx->image->Get( 'signature' ), $blank,
+        'and off draws nothing rather than inventing a phrase';
+}
+
+# ---------------------------------------------------------------------------
+# The camcorder clock is a fact about the tape, not a texture
+
+# The same mistake the text effect had, in a second place. The fake date and
+# time came out of rng_for, which folds the frame index in, so a loop rolled
+# through a different random date on every frame -- a display whose whole
+# point is to look like it has been sitting there since 1994.
+#
+# rng_fixed derives under the same label as rng_for, so a still renders the
+# identical picture it always did; only the loop changes.
+{
+    my $frames = 6;
+
+    my $across = sub {
+        my ( %params ) = @_;
+
+        my @seen;
+        for my $n ( 0 .. $frames - 1 )
+        {
+            my $img = Image::Magick->new;
+            $img->Read( $src );
+
+            my $ctx = GlitchVape::Context->new(
+                image  => $img,
+                source => $src,
+                seed   => 3,
+            );
+            $ctx->frames( $frames );
+            $ctx->frame( $n );
+
+            GlitchVape::Pipeline->new(
+                effects => {
+                    osd => {
+                        timestamp => 1,
+                        camera    => q{},
+                        size      => 6,
+                        %params
+                    }
+                }
+            )->run( $ctx );
+
+            push @seen, $ctx->image->Get( 'signature' );
+        }
+
+        my %distinct = map { $_ => 1 } @seen;
+        return scalar keys %distinct;
+    };
+
+    is $across->(), 1,
+        'by default the timestamp is the same on every frame of a loop';
+
+    # Kept as a setting because it turns out to be worth having: a clock that
+    # cannot settle on a date is a picture of not remembering when something
+    # happened, which is a different thing to want and not a broken clock.
+    is $across->( reroll => 1 ), $frames,
+        'and a date that riffles through the decade is available';
+
+    my $still = sub {
+        my ( %params ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new(
+            image  => $img,
+            source => $src,
+            seed   => 3
+        );
+
+        GlitchVape::Pipeline->new(
+            effects => {
+                osd => {
+                    timestamp => 1,
+                    camera    => q{},
+                    size      => 6,
+                    %params
+                }
+            }
+        )->run( $ctx );
+
+        return $ctx->image->Get( 'signature' );
+    };
+
+    is $still->( reroll => 1 ), $still->( reroll => 0 ),
+        'with no loop to differ across, a still is the same either way';
+}
+
+# ---------------------------------------------------------------------------
+# The camera indicator is one indicator, and it blinks as a whole
+
+# rec and play were two switches with a label each, so "REC and PLAY at once"
+# was a reachable setting and a picture no deck ever showed. One mode replaced
+# them, which is what lets the glyph follow the value -- and lets a mode typed
+# in by hand blink, which the old dot-only blink could not do for it.
+{
+    my $frames = 6;
+
+    my $frame = sub {
+        my ( $n, %params ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new(
+            image  => $img,
+            source => $src,
+            seed   => 3
+        );
+        $ctx->frames( $frames );
+        $ctx->frame( $n );
+
+        GlitchVape::Pipeline->new(
+            effects => {
+                osd => { timestamp => 0, rec_mode => q{}, size => 6, %params }
+            }
+        )->run( $ctx );
+
+        return $ctx->image->Get( 'signature' );
+    };
+
+    my $blank = do
+    {
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+        $img->Get( 'signature' );
+    };
+
+    # Past 0.6 of the way round the loop the indicator is dark, and with
+    # nothing else switched on that is the untouched source.
+    isnt $frame->( 0, camera => 'REC' ), $blank,
+        'the indicator is lit at the start of the loop';
+    is $frame->( 5, camera => 'REC' ), $blank,
+        'and dark at the end of it, because it blinks';
+
+    is $frame->( 5, camera => 'REC', blink => 0 ),
+        $frame->( 0, camera => 'REC', blink => 0 ),
+        'blink off holds it lit the whole way round';
+
+    # The label goes with the glyph rather than the glyph alone, which is the
+    # only reading under which the setting means anything for a mode that has
+    # no glyph.
+    is $frame->( 5, camera => 'PAUSE' ), $blank,
+        'a mode with no glyph of its own blinks too';
+
+    # A camera mode the program does not recognise is text, not a guess at
+    # which button is down.
+    isnt $frame->( 0, camera => 'PAUSE' ), $frame->( 0, camera => 'PLAY' ),
+        'a typed-in mode draws differently from a known one';
+}
+
+# ---------------------------------------------------------------------------
+# A flicker is nothing at all on a still
+
+# Every parameter it has is an animation parameter, so on one frame there is
+# no time for a ripple to happen in and the picture must come out untouched --
+# whatever the depth is set to.
+{
+    my $img = Image::Magick->new;
+    $img->Read( $src );
+    my $before = $img->Get( 'signature' );
+
+    my $ctx =
+        GlitchVape::Context->new( image => $img, source => $src, seed => 1 );
+    GlitchVape::Pipeline->new(
+        effects => { flicker => { amount => 0.5, rate => 3 } } )->run( $ctx );
+
+    is $ctx->image->Get( 'signature' ), $before,
+        'a still is untouched even at half a stop of ripple';
+
+    # And across a loop it closes, because the rate is snapped to whole cycles.
+    my $at = sub {
+        my ( $n ) = @_;
+
+        my $one = Image::Magick->new;
+        $one->Read( $src );
+
+        my $each = GlitchVape::Context->new(
+            image  => $one,
+            source => $src,
+            seed   => 1
+        );
+        $each->frames( 12 );
+        $each->frame( $n );
+
+        GlitchVape::Pipeline->new(
+            effects => { flicker => { amount => 0.2, rate => 3 } } )
+            ->run( $each );
+
+        return $each->image->Get( 'signature' );
+    };
+
+    isnt $at->( 0 ), $at->( 1 ),  'and it does something once there are frames';
+    is $at->( 0 ),   $at->( 12 ), 'coming back to where it started';
+}
+
 done_testing;

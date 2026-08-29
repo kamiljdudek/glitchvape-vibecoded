@@ -9,8 +9,10 @@ use warnings;
 # putting mojibake on the buttons. The same reason bin/glitchvape does it.
 use utf8;
 
+use Encode         ();
 use File::Basename qw(basename);
 use File::Spec     ();
+use POSIX          ();
 
 use Glib ();
 use Gtk3 ();
@@ -66,6 +68,31 @@ A render is one to eight seconds depending on size, so there is no live
 preview to be had. Making the moment of rendering explicit also gives undo
 something to be a step of: one Apply is one entry in the history, rather than
 fifty near-identical entries from dragging a slider.
+
+=head2 ANOTHER PHOTOGRAPH IS ANOTHER WINDOW
+
+Open used to replace the state, which meant that opening a second photograph
+threw away the pipeline, the soundtrack and the whole undo history of the
+first one -- silently, and with no way back, since the history went with it.
+Nothing else in this program can destroy that much in one click.
+
+So Open starts a second copy of the program on the new file and leaves this
+one alone. The first Open in a window is the exception: there is nothing to
+lose yet, so the empty window fills itself rather than spawning a second one
+and leaving an empty one behind.
+
+That is a rule about whether anything is open, not about whether anything has
+been done to it. "Have you changed enough to be worth keeping" is a question
+this program cannot answer for somebody -- an untouched photograph and a
+fifteen-effect pipeline are the same click away from being lost -- and a
+window that sometimes replaces what is in it is worse than one that never
+does, because the only way to find out which is to lose the work.
+
+The new instance is a new process rather than a second window in this one:
+every window would otherwise share this process's cache, its render child and
+its preferences, and the reason this program forks for every render (see
+L<GlitchVape::GUI::Render>) is that its state does not survive being shared.
+A process per photograph needs none of that reasoning to hold.
 
 =head2 Preview fidelity
 
@@ -174,6 +201,7 @@ my @PREVIEW_SIZES = (
     input   => path        file to open at startup
     preset  => name        preset to select at startup
     seed    => scalar
+    program => path        this program, for opening a second window with
 
 =cut
 
@@ -243,6 +271,12 @@ sub new
         render => GlitchVape::GUI::Render->new( cache => $cache ),
         state  => undef,
         rows   => {},
+
+        # How to start another copy of this program -- see L</ANOTHER
+        # PHOTOGRAPH IS ANOTHER WINDOW>. Told rather than worked out from
+        # $0, which is the launcher's fact to know and not this module's to
+        # guess at.
+        program => $arg{ program },
 
         # The settings popover, built on first use because it hangs off a
         # button that does not exist yet. One of them: see
@@ -1658,11 +1692,26 @@ sub _touch
 # ---------------------------------------------------------------------------
 # Files
 
+# What our own exec reports when it fails, which is the one status this
+# program never exits with of its own accord -- so a child that comes back
+# with it failed to become the new instance, and anything else is that
+# instance living its own life and eventually being closed.
+use constant EXEC_FAILED => 127;
+
 sub _choose_input
 {
     my ( $self ) = @_;
 
-    my $dialog = Gtk3::FileChooserDialog->new( 'Open image', $self->{ window },
+    # Decided before the dialog is built rather than after it returns, so the
+    # title can say which of the two this is. Being told afterwards that a
+    # second window has appeared is a surprise; being told beforehand is an
+    # answer to "will this cost me what I have open".
+    my $elsewhere = $self->_has_source;
+
+    my $title = 'Open image';
+    $title = 'Open image in a new window' if $elsewhere;
+
+    my $dialog = Gtk3::FileChooserDialog->new( $title, $self->{ window },
         'open', 'Cancel', 'cancel', 'Open', 'accept' );
 
     my $images = Gtk3::FileFilter->new;
@@ -1681,12 +1730,114 @@ sub _choose_input
     {
         my $path = $dialog->get_filename;
         $dialog->destroy;
+
+        return $self->_open_elsewhere( $path ) if $elsewhere;
+
         $self->_open_file( $path );
         return;
     }
 
     $dialog->destroy;
     return;
+}
+
+# An argument on its way to exec. A path out of the file chooser is character
+# data -- 'Zdjęcie.png' is six characters and eight bytes -- and exec passes
+# the internal form, which is the right bytes with a "Wide character" warning
+# attached. Encoding it here says what is meant, and matches the decode
+# bin/glitchvape-gui does to @ARGV on the way back in.
+#
+# Only when it is characters: $program comes from FindBin, which reads the
+# filesystem and hands back bytes. Encoding those again would spell a
+# non-ASCII directory name twice over.
+sub _argv_bytes
+{
+    my ( $text ) = @_;
+
+    return $text unless utf8::is_utf8( $text );
+    return Encode::encode( 'UTF-8', $text );
+}
+
+sub _has_source
+{
+    my ( $self ) = @_;
+
+    return 0 unless $self->{ state };
+    return 0 unless defined $self->{ state }->source;
+
+    return 1;
+}
+
+=head2 _open_elsewhere( $path )
+
+Start a second instance of this program on C<$path>, leaving this one exactly
+as it was. See L</ANOTHER PHOTOGRAPH IS ANOTHER WINDOW>.
+
+The fork is safe where the render's is delicate: this child does nothing but
+C<exec>, so it never reaches an ImageMagick call with an inherited thread pool
+-- which is the hazard L<GlitchVape::GUI::Render> exists to avoid.
+
+Never falls back to opening the file in this window. The fallback would be
+the exact thing this exists to prevent, so a failure is reported and the work
+stays put.
+
+=cut
+
+sub _open_elsewhere
+{
+    my ( $self, $path ) = @_;
+
+    my $program = $self->{ program };
+
+    unless ( defined $program && length $program && -e $program )
+    {
+        $self->_report( 'Cannot find glitchvape-gui to open a second window '
+                . 'with, so nothing was opened.' );
+        return 0;
+    }
+
+    my $pid = fork;
+
+    unless ( defined $pid )
+    {
+        $self->_report( "Cannot start a second window: $!" );
+        return 0;
+    }
+
+    unless ( $pid )
+    {
+        # The same interpreter, so a checkout started with a particular perl
+        # gets that perl again; the script re-derives its own lib path.
+        #
+        # _exit, not exit or die: this process is a launcher that failed, and
+        # running the parent's END blocks or flushing its buffers from here
+        # would be a second copy of everything it has to say.
+        exec { $^X } $^X, map { _argv_bytes( $_ ) } $program, $path
+            or POSIX::_exit( EXEC_FAILED );
+    }
+
+    # Reaped so it does not stand as a zombie for as long as this window
+    # lives. The status is worth reading only for our own sentinel: any other
+    # is the new window being closed, minutes or hours from now, which is not
+    # news.
+    Glib::Child->watch_add(
+        $pid,
+        sub {
+            my ( undef, $status ) = @_;
+
+            if ( ( $status >> 8 ) == EXEC_FAILED )
+            {
+                $self->_report(
+                    'Could not start a second window; nothing was opened.' );
+            }
+
+            return 0;
+        }
+    );
+
+    $self->_status( sprintf 'Opened %s in a new window', basename( $path ) );
+
+    return 1;
 }
 
 sub _open_file
@@ -2615,6 +2766,18 @@ sub _apply
         $self->_busy( 0 );
         $self->_status( 'Render cancelled.' );
         return;
+    }
+
+    # Before the commit, so the new seed is part of the history entry this
+    # Apply makes: undo then steps back to the render that had the old one,
+    # rather than to a configuration that no longer describes any picture.
+    #
+    # Here and not in _render, because _render is also how undo and redo put a
+    # stored configuration back on screen -- reseeding there would make
+    # stepping through the history change the pictures it was stepping to.
+    if ( $self->{ prefs }{ randomize_each_render } )
+    {
+        $self->{ state }->seed( int rand 2**31 );
     }
 
     $self->{ state }->commit;

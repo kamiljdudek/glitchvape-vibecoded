@@ -46,6 +46,18 @@ my $src = "$dir/src.png";
 
 ok -s $src, 'built a test source image';
 
+# The same split GlitchVape::GUI::Params::split makes, done here rather than
+# imported: that module needs Gtk3, and this file has to run on a build machine
+# with no display.
+sub ordinary_params
+{
+    my ( $params ) = @_;
+
+    my @ordinary = grep { !$params->{ $_ }{ animation } } sort keys %$params;
+
+    return ( \@ordinary );
+}
+
 sub dims_of
 {
     my ( $path ) = @_;
@@ -118,6 +130,22 @@ sub differs
         }
 
         ok -s $out, "effect '$name' produced output";
+
+        # An effect every one of whose parameters is an animation parameter
+        # cannot touch a still, and must not: a ripple needs time to happen
+        # in, and one frame has none. Worked out from the registry rather
+        # than from a list of names here, so the next one like it is handled
+        # by declaring it rather than by remembering this file.
+        my $params = GlitchVape::Registry->get( $name )->{ params };
+        my ( $ordinary ) = ordinary_params( $params );
+
+        if ( keys %$params && !@$ordinary )
+        {
+            cmp_ok differs( $src, $out ), '<', 0.0005,
+                "effect '$name' is animation-only and leaves a still alone";
+            next;
+        }
+
         cmp_ok differs( $src, $out ), '>', 0.0005,
             "effect '$name' actually changes the image";
     }

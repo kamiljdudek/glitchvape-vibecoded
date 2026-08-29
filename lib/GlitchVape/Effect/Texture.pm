@@ -589,12 +589,26 @@ DOC
             max     => 40,
             doc     => 'Unsharp mask radius; larger gives wider halos',
         },
+        pulse => {
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            animation => 1,
+            doc => 'Breathing of the blur across a loop, as a fraction of it',
+        },
     },
     apply => sub {
         my ( $ctx, $p ) = @_;
         my $img = $ctx->image;
 
-        $img->Blur( radius => 0, sigma => $p->{ blur } ) if $p->{ blur } > 0;
+        # A focus that drifts in and out. An excursion rather than a travel:
+        # a lens has nowhere to go, it wanders either side of where it is set,
+        # and that closes the loop at any value -- see GlitchVape::Context.
+        my $blur = $p->{ blur } * ( 1 + $ctx->excursion( $p->{ pulse } ) );
+        $blur = 0 if $blur < 0;
+
+        $img->Blur( radius => 0, sigma => $blur ) if $blur > 0;
 
         $img->UnsharpMask(
             radius    => $p->{ radius },

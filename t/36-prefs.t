@@ -32,6 +32,8 @@ my $P = 'GlitchVape::GUI::Prefs';
 
     ok $prefs->{ clear_cache_on_exit },
         'the cache is cleared on exit unless told otherwise';
+    is $prefs->{ randomize_each_render }, 0,
+        'and pressing Apply twice gives the same picture twice';
     is $prefs->{ watermark }, 'none',
         'and nothing signs the output until asked';
     is $prefs->{ metadata_keep }, 0,
@@ -59,8 +61,7 @@ my $P = 'GlitchVape::GUI::Prefs';
 
     my $fresh = $P->can( 'load' )->();
     is $fresh->{ watermark }, 'none',
-        'which is what restore defaults does -- the file goes, and the list '
-        . 'in the module is what is left';
+        'forgetting the file leaves the list in the module standing';
     is $fresh->{ fps }, 12, 'for every key at once';
 }
 

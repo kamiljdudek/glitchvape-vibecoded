@@ -25,6 +25,8 @@ signal damage, because a real CRT applies them to whatever it is fed.
 
 my $R = 'GlitchVape::Registry';
 
+my $PI = 3.14159265358979;
+
 # ---------------------------------------------------------------------------
 
 $R->register(
@@ -72,11 +74,12 @@ DOC
             doc     => 'Rows over which the line fades out',
         },
         drift => {
-            default => 0,
-            type    => 'num',
-            min     => -64,
-            max     =>  64,
-            doc     =>
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => -64,
+            max       =>  64,
+            doc       =>
                 'Rows the pattern travels per loop, snapped to whole spacings',
         },
     },
@@ -206,6 +209,15 @@ DOC
             type    => 'str',
             doc     => 'Optional colour for the glow, e.g. "#FF71CE"',
         },
+        pulse => {
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            animation => 1,
+            doc       => 'Breathing of the glow across a loop, as a fraction '
+                . 'of its strength',
+        },
     },
     apply => \&_bloom,
 );
@@ -227,9 +239,15 @@ sub _bloom
         $glow->Colorize( fill => $p->{ tint }, blend => '60/60/60' );
     }
 
-    if ( $p->{ strength } != 1 )
+    # Swelling and subsiding rather than travelling, so an excursion: it is
+    # the same shape of motion the lens softness above uses, and it closes its
+    # loop whatever it is set to.
+    my $strength = $p->{ strength } * ( 1 + $ctx->excursion( $p->{ pulse } ) );
+    $strength = 0 if $strength < 0;
+
+    if ( $strength != 1 )
     {
-        $glow->Evaluate( operator => 'Multiply', value => $p->{ strength } );
+        $glow->Evaluate( operator => 'Multiply', value => $strength );
     }
 
     $ctx->image->Composite(
@@ -448,6 +466,71 @@ sub _halftone
 # ---------------------------------------------------------------------------
 
 $R->register(
+    name    => 'flicker',
+    title   => 'Screen Flicker',
+    stage   => 'optics',
+    summary => 'The whole picture wavering, as a tube does',
+    doc     => <<'DOC',
+A ripple in the brightness of the whole frame. Mains ripple on the high
+tension, and the supply sagging as a bright frame draws more beam current --
+which is why an old monitor breathes rather than sits still, and why a picture
+of one taken at the wrong moment is darker than the room remembers it.
+
+This effect does nothing whatever to a still, and cannot: a ripple is a thing
+that happens over time, and a single frame is whatever brightness it was.
+Every parameter here is therefore an animation parameter, which is why the
+settings for it are all under one heading instead of being split.
+
+C<rate> is the only motion in this program faster than one cycle per loop.
+Everything else drifts or rocks once from end to end; a tube flickers several
+times a second, and at one cycle per loop it would read as a slow fade rather
+than as a fault.
+DOC
+    params => {
+        amount => {
+            default   => 0.05,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            animation => 1,
+            doc       => 'Depth of the ripple, as a fraction of brightness',
+        },
+        rate => {
+            default   => 3,
+            type      => 'int',
+            min       => 1,
+            max       => 60,
+            animation => 1,
+            doc       => 'Cycles per loop; whole numbers, so the loop closes',
+        },
+    },
+    apply => sub {
+        my ( $ctx, $p ) = @_;
+        return if $p->{ amount } <= 0;
+
+        # travel() snaps the rate to whole cycles, which is what lets the last
+        # frame of the loop meet the first. Only the fraction of a turn is
+        # kept, for the reason spelled out beside the wave in
+        # GlitchVape::Effect::Signal: 2*pi*7 is not seven times 2*pi to the
+        # last bit, and the error lands on the frame that closes the loop.
+        my $turns = $ctx->travel( $p->{ rate }, 1 );
+        $turns -= int $turns;
+
+        my $swing = $p->{ amount } * sin( 2 * $PI * $turns );
+        return if abs( $swing ) < 0.0005;
+
+        $ctx->image->Evaluate(
+            operator => 'Multiply',
+            value    => 1 + $swing,
+        );
+
+        return;
+    },
+);
+
+# ---------------------------------------------------------------------------
+
+$R->register(
     name    => 'glare',
     title   => 'Screen Glare',
     stage   => 'optics',
@@ -486,11 +569,12 @@ DOC
             doc     => 'Band width as a fraction of the image',
         },
         drift => {
-            default => 0,
-            type    => 'num',
-            min     => -2,
-            max     =>  2,
-            doc     => 'Frame-widths the band sweeps either way over a loop',
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => -2,
+            max       =>  2,
+            doc       => 'Frame-widths the band sweeps either way over a loop',
         },
     },
     apply => \&_glare,

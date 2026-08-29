@@ -43,10 +43,12 @@ worth showing.
 # of these is still shown in full; only the label is unavailable, and a wrong
 # label would be worse than none.
 my @SNIFF = (
-    [ qr/SIL\s+Open\s+Font\s+License,?\s+Version\s+1[.]1/i =>
-            'SIL Open Font License 1.1' ],
-    [ qr/SIL\s+Open\s+Font\s+License/i => 'SIL Open Font License' ],
-    [ qr/\bMIT\s+License\b/i           => 'MIT' ],
+    [
+        qr/SIL\s+Open\s+Font\s+License,?\s+Version\s+1[.]1/i =>
+            'SIL Open Font License 1.1'
+    ],
+    [ qr/SIL\s+Open\s+Font\s+License/i         => 'SIL Open Font License' ],
+    [ qr/\bMIT\s+License\b/i                   => 'MIT' ],
     [ qr/Apache\s+License,\s+Version\s+2[.]0/i => 'Apache License 2.0' ],
     [ qr/GNU\s+GENERAL\s+PUBLIC\s+LICENSE/i    => 'GNU GPL' ],
 );

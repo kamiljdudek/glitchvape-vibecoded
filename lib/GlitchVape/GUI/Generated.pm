@@ -317,10 +317,6 @@ sub _reload
             },
         );
 
-        # The declaration's own label reads better than the parameter name,
-        # which is what the effect pane has to make do with.
-        $built->{ label }->set_text( $field->{ label } // $name );
-
         $self->{ controls }{ $name } = $built;
 
         $self->{ grid }->attach( $built->{ label },   0, $row, 1, 1 );

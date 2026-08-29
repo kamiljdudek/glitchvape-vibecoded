@@ -62,7 +62,24 @@ a type or a range.
 Parameter *kinds* map to widgets in `GUI/Params.pm`: `num` with a range → a
 slider marked at its default, `bool` → a switch, `enum` → a combo, and a few
 string parameters get something better based on their name (a colour picker, a
-font-role combo, a calendar for `osd.date`).
+font-role combo, a calendar for `osd.date`, a clock for `osd.time`).
+
+A parameter may also say how it wants to be *presented*, and these are read by
+the window and by `--explain` alike — never by the render:
+
+| | |
+|---|---|
+| `order` | where it sits among its siblings; the default is alphabetical |
+| `label` | what to call the row, where the key is not the clearest English |
+| `needs` | which other parameters must hold before this one means anything |
+| `suggest` | a named source (`palette`) or an inline list the effect owns |
+
+`needs => { timestamp => 1, invent => 0 }` greys the control until both hold,
+without hiding it and without touching the value — `osd` is what these exist
+for, and `Registry::needs_met` is where the question is answered so that
+nothing about it depends on Gtk. Naming a parameter the effect does not
+declare is fatal at load time, because the alternative is a control greyed out
+for ever that looks like a broken widget.
 
 ### 2. Where an effect runs is a property of the effect
 
@@ -289,6 +306,15 @@ says what it does and this says what else was tried.
   the platform puts Save As and where a rare operation is not guessed at from
   a picture of a floppy disk.
 
+- **Open replaced the state.** Opening a second photograph threw away the
+  first one's pipeline, soundtrack and undo history in one click. It starts a
+  second instance of the program now — a process rather than a second window,
+  because every window in one process would share the cache, the render child
+  and the preferences, which is exactly what invariant 5 says does not survive
+  being shared. The first Open in a window still fills it, since there is
+  nothing to lose and an empty window would be left behind. There is
+  deliberately no fallback to opening in place when the spawn fails.
+
 - **Export once inferred everything from the filename.** Format, size, frame
   rate and palette are settings in a dialog now, because the two things people
   actually change are the size and the format and neither should require
@@ -388,6 +414,13 @@ half again as long as the one that follows.
   state — the pipeline prerolls, the position advances at real time, and
   `pulsesink` connects without error — so it is worth checking the log before
   suspecting the player.
+- **A preview served from the cache answers from an idle, not a child**, so
+  `Render::cancel` cannot stop it — there is no job to cancel, and the
+  `on_done` is already queued. Anything that has to stop caring about a
+  render in flight needs its own token or flag: `GUI/Wizard.pm` keeps a
+  counter so a preview of the effect you have just navigated away from is
+  dropped instead of appearing under the new one's heading, and `_finish`
+  keeps a `gone` flag for the same reason.
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first
   frame rather than after twenty-four renders.

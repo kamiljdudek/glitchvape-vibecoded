@@ -4,6 +4,13 @@ title: Overexposed, hazy, half-remembered
 # Almost no damage and a great deal of glow. The look depends on the bloom
 # threshold being low enough that midtones bloom too, which is what makes it
 # feel lit from inside rather than merely bright.
+#
+# As a loop it breathes rather than flickers. Nothing here is damage, so there
+# is nothing for per-frame noise to do -- only the grain re-rolls, and it is at
+# 0.03. What moves instead are the things a hazy memory would move: the glow
+# swelling, the focus wandering, the sheen crossing the glass, and the text
+# rising. All of them are excursions, so each comes back to where it started
+# and the loop closes.
 
 output:
   max_dim: 1600
@@ -38,11 +45,13 @@ effects:
     radius: 55
     strength: 1.0
     tint: '#FFD9F0'
+    pulse: 0.12
 
   softness:
     blur: 2.4
     sharpen: 0.3
     radius: 4
+    pulse: 0.3
 
   grain:
     amount: 0.03
@@ -54,6 +63,7 @@ effects:
     strength: 0.22
     angle: -25
     width: 0.5
+    drift: 0.3
 
   vignette:
     strength: 0.25
@@ -64,6 +74,15 @@ effects:
     font: cjk
     size: 7
     color: '#FFFFFF'
-    opacity: 0.09
+
+    # 0.09 was inside the haze rather than under it: against a picture this
+    # bright and this washed out, white at a tenth is not there at all.
+    opacity: 0.16
+
     rotate: -25
     spacing: 3.0
+
+    # One tile upward over the loop. Slow enough to read as the picture
+    # remembering rather than as a scrolling caption.
+    direction: north
+    drift: 1
