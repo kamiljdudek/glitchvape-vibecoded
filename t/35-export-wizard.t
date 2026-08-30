@@ -141,8 +141,11 @@ sub route
     my $got;
     my $wiz = wizard( animated => 0, on_done => sub { $got = [ @_ ] } );
 
+    # Apply and then close, which is the order Gtk emits them in and the
+    # reason they are two steps -- see t/39-assistant.t.
     $wiz->_prepare( $wiz->{ where_page } );
     $wiz->_finish;
+    $wiz->_close;
 
     ok $got, 'on_done fires when the assistant is applied';
 
@@ -199,6 +202,7 @@ SKIP:
         $wiz->{ express } = 1;
         $wiz->_prepare( $wiz->{ where_page } );
         $wiz->_finish;
+        $wiz->_close;
 
         is $got->[ 0 ]{ video_size }, 512,
             'express exports at the profile size, not the one it opened with';

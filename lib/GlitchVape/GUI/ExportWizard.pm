@@ -9,10 +9,11 @@ use File::Spec     ();
 
 use Gtk3 ();
 
-use GlitchVape::GUI::Export   ();
-use GlitchVape::GUI::Profiles ();
-use GlitchVape::IO            ();
-use GlitchVape::Tools         ();
+use GlitchVape::GUI::Assistant ();
+use GlitchVape::GUI::Export    ();
+use GlitchVape::GUI::Profiles  ();
+use GlitchVape::IO             ();
+use GlitchVape::Tools          ();
 
 our $VERSION = '0.01';
 
@@ -113,10 +114,15 @@ sub run
     $self->_add_motion;
     $self->_add_where;
 
-    $assistant->set_forward_page_func( sub { return $self->_next( $_[ 0 ] ) } );
+    $assistant->signal_connect( cancel => sub { $self->_close; return } );
+    $assistant->signal_connect( close  => sub { $self->_close; return } );
 
-    $assistant->signal_connect( cancel => sub { $assistant->destroy; return } );
-    $assistant->signal_connect( close  => sub { $assistant->destroy; return } );
+    # Apply records the answer and nothing else. Destroying the assistant from
+    # here took the window down in the middle of Gtk's own click handler,
+    # which goes on to work out whether there is a page after this one -- so
+    # the export was written, the assistant was freed, and the program then
+    # segfaulted reading it. Gtk emits close straight afterwards, and that is
+    # where a window is allowed to go.
     $assistant->signal_connect(
         apply => sub {
             $self->_finish;
@@ -131,99 +137,18 @@ sub run
         prepare => sub {
             my ( undef, $page ) = @_;
             $self->_prepare( $page );
-            $self->_hide_skip;
             return;
         }
     );
 
-    # After show_all, because Gtk only works out which navigation buttons
-    # belong on a page once the assistant has been realised -- probing before
-    # that finds every button visible and tells us nothing. Nothing is
-    # repainted in between: the probe walks two pages and comes back without
-    # the main loop running, so there is no frame in which either is on
-    # screen.
     $assistant->show_all;
 
-    $self->{ skip } = $self->_find_skip_button;
-    $self->_hide_skip;
+    # After show_all, and it installs the forward function itself: see
+    # GlitchVape::GUI::Assistant for both reasons.
+    GlitchVape::GUI::Assistant::navigate( $assistant,
+        sub { return $self->_next( $_[ 0 ] ) } );
 
     return $self;
-}
-
-# GtkAssistant's jump-to-the-end button, which it labels "Finish".
-#
-# It is shown by compute_last_button_state whenever the walk forward from here
-# crosses two or more complete content pages and lands on a confirm page. That
-# is a rule about how many pages happen to be left, so the button appeared on
-# the first three pages of this assistant, vanished on the fourth, and was
-# replaced by Apply on the fifth: three different terminal buttons in one walk
-# and no way to tell from the screen which you would get. It goes.
-#
-# There is no accessor for it, and its label is translated, so matching the
-# word would work on an English desktop and nowhere else. It is picked out by
-# what it does instead: it is the only button whose visibility answers to the
-# completeness of the page *after* the current one, so marking that page
-# incomplete for a moment and seeing which button disappears names it.
-#
-# Finding nothing is not an error. A Gtk that no longer has the button, or has
-# it under different rules, simply leaves this undef and nothing is hidden.
-sub _find_skip_button
-{
-    my ( $self ) = @_;
-
-    my $assistant = $self->{ assistant };
-
-    my $header  = $assistant->get_titlebar or return undef;
-    my @buttons = grep { $_->isa( 'Gtk3::Button' ) } _descendants( $header );
-    return undef unless @buttons;
-
-    # Two content pages, differing only in how many pages are left after them.
-    # The first has the whole middle of the assistant ahead of it and so gets
-    # the skip button; the last one before the destination has only the
-    # destination ahead and so does not. Every other button is on both.
-    my %far  = _visible( $assistant, PAGE_SIZE,   \@buttons );
-    my %near = _visible( $assistant, PAGE_MOTION, \@buttons );
-
-    $assistant->set_current_page( PAGE_START );
-
-    my @only_far = grep { $far{ $_ } && !$near{ $_ } } @buttons;
-
-    # Exactly one, or nothing is hidden. An earlier version of this probe
-    # perturbed the page history instead and picked out Back, which it then
-    # hid -- so the answer being ambiguous is treated as not having found it
-    # rather than as a reason to guess.
-    return undef unless @only_far == 1;
-
-    return $only_far[ 0 ];
-}
-
-sub _visible
-{
-    my ( $assistant, $page, $buttons ) = @_;
-
-    $assistant->set_current_page( $page );
-
-    return map { $_ => 1 } grep { $_->get_visible } @$buttons;
-}
-
-# Gtk shows it again on every page change, so this runs from prepare too.
-sub _hide_skip
-{
-    my ( $self ) = @_;
-
-    $self->{ skip }->hide if $self->{ skip };
-
-    return;
-}
-
-sub _descendants
-{
-    my ( $widget ) = @_;
-
-    return ()      unless $widget;
-    return $widget unless $widget->can( 'get_children' );
-
-    return $widget, map { _descendants( $_ ) } $widget->get_children;
 }
 
 # ---------------------------------------------------------------------------
@@ -632,16 +557,8 @@ sub _add_where
     $self->{ where_page } = $box;
     $self->_append( $box, 'File location', 'confirm' );
 
-    # Left incomplete until it has been prepared, which is what keeps the
-    # navigation to one meaning per page. GtkAssistant offers a "Finish"
-    # button -- its jump-to-the-last-page shortcut -- whenever every page
-    # ahead of the current one is already marked complete. With all six
-    # complete from the start it appeared on the resolution, format and
-    # options pages, disappeared on the frame rate page because only one page
-    # was left to skip, and came back as Apply at the end: three different
-    # terminal buttons in one walk, on a rule nobody could see. This page has
-    # nothing in it until _prepare fills it in, so saying so is both true and
-    # the thing that settles the buttons down to Next and then Apply.
+    # Nothing is in it until _prepare fills it in, and Apply on an empty
+    # destination would write a file called nothing.
     $self->{ assistant }->set_page_complete( $box, 0 );
 
     return;
@@ -703,6 +620,9 @@ sub _prepare
     return;
 }
 
+# What was chosen, read off the page while it is still standing. Splitting the
+# answer from the acting on it is what lets the window come down at the moment
+# Gtk expects it to and the export start once it has.
 sub _finish
 {
     my ( $self ) = @_;
@@ -710,11 +630,25 @@ sub _finish
     my $dir = $self->{ folder }->get_filename
         // _default_dir( $self->{ animated } );
 
-    my $path = File::Spec->catfile( $dir, $self->{ name }->get_text );
+    $self->{ chosen } = [
+        $self->{ settings },
+        File::Spec->catfile( $dir, $self->{ name }->get_text ),
+    ];
+
+    return;
+}
+
+# Cancel and close both mean the window goes; only one of them has been
+# through apply, and that is what tells the caller anything.
+sub _close
+{
+    my ( $self ) = @_;
 
     $self->{ assistant }->destroy;
 
-    $self->{ on_done }->( $self->{ settings }, $path ) if $self->{ on_done };
+    my $chosen = delete $self->{ chosen } or return;
+
+    $self->{ on_done }->( @$chosen ) if $self->{ on_done };
 
     return;
 }

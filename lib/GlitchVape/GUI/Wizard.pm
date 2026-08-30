@@ -10,8 +10,9 @@ use utf8;
 use Glib ();
 use Gtk3 ();
 
-use GlitchVape::Registry    ();
-use GlitchVape::GUI::Params ();
+use GlitchVape::Registry       ();
+use GlitchVape::GUI::Assistant ();
+use GlitchVape::GUI::Params    ();
 
 our $VERSION = '0.01';
 
@@ -21,7 +22,7 @@ GlitchVape::GUI::Wizard - the three-page Add Effect assistant
 
 =head1 DESCRIPTION
 
-Thirty-nine effects is too many for one list. The assistant asks three
+Forty-three effects are too many for one list. The assistant asks three
 questions in the order a person actually has them:
 
 =over 4
@@ -127,6 +128,11 @@ sub run
 
     $self->_build;
     $self->{ assistant }->show_all;
+
+    # After show_all, because the navigation buttons have no settled state
+    # until the window is realised. There is no forward function here: the
+    # three pages are always walked in order.
+    GlitchVape::GUI::Assistant::navigate( $self->{ assistant } );
 
     return $self;
 }

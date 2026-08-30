@@ -188,7 +188,8 @@ it does not apply teaches nothing that omitting it does not.
 The navigation is Next throughout and Apply at the end. Gtk offers a
 jump-to-the-end button labelled *Finish* whenever two or more complete pages
 are ahead of you, which meant three different terminal buttons appeared and
-vanished during one walk on a rule nobody could see. It is suppressed.
+vanished during one walk on a rule nobody could see. It is suppressed, here
+and in the Add Effect assistant, by `GlitchVape::GUI::Assistant`.
 
 **Export profiles** in the menu manages the saved ones — a list per kind with
 an action bar, and four built-ins that ship so the first run has something to
@@ -292,7 +293,7 @@ what is exported.
 
 ### Adding an effect is a wizard
 
-Thirty-nine effects is too many for one list, so **+ → Single effect…** opens
+Forty-three effects are too many for one list, so **+ → Single effect…** opens
 a three-page assistant that asks the questions in the order a person has them.
 
 **What kind of thing am I after?** The nine stages under their presentable

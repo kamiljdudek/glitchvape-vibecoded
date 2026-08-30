@@ -7,7 +7,7 @@ without noticing, and how each of them is checked.
 
 ## What it is
 
-A Perl image pipeline that puts a photograph through a chain of forty-one
+A Perl image pipeline that puts a photograph through a chain of forty-three
 VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Pure Perl
 apart from the effects, which shell out to ImageMagick, and the animated
 writers, which shell out to ffmpeg.
@@ -21,7 +21,7 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 |---|---|
 | `bin/` | `glitchvape` (CLI), `glitchvape-batch`, `glitchvape-gui` |
 | `lib/GlitchVape.pm` | the façade — `render()`, which every front end calls |
-| `lib/GlitchVape/Effect/*.pm` | the forty-one effects, grouped by theme not by stage |
+| `lib/GlitchVape/Effect/*.pm` | the forty-three effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
@@ -167,6 +167,33 @@ Promoting a font from restricted to bundled is moving its directory. VCR OSD
 Mono is the worked example: its terms were unverified until its author was
 asked directly and answered, at which point it moved up and the packaging
 followed automatically.
+
+## Bitmaps that live in the file
+
+Two modules keep pictures in their own source rather than in `assets/`, and
+the same argument covers both.
+
+`GlitchVape::VGA` holds an 8x16 text-mode font as hex, because a TrueType
+renderer antialiases and hints and a text-mode display could do neither.
+`GlitchVape::Chicago` holds the nine glyphs a Windows 95 window needs that are
+pictures rather than rules -- the document icon, three caption glyphs, four
+arrows and the sizing grip -- as one character per pixel, keyed by a five-ink
+palette.
+
+Everything else about that window is a *rule*: two bevels, four flat fills and
+a 50% dither, applied at metrics that do not change with the window's size.
+That is what lets the size be a setting at all, and it is checked the only way
+it can be: `t/40-chicago.t` renders the window at the size of the screenshot
+every measurement came off and compares it, region by region, against the
+pixels that screenshot had. The screenshot itself is gone; the test is now
+the record of it.
+
+Both scale by **pixel replication and never interpolation** — `Sample`, not
+`Resize`. An interpolated one-pixel highlight is a grey smear, and a bevel
+whose highlight is grey does not read as raised. Anything else drawn on the
+same picture at the same time has to be replicated too, which is why
+`chicago` sets its caption in the `pixel` font role at that role's design
+size: an outline face asked for eleven pixels drops half the stems in 'File'.
 
 ## Packaging
 
@@ -454,6 +481,20 @@ half again as long as the one that follows.
   counter so a preview of the effect you have just navigated away from is
   dropped instead of appearing under the new one's heading, and `_finish`
   keeps a `gone` flag for the same reason.
+- **A `Gtk3::Assistant` must not be destroyed from its own `apply` handler.**
+  Gtk's click handler goes on to work out whether a page follows this one, so
+  the window is freed and then read: a `GTK_IS_ASSISTANT` assertion and a
+  segfault, on the successful path only, which makes it look like whatever
+  Apply started did it. Record the answer in `apply` and act on it in `close`,
+  which is where Gtk expects the window to go.
+- **GtkAssistant's "Finish" button is a jump-to-the-end shortcut**, shown
+  whenever two or more complete content pages lie ahead of a confirm page. It
+  therefore appears in the middle of a walk and disappears later on, and it
+  comes back on a page that was clean the first time it was seen, because
+  going forward is what made the page ahead complete.
+  `GlitchVape::GUI::Assistant` finds it -- by what it responds to, since its
+  label is translated -- and keeps it hidden, for both assistants.
+
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first
   frame rather than after twenty-four renders.

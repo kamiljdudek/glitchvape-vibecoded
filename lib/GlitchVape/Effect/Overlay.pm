@@ -6,6 +6,7 @@ use utf8;
 
 use Encode ();
 
+use GlitchVape::Chicago  ();
 use GlitchVape::Magick   ();
 use GlitchVape::Registry ();
 use GlitchVape::Fonts    ();
@@ -1194,6 +1195,269 @@ sub _watermark_slide
         _wrap( $my * $yperiod * $phase, $yperiod )
     );
 }
+
+# ---------------------------------------------------------------------------
+
+$R->register(
+    name    => 'chicago',
+    title   => 'Chicago Window',
+    stage   => 'overlay',
+    summary => 'A 1995 window frame, hollow, around the picture',
+    doc     => <<'DOC',
+Draws a Windows 95 window over the picture with the document area left
+transparent, so the photograph is what the window is showing.
+
+Every part of it is drawn rather than scaled from a screenshot, which is what
+lets the size be a setting: a window's furniture is a fixed number of pixels
+and does not grow with the window, so a wider one has the same four-pixel
+border and one longer scroll bar rather than a fatter everything.
+L<GlitchVape::Chicago> is where that anatomy lives.
+
+C<zoom> is how many image pixels one of the window's own pixels becomes, and
+it is a whole number because the alternative is interpolation -- a soft grey
+where there should be a one-pixel white highlight, which is precisely the
+thing that stops a bevel reading as raised. Left at 0 it is worked out from
+the picture, on the reading that the picture is a screen 480 pixels tall: a
+1080-pixel photograph gets 2, a 3000-pixel one gets 6.
+
+The caption and the menu are drawn at the window's own size and enlarged with
+it, so the lettering comes out as blocky as everything else -- a crisply set
+caption over four-pixel bevels would look like a caption pasted onto a
+photograph of a window. That is also why C<font> defaults to C<pixel> rather
+than to C<ui>: an outline face asked for eleven pixels drops half the stems in
+'File', while a pixel font at its design size puts one glyph pixel on one
+image pixel, which is what everything else here does too.
+DOC
+    params => {
+        width => {
+            default => 0.72,
+            type    => 'num',
+            min     => 0.1,
+            max     => 1,
+            order   => 1,
+            doc     => "The window's width as a fraction of the picture's",
+        },
+        height => {
+            default => 0.72,
+            type    => 'num',
+            min     => 0.1,
+            max     => 1,
+            order   => 2,
+            doc     => "Its height as a fraction of the picture's",
+        },
+        gravity => {
+            default => 'Center',
+            type    => 'enum',
+            order   => 3,
+            values  => [
+                qw(NorthWest North NorthEast West Center East
+                    SouthWest South SouthEast)
+            ],
+            doc => 'Which part of the picture it is anchored to',
+        },
+        x => {
+            default => 0,
+            type    => 'num',
+            min     => -1,
+            max     =>  1,
+            order   =>  4,
+            doc     => 'Horizontal inset from that anchor, as a fraction '
+                . 'of the width',
+        },
+        y => {
+            default => 0,
+            type    => 'num',
+            min     => -1,
+            max     =>  1,
+            order   =>  5,
+            doc     => 'Vertical inset, as a fraction of the height',
+        },
+        zoom => {
+            default => 0,
+            type    => 'int',
+            min     => 0,
+            max     => 12,
+            order   => 6,
+            doc     => 'Image pixels per window pixel; 0 works it out from '
+                . 'the picture',
+        },
+        title => {
+            default     => 'Untitled',
+            type        => 'str',
+            order       => 7,
+            placeholder => 'no caption text',
+            doc         => 'The caption. Empty leaves the bar and its '
+                . 'buttons with nothing written on them',
+        },
+        menu => {
+            default     => 'File  Edit  Search  Help',
+            type        => 'str',
+            order       => 8,
+            placeholder => 'no menu bar at all',
+            doc         => 'The menu bar. Empty removes the bar rather than '
+                . 'emptying it, because a blank strip of grey is not a menu',
+        },
+        font => {
+            default => 'pixel',
+            type    => 'str',
+            order   => 9,
+            doc     => 'Font role or path for both strings. The default is '
+                . 'the one role that is pixel-exact at the size a window '
+                . 'sets its caption in',
+        },
+        scrollbars => {
+            default => 1,
+            type    => 'bool',
+            order   => 10,
+            doc     => 'A scroll bar down the right and along the bottom',
+        },
+        grip => {
+            default => 1,
+            type    => 'bool',
+            order   => 11,
+            needs   => { scrollbars => 1 },
+            doc     => 'The sizing grip in the corner where they meet',
+        },
+        thumb => {
+            default => 0.55,
+            type    => 'num',
+            min     => 0.05,
+            max     => 1,
+            order   => 12,
+            needs   => { scrollbars => 1 },
+            doc     => 'How much of its bar each thumb covers, which is how '
+                . 'much of the document the window is saying it can see',
+        },
+        scroll => {
+            default => 0.15,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            order   => 13,
+            needs   => { scrollbars => 1 },
+            doc     => 'Where along its bar each thumb sits',
+        },
+        opacity => {
+            default => 1,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            order   => 14,
+            doc     => 'Overall opacity of the window',
+        },
+    },
+    apply => \&_chicago,
+);
+
+sub _chicago
+{
+    my ( $ctx, $p ) = @_;
+
+    my ( $iw, $ih ) = $ctx->dims;
+    return unless $iw && $ih;
+
+    my $zoom = int( $p->{ zoom } || 0 ) || _chicago_zoom( $ih );
+
+    # The window is asked for in the picture's pixels and built in its own, so
+    # the division happens here and the module never hears about zoom.
+    my $want_w = _round( $iw * $p->{ width } );
+    my $want_h = _round( $ih * $p->{ height } );
+
+    my $win = GlitchVape::Chicago::render(
+        width      => int( $want_w / $zoom ),
+        height     => int( $want_h / $zoom ),
+        caption    => $p->{ title },
+        menu       => $p->{ menu },
+        font       => GlitchVape::Fonts::resolve( $p->{ font } ),
+        scrollbars => $p->{ scrollbars },
+        grip       => $p->{ grip },
+        thumb      => $p->{ thumb },
+        scroll     => $p->{ scroll },
+    );
+
+    # What it gave back rather than what was asked for: render() clamps up to
+    # the smallest window its parts fit in, so a window asked to be narrower
+    # than its own caption buttons comes back wider.
+    my ( $cw, $ch ) = ( $win->Get( 'width' ), $win->Get( 'height' ) );
+
+    if ( $zoom > 1 )
+    {
+        # Sample, not Resize. Sample replicates pixels; Resize interpolates,
+        # and an interpolated one-pixel highlight is a grey smear that stops
+        # the bevel reading as raised at all.
+        GlitchVape::Magick::check(
+            $win->Sample(
+                geometry => sprintf '%dx%d!',
+                $cw * $zoom, $ch * $zoom
+            ),
+            'chicago: could not enlarge the window'
+        );
+    }
+
+    if ( $p->{ opacity } < 1 )
+    {
+        $win->Evaluate(
+            operator => 'Multiply',
+            value    => $p->{ opacity },
+            channel  => 'Alpha',
+        );
+    }
+
+    my ( $x, $y ) = _chicago_place( $p, $iw, $ih, $cw * $zoom, $ch * $zoom );
+
+    GlitchVape::Magick::check(
+        $ctx->image->Composite(
+            image   => $win->[ 0 ],
+            compose => 'Over',
+            x       => $x,
+            y       => $y,
+        ),
+        'chicago: could not place the window'
+    );
+
+    return;
+}
+
+# One window pixel per image pixel would leave a four-pixel border on a
+# twelve-megapixel photograph, which is a hairline nobody would read as a
+# window. The picture is treated as a screen 480 pixels tall -- the height of
+# the screenshot every measurement in GlitchVape::Chicago came off -- and the
+# zoom is however many times bigger than that it is.
+sub _chicago_zoom
+{
+    my ( $height ) = @_;
+
+    my $zoom = _round( $height / 480 );
+
+    return $zoom < 1 ? 1 : $zoom;
+}
+
+# Insets from the anchor rather than plain offsets, which is what the rest of
+# the overlay effects mean by x and y: at NorthEast a positive x moves the
+# window left, because it is moving away from the edge it is against.
+sub _chicago_place
+{
+    my ( $p, $iw, $ih, $ww, $wh ) = @_;
+
+    my $dx = _round( $iw * $p->{ x } );
+    my $dy = _round( $ih * $p->{ y } );
+
+    my $gravity = $p->{ gravity } // 'Center';
+
+    my $x =
+          $gravity =~ /West/ ? $dx
+        : $gravity =~ /East/ ? $iw - $ww - $dx
+        :                      int( ( $iw - $ww ) / 2 ) + $dx;
+
+    my $y =
+          $gravity =~ /North/ ? $dy
+        : $gravity =~ /South/ ? $ih - $wh - $dy
+        :                       int( ( $ih - $wh ) / 2 ) + $dy;
+
+    return ( $x, $y );
+}
+
+# ---------------------------------------------------------------------------
 
 sub _round { return int( $_[ 0 ] + ( $_[ 0 ] < 0 ? -0.5 : 0.5 ) ) }
 

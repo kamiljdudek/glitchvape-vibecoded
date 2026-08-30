@@ -98,7 +98,7 @@ Suggests:       ipa-gothic-fonts
 Suggests:       source-foundry-hack-fonts
 
 %description
-GlitchVape puts a photograph through a signal chain of thirty-nine effects:
+GlitchVape puts a photograph through a signal chain of forty-three effects:
 tape wobble and tracking error, chromatic aberration, pixel sorting and
 databending, film grain, scanlines and phosphor grilles, and the text and
 furniture that sit over the top.

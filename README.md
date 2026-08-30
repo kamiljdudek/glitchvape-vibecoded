@@ -437,7 +437,7 @@ whatever you changed on top.
 
 ## Effects
 
-41 effects, sorted automatically into a signal chain. Order is not a free
+43 effects, sorted automatically into a signal chain. Order is not a free
 choice — scanlines applied before a downsample get eaten by the resample — so
 each effect declares a stage and the pipeline sorts by it.
 
@@ -449,8 +449,8 @@ each effect declares a stage and the pipeline sorts by it.
 | **damage** | Data Damage | `pixelsort` `databend` `blockshift` `slice` `vgatext` `deepfry` |
 | **signal** | Signal & Tape | `wave` `tracking` `head_switch` `ghost` `vhold` `interlace` `dropout` `static` |
 | **grain** | Grain & Dither | `grain` `dither` |
-| **optics** | Screen & Optics | `scanlines` `grille` `bloom` `vignette` `curvature` `halftone` `cmyk` `glare` `softness` |
-| **overlay** | Overlays | `text` `osd` `grid` `watermark` |
+| **optics** | Screen & Optics | `scanlines` `grille` `bloom` `vignette` `curvature` `halftone` `cmyk` `glare` `softness` `flicker` |
+| **overlay** | Overlays | `text` `osd` `grid` `watermark` `chicago` |
 | **framing** | Framing | `letterbox` |
 
 The left column is the identifier — what `--explain` reports and what the
