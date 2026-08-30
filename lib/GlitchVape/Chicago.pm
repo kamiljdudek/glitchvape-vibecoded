@@ -70,14 +70,48 @@ enlarged, which is what it is meant to look like.
 
 Read off a 480x321 screenshot of Windows 95 Notepad, at the coordinates each
 one names. The whole interface came from there: every measurement in this file
-was taken off that image and the file itself is gone, because a set of numbers
-and nine bitmaps is a smaller thing to keep than a screenshot nobody may
-redistribute.
+was taken off that image, and nothing reads it at run time -- a set of numbers
+and nine bitmaps is a smaller thing to ship than a screenshot nobody may
+redistribute. F<t/40-chicago.t> holds what it looked like, region by region,
+which is what makes this a description of that window rather than of a window.
 
 The arrows, the caption glyphs and the sizing grip are geometry -- triangles,
 a bar, a box, a cross, three diagonal ribs. The document icon is the one piece
 that is somebody's artwork rather than a shape, and it is one table entry to
 replace if that matters.
+
+=head1 WHAT SIZE THE LETTERING IS
+
+The interface sets everything in one font at one size, and that size is twelve
+pixels. That is a floor rather than the answer, because whether a font can be
+drawn at twelve pixels is a fact about the font.
+
+With antialiasing off -- which this wants, for the reason above -- a rasteriser
+inks a pixel when the pixel's I<centre> falls inside the outline. A vertical
+stem narrower than one pixel therefore lands between two centres for some of
+the positions it can be at, and disappears. Not always: it depends where the
+glyph's own advance happens to put it, so the same letter survives in one word
+and vanishes in the next. In W95FA at twelve pixels 'File' loses the dot off
+its i, and 'Help' comes out intact, which reads as a corrupt font rather than
+as a size that is one pixel too small.
+
+The rule that fixes it is exact. A stem of width I<w> pixels covers a pixel
+centre at every offset if and only if I<w> is at least one, so the smallest
+size a font can be drawn at is the one where its stem reaches a whole pixel:
+
+    smallest size = ceil( 1 / stem, measured as a fraction of the em )
+
+C<type_size> measures the stem by drawing an C<l> at a five-hundred-pixel em
+and reading its width, which is a measurement rather than a table, so a font
+nobody here has seen gets the same answer. The two that ship give:
+
+    pixel role   stem 0.084 em   ->  12   its design size, unchanged
+    ui   (W95FA) stem 0.080 em   ->  13   one pixel up, and legible
+
+Nothing is scaled to compensate. Thirteen-pixel lettering in an eighteen-pixel
+caption bar is what Windows would have done with a font that size, and the
+lettering is centred in its bar rather than set at an offset from the top, so
+a font one pixel taller than the last one still sits where it should.
 
 =cut
 
@@ -116,28 +150,31 @@ use constant {
 # bevel: below this the two-pixel edges meet in the middle and it is a blob.
 use constant THUMB_MIN => 8;
 
-# The one size both strings are set at. Windows had one UI font at one size
-# and every caption in the system was that size, so this is a fact about the
-# interface rather than a setting: a bigger caption would not fit the
-# eighteen-pixel bar it is drawn in.
+# The size the interface itself wants. Windows had one UI font at one size and
+# every caption in the system was that size, so this is a fact about the
+# interface rather than a setting. Twelve because that is the design size of
+# the 'pixel' font role, at which one glyph pixel lands on one image pixel.
 #
-# Twelve because that is the design size of the 'pixel' font role, which is
-# where this number stops being arbitrary: a pixel font at its design size
-# rasterises one glyph pixel to one image pixel, and an outline font at any
-# size near this one drops stems -- 'File' comes out as 'Fle' at eleven and
-# 'Fıle' at twelve.
+# It is a floor rather than the answer: see L</WHAT SIZE THE LETTERING IS>.
 use constant TEXT_SIZE => 12;
 
-# Where the two strings start, measured off the screenshot: the caption three
-# pixels after the icon, the menu seven pixels in and five down. These are
-# offsets to the top of the text box rather than to its baseline, so they are
-# two less than the ink they produce -- which is what makes them look wrong
-# beside the numbers in the POD and right on the picture.
+# And the largest a font may be talked up to. Past this the caption bar it has
+# to fit stops being wishful and starts being wrong.
+use constant TEXT_MAX => 20;
+
+# The em a stem is measured at. A stem is a small fraction of an em -- around
+# a twelfth -- so reading one off in whole pixels needs an em big enough that
+# a pixel of error is a fraction of a per cent.
+use constant PROBE_SIZE => 500;
+
+# Where the two strings start across the bar they sit in, measured off the
+# screenshot: the caption three pixels after the icon, the menu seven pixels
+# in from the frame. There is no matching pair for down the bar, because there
+# is nothing to measure -- both strings are centred in their own bar, and the
+# screenshot agrees to the pixel.
 use constant {
     CAPTION_GAP => 3,
-    CAPTION_Y   => 3,
     MENU_X      => 7,
-    MENU_Y      => 3,
 };
 
 # Nine bitmaps, one character per pixel, keyed by the ink table above with '.'
@@ -237,10 +274,10 @@ sub metrics
 
 The smallest window that can hold the parts C<%arg> asks for, as
 C<< ( $width, $height ) >>. Takes the same C<menu> and C<scrollbars> as
-L</render>.
+L</render( %arg )>.
 
 Below this the parts would overlap rather than merely be cramped, so
-L</render> clamps to it instead of drawing something incoherent.
+L</render( %arg )> clamps to it instead of drawing something incoherent.
 
 =cut
 
@@ -331,7 +368,13 @@ sub render
 
     my $img = _image( $buf );
 
-    _text( $img, $arg{ font }, $arg{ caption }, $menu, $w );
+    _text(
+        $img,
+        $arg{ font },
+        $arg{ type_size } || type_size( $arg{ font } ),
+        $arg{ caption },
+        $menu, $w
+    );
 
     return $img;
 }
@@ -680,9 +723,94 @@ sub _image
 # rather than rendered at the final size. A caption set in crisp outline type
 # over four-pixel bevels is a photograph of a window with a caption pasted on;
 # the whole illusion is that this is a small picture somebody has zoomed into.
+
+=head2 type_size( $font )
+
+The smallest whole pointsize C<$font> can be drawn at without losing strokes,
+never below the twelve the interface wants and never above C<TEXT_MAX>.
+
+Measured, not looked up: see L</WHAT SIZE THE LETTERING IS> for why the answer
+is a property of the font rather than of this program.
+
+=cut
+
+# Cached on the font's path. A loop pays for the measurement once, and the
+# render child is a fresh process each time anyway.
+my %SIZE_FOR;
+
+sub type_size
+{
+    my ( $font ) = @_;
+
+    return TEXT_SIZE unless defined $font && length $font;
+
+    $SIZE_FOR{ $font } = _measure( $font )
+        unless exists $SIZE_FOR{ $font };
+
+    return $SIZE_FOR{ $font };
+}
+
+sub _measure
+{
+    my ( $font ) = @_;
+    require Image::Magick;
+
+    my $probe = Image::Magick->new( size => '400x900' );
+    $probe->Read( 'xc:none' );
+
+    # An 'l' because it is a bare vertical stem with nothing else in it. With
+    # antialiasing on, so that the thing being measured is the outline and not
+    # the rasteriser's opinion of it.
+    my $trouble = $probe->Annotate(
+        text      => 'l',
+        font      => $font,
+        pointsize => PROBE_SIZE,
+        fill      => 'black',
+        gravity   => 'NorthWest',
+        x         => 100,
+        y         => 100,
+        antialias => 'true',
+    );
+
+    # A font that will not load is not an error here. Something else is going
+    # to report it, and guessing the size it would have wanted is no worse
+    # than refusing to draw the window.
+    return TEXT_SIZE if "$trouble" && "$trouble" =~ /\A Exception \s+ [45]/x;
+
+    $probe->Trim;
+    $probe->Set( page => '0x0+0+0' );
+
+    my ( $w, $h ) = ( $probe->Get( 'width' ), $probe->Get( 'height' ) );
+    return TEXT_SIZE unless $w && $h;
+
+    # Across the middle of the stem rather than the widest row, which on a
+    # face with a serif or a tail would be the serif.
+    my @row = $probe->GetPixels(
+        map       => 'A',
+        x         => 0,
+        y         => int( $h / 2 ),
+        width     => $w,
+        height    => 1,
+        normalize => 1,
+    );
+
+    my $stem = grep { $_ > 0.5 } @row;
+    return TEXT_SIZE unless $stem;
+
+    # int() plus one is ceil for a value that is never a whole number in
+    # practice, and one size too generous when it is -- which is the safe way
+    # to be wrong.
+    my $smallest = int( PROBE_SIZE / $stem ) + 1;
+
+    return TEXT_SIZE if $smallest < TEXT_SIZE;
+    return TEXT_MAX  if $smallest > TEXT_MAX;
+
+    return $smallest;
+}
+
 sub _text
 {
-    my ( $img, $font, $caption, $menu, $w ) = @_;
+    my ( $img, $font, $size, $caption, $menu, $w ) = @_;
 
     return unless $font;
 
@@ -694,36 +822,35 @@ sub _text
         my $from = FRAME + ICON_X + 13 + CAPTION_GAP;
         my $to   = $w - FRAME - BUTTON_IN - 3 * BUTTON_W - BUTTON_GAP;
 
-        _annotate( $img, $font, $caption, '#FFFFFF',
-            [ $from, FRAME + CAPTION_Y, $to - $from, CAPTION - CAPTION_Y ] );
+        _annotate( $img, $font, $size, $caption, '#FFFFFF',
+            [ $from, FRAME, $to - $from, CAPTION ] );
     }
 
     if ( defined $menu && length $menu )
     {
         my $from = FRAME + MENU_X;
 
-        _annotate(
-            $img, $font, $menu,
-            '#000000',
-            [
-                $from,
-                FRAME + CAPTION + MENU_Y,
-                $w - FRAME - $from,
-                MENU - MENU_Y
-            ]
-        );
+        _annotate( $img, $font, $size, $menu, '#000000',
+            [ $from, FRAME + CAPTION, $w - FRAME - $from, MENU ] );
     }
 
     return;
 }
 
-# Onto a layer the size of the space the string is allowed, and composited in.
-# The clipping is the point: a bar is as wide as it is and the text in it is
-# whatever fits, and measuring the string to decide where to cut it would mean
-# knowing the font's metrics for a question the layer answers by itself.
+# Onto a layer the size of the whole bar the string is allowed, and composited
+# in. Two things come out of that shape and neither is worth doing by hand.
+#
+# The layer clips: a bar is as wide as it is and the text in it is whatever
+# fits, and measuring the string to decide where to cut it would mean knowing
+# the font's metrics for a question the layer answers by itself.
+#
+# And West centres it down the bar, which is where a caption goes and, more to
+# the point, is the only placement that survives a change of font. A fixed
+# offset from the top of the bar is an offset to some particular font's
+# ascender, and the next font hangs its letters somewhere else.
 sub _annotate
 {
-    my ( $img, $font, $string, $colour, $box ) = @_;
+    my ( $img, $font, $size, $string, $colour, $box ) = @_;
     require Encode;
     require Image::Magick;
 
@@ -739,9 +866,9 @@ sub _annotate
     $layer->Annotate(
         text      => Encode::encode( 'UTF-8', $string ),
         font      => $font,
-        pointsize => TEXT_SIZE,
+        pointsize => $size,
         fill      => $colour,
-        gravity   => 'NorthWest',
+        gravity   => 'West',
         x         => 0,
         y         => 0,
         encoding  => 'UTF-8',

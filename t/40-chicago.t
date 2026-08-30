@@ -12,6 +12,7 @@ use Test::More;
 use GlitchVape           ();
 use GlitchVape::Chicago  ();
 use GlitchVape::Context  ();
+use GlitchVape::Fonts    ();
 use GlitchVape::Pipeline ();
 use GlitchVape::Registry ();
 use GlitchVape::Tools    ();
@@ -128,6 +129,35 @@ sub window
         'BBBKKKKKKKKKKKBBBBBB', 'BBBBBBBBBBBBBBBBBBBB',
         ],
         'the document icon, sitting two pixels in and one down';
+
+    is_deeply art( $win, 422, 4, 20, 18 ),
+        [
+        'BBBBBBBBBBBBBBBBBBBB', 'BBBBBBBBBBBBBBBBBBBB',
+        'BBWWWWWWWWWWWWWWWKWW', 'BBWFFFFFFFFFFFFFSKWF',
+        'BBWFFFFFFFFFFFFFSKWF', 'BBWFFFFFFFFFFFFFSKWF',
+        'BBWFFFFFFFFFFFFFSKWF', 'BBWFFFFFFFFFFFFFSKWF',
+        'BBWFFFFFFFFFFFFFSKWF', 'BBWFFFFFFFFFFFFFSKWF',
+        'BBWFFFFFFFFFFFFFSKWF', 'BBWFFFKKKKKKFFFFSKWF',
+        'BBWFFFKKKKKKFFFFSKWF', 'BBWFFFFFFFFFFFFFSKWF',
+        'BBWSSSSSSSSSSSSSSKWS', 'BBKKKKKKKKKKKKKKKKKK',
+        'BBBBBBBBBBBBBBBBBBBB', 'BBBBBBBBBBBBBBBBBBBB',
+        ],
+        'the Minimise button, whose bar sits low and left rather than centred';
+
+    is_deeply art( $win, 438, 4, 20, 18 ),
+        [
+        'BBBBBBBBBBBBBBBBBBBB', 'BBBBBBBBBBBBBBBBBBBB',
+        'WKWWWWWWWWWWWWWWWKBB', 'SKWFFFFFFFFFFFFFSKBB',
+        'SKWFFKKKKKKKKKFFSKBB', 'SKWFFKKKKKKKKKFFSKBB',
+        'SKWFFKFFFFFFFKFFSKBB', 'SKWFFKFFFFFFFKFFSKBB',
+        'SKWFFKFFFFFFFKFFSKBB', 'SKWFFKFFFFFFFKFFSKBB',
+        'SKWFFKFFFFFFFKFFSKBB', 'SKWFFKFFFFFFFKFFSKBB',
+        'SKWFFKKKKKKKKKFFSKBB', 'SKWFFFFFFFFFFFFFSKBB',
+        'SKWSSSSSSSSSSSSSSKBB', 'KKKKKKKKKKKKKKKKKKBB',
+        'BBBBBBBBBBBBBBBBBBBB', 'BBBBBBBBBBBBBBBBBBBB',
+        ],
+        'and Maximise, which does come out centred -- written down anyway, '
+        . 'because a formula that agrees by coincidence is not a rule';
 
     is_deeply art( $win, 456, 4, 20, 18 ),
         [
@@ -345,6 +375,161 @@ sub window
     is_deeply \@unexpected, [],
         'a window enlarged four times is still only the colours it is drawn in'
         or diag "interpolated: @unexpected";
+}
+
+# ---------------------------------------------------------------------------
+# The lettering is drawn at a size the font can actually be drawn at
+
+# The bug this exists for: with antialiasing off a rasteriser inks a pixel
+# when the pixel's *centre* falls inside the outline, so a stem narrower than
+# one pixel lands between two centres for some of the positions it can be in
+# and vanishes. Not for all of them, which is what made it look like a corrupt
+# font rather than a size one pixel too small -- at twelve pixels W95FA writes
+# 'File' as 'Fıle' and 'Help' intact.
+#
+# So the claim is exactly this: at the size type_size picks, the stem of an
+# 'l' covers a whole pixel. Asked of the stem rather than of a word, because
+# whether a particular word survives depends on where its glyphs happen to
+# land and this does not.
+{
+    my $stem = sub {
+        my ( $font, $size ) = @_;
+
+        my $probe = Image::Magick->new( size => '80x80' );
+        $probe->Read( 'xc:none' );
+        $probe->Annotate(
+            text      => 'l',
+            font      => $font,
+            pointsize => $size,
+            fill      => 'black',
+            gravity   => 'NorthWest',
+            x         => 20,
+            y         => 20,
+            antialias => 'true',
+        );
+
+        my @px = $probe->GetPixels(
+            map       => 'A',
+            width     => 80,
+            height    => 80,
+            normalize => 1
+        );
+
+        my @rows = grep {
+            my $y = $_;
+            grep { $px[ $y * 80 + $_ ] > 0 } 0 .. 79
+        } 0 .. 79;
+        return 0 unless @rows;
+
+        # Coverage across the middle of the stem, in pixels. Antialiasing on,
+        # because what is being measured is the outline and not the
+        # rasteriser's opinion of it.
+        my $mid = $rows[ $#rows / 2 ];
+        my $sum = 0;
+        $sum += $px[ $mid * 80 + $_ ] for 0 .. 79;
+
+        return $sum;
+    };
+
+    is GlitchVape::Chicago::type_size( undef ), 12,
+        'with no font there is nothing to measure and the interface size stands';
+
+    my $roles = 0;
+    for my $role ( GlitchVape::Fonts::roles() )
+    {
+        my $font = GlitchVape::Fonts::resolve( $role ) or next;
+        $roles++;
+
+        my $size = GlitchVape::Chicago::type_size( $font );
+
+        cmp_ok $size, '>=', 12, "$role is never drawn below the interface size";
+        cmp_ok $size, '<=', 20, "$role is never talked up past the bar it fits";
+
+        cmp_ok $stem->( $font, $size ), '>=', 1,
+            "at $size the $role stem covers a whole pixel";
+
+        # And it is the *smallest* such size, not merely a safe one -- which
+        # is only a claim where the font needed talking up at all.
+        next unless $size > 12;
+
+        cmp_ok $stem->( $font, $size - 1 ), '<', 1,
+            "and one pixel smaller it would not, which is why $role was raised";
+    }
+
+    ok $roles, 'there was at least one font to ask';
+}
+
+# ---------------------------------------------------------------------------
+# And the caller can overrule the measurement
+
+{
+    my $font = GlitchVape::Fonts::resolve( 'ui' );
+
+SKIP:
+    {
+        skip 'no ui font', 1 unless $font;
+
+        my $big = GlitchVape::Chicago::render(
+            width      => 480,
+            height     => 321,
+            caption    => 'Untitled',
+            menu       => undef,
+            font       => $font,
+            type_size  => 18,
+            scrollbars => 0,
+            grip       => 0,
+            scroll     => 0,
+            thumb      => 0.5,
+        );
+
+        my $measured = GlitchVape::Chicago::render(
+            width      => 480,
+            height     => 321,
+            caption    => 'Untitled',
+            menu       => undef,
+            font       => $font,
+            scrollbars => 0,
+            grip       => 0,
+            scroll     => 0,
+            thumb      => 0.5,
+        );
+
+        isnt $big->Get( 'signature' ), $measured->Get( 'signature' ),
+            'an explicit type_size is used instead of the measured one';
+    }
+
+SKIP:
+    {
+        my $size = GlitchVape::Chicago::type_size( $font );
+        skip 'no ui font',                                 2 unless $font;
+        skip 'this font wanted the interface size anyway', 2 unless $size > 12;
+
+        # That render() asks for the measurement rather than merely offering
+        # it. Left unpinned, a window drawn at a flat twelve would still pass
+        # every other test in this file and still be the bug.
+        my $window = sub {
+            my ( %arg ) = @_;
+
+            return GlitchVape::Chicago::render(
+                width      => 480,
+                height     => 321,
+                caption    => 'Untitled',
+                menu       => undef,
+                font       => $font,
+                scrollbars => 0,
+                grip       => 0,
+                scroll     => 0,
+                thumb      => 0.5,
+                %arg,
+            )->Get( 'signature' );
+        };
+
+        is $window->(), $window->( type_size => $size ),
+            'a window drawn without a size is drawn at the measured one';
+
+        isnt $window->(), $window->( type_size => 12 ),
+            'and not at the size the interface would have asked for';
+    }
 }
 
 # ---------------------------------------------------------------------------

@@ -1223,10 +1223,15 @@ the picture, on the reading that the picture is a screen 480 pixels tall: a
 The caption and the menu are drawn at the window's own size and enlarged with
 it, so the lettering comes out as blocky as everything else -- a crisply set
 caption over four-pixel bevels would look like a caption pasted onto a
-photograph of a window. That is also why C<font> defaults to C<pixel> rather
-than to C<ui>: an outline face asked for eleven pixels drops half the stems in
-'File', while a pixel font at its design size puts one glyph pixel on one
-image pixel, which is what everything else here does too.
+photograph of a window.
+
+Which size that is comes from the font rather than from here. A stem narrower
+than one pixel misses the pixel centres a rasteriser samples at, and does so
+for some of the positions it can land in and not others -- so at twelve pixels
+W95FA writes 'File' as 'Fıle' and 'Help' intact, which reads as a broken font
+rather than as a size one pixel too small. C<type_size> measures the stem and
+takes the smallest whole size at which it reaches a pixel: twelve for the
+C<pixel> role, thirteen for W95FA. Set it yourself for bigger lettering.
 DOC
     params => {
         width => {
@@ -1298,23 +1303,33 @@ DOC
                 . 'emptying it, because a blank strip of grey is not a menu',
         },
         font => {
-            default => 'pixel',
+            default => 'ui',
             type    => 'str',
             order   => 9,
-            doc     => 'Font role or path for both strings. The default is '
-                . 'the one role that is pixel-exact at the size a window '
-                . 'sets its caption in',
+            doc     => 'Font role or path for both strings. The ui role is '
+                . 'W95FA where that is installed, which is what a window of '
+                . 'this period set its caption in',
+        },
+        type_size => {
+            default => 0,
+            type    => 'int',
+            min     => 0,
+            max     => 20,
+            order   => 10,
+            doc     => 'Pointsize for both strings; 0 measures the font and '
+                . 'takes the smallest size it can be drawn at without '
+                . 'losing strokes',
         },
         scrollbars => {
             default => 1,
             type    => 'bool',
-            order   => 10,
+            order   => 11,
             doc     => 'A scroll bar down the right and along the bottom',
         },
         grip => {
             default => 1,
             type    => 'bool',
-            order   => 11,
+            order   => 12,
             needs   => { scrollbars => 1 },
             doc     => 'The sizing grip in the corner where they meet',
         },
@@ -1323,7 +1338,7 @@ DOC
             type    => 'num',
             min     => 0.05,
             max     => 1,
-            order   => 12,
+            order   => 13,
             needs   => { scrollbars => 1 },
             doc     => 'How much of its bar each thumb covers, which is how '
                 . 'much of the document the window is saying it can see',
@@ -1333,7 +1348,7 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
-            order   => 13,
+            order   => 14,
             needs   => { scrollbars => 1 },
             doc     => 'Where along its bar each thumb sits',
         },
@@ -1342,7 +1357,7 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
-            order   => 14,
+            order   => 15,
             doc     => 'Overall opacity of the window',
         },
     },
@@ -1369,6 +1384,7 @@ sub _chicago
         caption    => $p->{ title },
         menu       => $p->{ menu },
         font       => GlitchVape::Fonts::resolve( $p->{ font } ),
+        type_size  => $p->{ type_size },
         scrollbars => $p->{ scrollbars },
         grip       => $p->{ grip },
         thumb      => $p->{ thumb },

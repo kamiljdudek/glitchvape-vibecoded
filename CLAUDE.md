@@ -190,10 +190,17 @@ the record of it.
 
 Both scale by **pixel replication and never interpolation** — `Sample`, not
 `Resize`. An interpolated one-pixel highlight is a grey smear, and a bevel
-whose highlight is grey does not read as raised. Anything else drawn on the
-same picture at the same time has to be replicated too, which is why
-`chicago` sets its caption in the `pixel` font role at that role's design
-size: an outline face asked for eleven pixels drops half the stems in 'File'.
+whose highlight is grey does not read as raised.
+
+The lettering drawn on the same picture has to survive the same treatment, and
+that is a fact about the font rather than a setting. With antialiasing off a
+rasteriser inks a pixel when the pixel's *centre* is inside the outline, so a
+stem narrower than a pixel vanishes — for some of the positions it can land in
+and not others, which reads as a corrupt font rather than as a size one pixel
+too small. `Chicago::type_size` measures the stem of an `l` at a large em and
+takes `ceil(1 / stem)`, never below the twelve the interface wants: twelve for
+the `pixel` role, thirteen for W95FA. It is a measurement and not a table, so
+a font nobody here has seen gets the same answer.
 
 ## Packaging
 
