@@ -72,6 +72,7 @@ the window and by `--explain` alike — never by the render:
 | `order` | where it sits among its siblings; the default is alphabetical |
 | `label` | what to call the row, where the key is not the clearest English |
 | `needs` | which other parameters must hold before this one means anything |
+| `placeholder` | the grey text an empty entry shows, since what empty *means* is the parameter's fact |
 | `suggest` | values to offer, typeable: a named source (`palette`) or an inline list |
 | `choose` | the same, but closed — a plain drop-down with nothing to type into |
 
@@ -93,7 +94,10 @@ The nine stages, in execution order:
 
 The stages double as the browsing categories in the Add Effect wizard, which
 is deliberate: where an effect runs and what it is for are the same fact, so
-there is no second taxonomy to keep in sync.
+there is no second taxonomy to keep in sync. They also band the effect list in
+the window, since a pipeline nobody can reorder is owed an explanation of the
+order — which each stage carries as `STAGE_INFO->{because}`, one sentence
+saying what would go wrong if its effects ran elsewhere.
 
 ### 3. The GUI is a front end, never a second implementation
 
@@ -352,6 +356,34 @@ once the rate is high enough for dead time to bind the clicks overlap and no
 onset detector can separate them. The real sub is put back before the
 reproducibility checks — with the recorder in place `pcm()` writes silence,
 and two silent buffers compare equal whatever the seed was.
+
+## What varies from frame to frame
+
+Three behaviours, and which one an effect has is a property of what it is
+modelling rather than a choice:
+
+| | |
+|---|---|
+| re-rolls every frame | the medium at an instant — grain, tape noise, damage |
+| moves if asked | `drift`, `pulse`, `rate`: the picture or the pattern travelling |
+| identical every frame | the setup — resolution, colour maps, lens, framing |
+
+It lines up with the stages almost exactly, which is not a coincidence: damage,
+signal and grain are things happening *now*, while format, colour, optics and
+framing describe how the picture is made.
+
+`reroll` is the switch for the first kind, and it is spelled the same way
+everywhere — `rng_for` when on, `rng_fixed` when off, both derived under the
+same label so a **still renders identically either way**. The five damage
+effects arrive with it on, because a tape being chewed while it plays is what
+they are for; `dither` arrives with it off, because a shimmer nobody asked for
+would change what every preset using one already renders.
+
+`t/38-reroll.t` walks the registry and proves both halves for every effect
+that declares one, so an effect growing a `reroll` is covered the day it is
+declared. Two effects need a nudge before the question can even be asked, and
+the reasons are recorded there: `pixelsort` consults no randomness at full
+coverage, and `osd` blinks whatever the switch says.
 
 ## Progress is counted in frames
 

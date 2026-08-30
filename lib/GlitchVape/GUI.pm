@@ -637,6 +637,11 @@ sub _build_image_page
         }
     );
 
+    # Stage headings. GtkListBox draws these itself, from a function it calls
+    # per row -- so they are not rows: they cannot be selected, cannot be
+    # counted as effects, and cannot be left behind by a rebuild.
+    $list->set_header_func( sub { $self->_stage_header( @_ ); return } );
+
     $self->{ effect_list } = $list;
     $box->pack_start( $list, 0, 0, 0 );
 
@@ -1454,6 +1459,100 @@ sub _rebuild_effects
 # One row is one line high whatever the effect declares, so the length of the
 # list is the length of the pipeline and a long one can still be read at a
 # glance.
+
+=head2 WHY THE LIST IS BANDED
+
+The pipeline is sorted by stage and the rows cannot be dragged, so an effect
+added to the list appears wherever its stage falls rather than where it was
+dropped. Without something to say why, that is a list which rearranges itself
+and refuses to be rearranged -- the worst reading available, and the one a
+plain sorted list invites.
+
+Under stage headings it is nine bands with effects in them, and the order
+belongs to the bands rather than to the rows. The heading carries the stage's
+reason for running where it does, from
+L<GlitchVape::Registry/STAGE_INFO>, so the answer is one hover away from the
+question.
+
+Only the occupied stages appear, which is what a header function gives for
+free: it is asked about a row and the row before it, so a stage with nothing
+in it is never mentioned.
+
+=cut
+
+sub _stage_header
+{
+    my ( $self, $row, $before ) = @_;
+
+    my $stage = $self->_stage_of( $row );
+    return unless defined $stage;
+
+    # Same band as the row above: the heading is already up there.
+    if ( defined $before )
+    {
+        my $above = $self->_stage_of( $before );
+        if ( defined $above && $above eq $stage )
+        {
+            $row->set_header( undef );
+            return;
+        }
+    }
+
+    my $info = GlitchVape::Registry->stage_info( $stage ) or return;
+
+    my $label = Gtk3::Label->new;
+    $label->set_markup(
+        sprintf q{<span alpha='60%%'><b>%s</b></span>},
+        Glib::Markup::escape_text( uc $info->{ title } )
+    );
+    $label->set_xalign( 0 );
+
+    # The margin is above rather than around, so the heading sits with the
+    # rows it introduces instead of floating between two bands.
+    $label->set_margin_top( 10 );
+    $label->set_margin_bottom( 2 );
+    $label->set_margin_start( 6 );
+
+    $label->set_tooltip_text(
+        sprintf "%s\n\nRuns %s in the chain: %s",
+        $info->{ blurb },
+        _stage_position( $stage ),
+        $info->{ because }
+    );
+
+    $label->show_all;
+    $row->set_header( $label );
+
+    return;
+}
+
+sub _stage_of
+{
+    my ( $self, $row ) = @_;
+
+    my $name = $row->{ effect }                   or return undef;
+    my $spec = GlitchVape::Registry->get( $name ) or return undef;
+
+    return $spec->{ stage };
+}
+
+# 'fifth of nine', so that a heading says where in the chain it is without
+# the list having to show the seven stages that are empty.
+sub _stage_position
+{
+    my ( $stage ) = @_;
+
+    my @stages = GlitchVape::Registry->stages;
+
+    my $at = 0;
+    for my $n ( 0 .. $#stages )
+    {
+        $at = $n + 1 if $stages[ $n ] eq $stage;
+    }
+
+    return sprintf '%d of %d', $at, scalar @stages;
+}
+
 sub _effect_row
 {
     my ( $self, $name ) = @_;

@@ -55,6 +55,7 @@ effects:
 
   text:
     string: 立体
+    invent: 0
     font: cjk
     size: 11
     gravity: SouthEast

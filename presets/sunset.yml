@@ -60,6 +60,7 @@ effects:
 
   text:
     string: 新世紀
+    invent: 0
     font: cjk
     size: 13
     gravity: North

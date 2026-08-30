@@ -58,26 +58,49 @@ $R->register(
     stage   => 'overlay',
     summary => 'Draw text over the image',
     doc     => <<'DOC',
-Renders a string, defaulting to a randomly chosen Japanese phrase from a built
-in list. C<random> says what that choice does across a loop -- redrawn every
-frame, which is the default and is what makes the text flicker; held for the
-whole render; or not made at all. The C<shadow> offset draws the same text in a contrasting colour
-behind the main copy, which is what stops light text disappearing into a light
+Renders a phrase, picked at random from a built-in list of Japanese ones
+unless C<invent> is turned off and one is typed into C<string>. Across a loop
+C<reroll> says whether the choice is remade every frame -- which is the
+default, and is what makes the text flicker -- or held for the whole render.
+
+An empty C<string> with C<invent> off draws nothing, which is how to have the
+effect in a pipeline and silent for one render.
+
+The C<shadow> offset draws the same text in a contrasting colour behind the
+main copy, which is what stops light text disappearing into a light
 background.
 DOC
     params => {
         string => {
-            default => '',
-            type    => 'str',
-            doc     => 'Text to draw; empty picks a random Japanese phrase',
+            order       => 10,
+            label       => 'Phrase',
+            placeholder => 'Nothing drawn',
+            default     => '',
+            type        => 'str',
+            needs       => { invent => 0 },
+            doc         => 'Text to draw; empty draws nothing',
         },
-        random => {
-            default => 'frame',
-            type    => 'enum',
-            values  => [ qw(frame once off) ],
-            doc     => 'What an empty string means: frame, a new phrase every '
-                . 'frame; once, one phrase held for the whole render; off, '
-                . 'nothing drawn at all',
+
+        # These two are ordered and the rest of the effect is not, which is
+        # the whole of what the ordering is for here: a switch that decides
+        # whether the box above it means anything has to be beside it, and no
+        # spelling of 'string' and 'invent' puts them together alphabetically.
+        invent => {
+            order   => 20,
+            label   => 'Random phrase',
+            default => 1,
+            type    => 'bool',
+            doc     => 'Pick a phrase from the built-in list instead of '
+                . 'drawing the one above',
+        },
+        reroll => {
+            label     => 'Varying phrase',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            needs     => { invent => 1 },
+            doc       => 'Pick again on every frame, which is what makes the '
+                . 'text flicker; off holds one phrase for the whole loop',
         },
         font => {
             default => 'cjk',
@@ -161,32 +184,27 @@ sub _text
     my ( $ctx, $p ) = @_;
     return if $p->{ opacity } <= 0;
 
-    # An empty string means "surprise me", which is how the presets get
-    # varied Japanese text without naming a phrase in every one.
-    #
-    # What it left unsaid was how often the surprise is repeated. rng_for
-    # folds the frame index in, so a loop drew a new phrase on every frame --
-    # which is the wanted behaviour and stays the default, but was arrived at
-    # by accident of which stream the effect happened to ask for rather than
-    # by anybody choosing it. It is a stated choice now, and 'once' is there
-    # for a caption that is supposed to sit still.
+    # A phrase from the list, or the one that was typed. It used to be that an
+    # empty string meant "surprise me", which made the difference between a
+    # picked phrase and a typed one invisible in the interface -- the box was
+    # there to be typed into whether or not anything typed into it would be
+    # drawn. The switch says it instead, and an empty box now means the one
+    # plain thing it looks like.
     my $str = $p->{ string };
 
-    if ( !length $str )
+    if ( $p->{ invent } )
     {
-        my $when = $p->{ random } // 'frame';
-
-        return if $when eq 'off';
-
-        # rng_fixed for 'once', which is the same stream on every frame of the
-        # loop; rng_for for 'frame', which is not.
+        # rng_fixed is the same stream on every frame of the loop, so the
+        # phrase holds; rng_for folds the frame index in, so it does not.
         my $rng =
-              $when eq 'frame'
+              $p->{ reroll }
             ? $ctx->rng_for( 'text' )
             : $ctx->rng_fixed( 'text' );
 
         $str = $rng->pick( @PHRASES );
     }
+
+    return unless length $str;
 
     # Wide tracking is done by hand because ImageMagick has no letter-spacing
     # control; inserting thin spaces is the usual workaround.
@@ -301,20 +319,22 @@ DOC
                 . 'ignoring the two fields below',
         },
         date => {
-            order   => 70,
-            label   => 'Date',
-            default => 'JUN 15 1995',
-            type    => 'str',
-            needs   => { timestamp => 1, invent => 0 },
-            doc     => 'Date as it should read; empty draws no date',
+            order       => 70,
+            label       => 'Date',
+            placeholder => 'Not shown',
+            default     => 'JUN 15 1995',
+            type        => 'str',
+            needs       => { timestamp => 1, invent => 0 },
+            doc         => 'Date as it should read; empty draws no date',
         },
         time => {
-            order   => 80,
-            label   => 'Time',
-            default => 'PM  3:47',
-            type    => 'str',
-            needs   => { timestamp => 1, invent => 0 },
-            doc     => 'Time as it should read; empty draws no time',
+            order       => 80,
+            label       => 'Time',
+            placeholder => 'Not shown',
+            default     => 'PM  3:47',
+            type        => 'str',
+            needs       => { timestamp => 1, invent => 0 },
+            doc         => 'Time as it should read; empty draws no time',
         },
         camera => {
             order   => 90,

@@ -62,7 +62,6 @@ effects:
     size: 1.6
 
   text:
-    string: ''
     font: cjk
     size: 10
     gravity: SouthWest

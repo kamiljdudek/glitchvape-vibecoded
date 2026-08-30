@@ -67,6 +67,7 @@ effects:
 
   text:
     string: 電脳
+    invent: 0
     font: cjk
     size: 16
     gravity: NorthEast

@@ -235,12 +235,16 @@ sub _category_page
     $box->set_border_width( 12 );
 
     my $lead = Gtk3::Label->new;
+
+    # The example that used to be here -- scanlines shrunk away by a
+    # downsample -- has moved into the stages themselves, where it belongs to
+    # the one stage it is about. Saying it twice made the lead longer than the
+    # first row it introduces.
     $lead->set_markup(
               'Effects are grouped by where they run in the chain, '
             . 'which is also what they are for. The chain always runs in '
-            . 'the same order, and that order changes the picture — '
-            . 'scanlines added before the frame is shrunk get shrunk away '
-            . 'with it. So choose the part of the chain you want to change, '
+            . 'the same order, and each part below says why it runs where '
+            . 'it does. So choose the part of the chain you want to change, '
             . 'then the effect.' );
     $lead->set_xalign( 0 );
     $lead->set_line_wrap( 1 );
@@ -331,8 +335,22 @@ sub _category_row
     $blurb->set_max_width_chars( 60 );
     $blurb->get_style_context->add_class( 'dim-label' );
 
-    $box->pack_start( $head,  0, 0, 0 );
-    $box->pack_start( $blurb, 0, 0, 0 );
+    # Why this stage runs where it does, said here as well as in the list's
+    # headings. This is the page where somebody is deciding *which part of
+    # the chain* to change, so it is the page where the chain having an order
+    # is the thing they are actually reasoning about -- and unlike a heading
+    # in a narrow pane, there is room for the sentence itself rather than a
+    # tooltip carrying it.
+    my $because = Gtk3::Label->new;
+    $because->set_markup( sprintf q{<span alpha='55%%'><i>%s</i></span>},
+        _escape( $info->{ because } ) );
+    $because->set_xalign( 0 );
+    $because->set_line_wrap( 1 );
+    $because->set_max_width_chars( 60 );
+
+    $box->pack_start( $head,    0, 0, 0 );
+    $box->pack_start( $blurb,   0, 0, 0 );
+    $box->pack_start( $because, 0, 0, 0 );
 
     return $box;
 }

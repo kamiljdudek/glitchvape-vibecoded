@@ -26,6 +26,31 @@ effects that would otherwise be destroyed along with everything else.
 
 my $R = 'GlitchVape::Registry';
 
+=head1 A FROZEN GLITCH IS A LOOK
+
+Every effect here draws from C<rng_for>, which folds the frame index into the
+stream, so a loop is damaged differently on every frame. That is what damage
+on a running tape does and it stays the default.
+
+It was also the only thing available, and the other reading is a real one: the
+same corruption held for the whole loop is a picture of a frame that broke and
+stayed broken, which is a staple of the genre and was unreachable. C<reroll>
+is the switch, and C<rng_fixed> -- the same numbers on every frame, derived
+under the same label -- is all it takes.
+
+=cut
+
+# Which stream a damage effect draws from. rng_fixed is derived under the same
+# label as rng_for, so a still renders the identical picture either way and
+# only a loop can tell them apart.
+sub _damage_rng
+{
+    my ( $ctx, $p, $label ) = @_;
+
+    return $ctx->rng_for( $label ) if $p->{ reroll };
+    return $ctx->rng_fixed( $label );
+}
+
 # ---------------------------------------------------------------------------
 
 $R->register(
@@ -41,6 +66,16 @@ sorting only the dark runs (or only the bright ones) leaves the subject legible
 while the shadows pour sideways.
 DOC
     params => {
+        reroll => {
+            label     => 'Varying sort',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            doc       => 'Draw a new sort on every frame; off freezes it, so '
+                . 'the frame breaks once and stays broken. Bites only below '
+                . 'full coverage: sorting every line leaves nothing to '
+                . 'choose',
+        },
         direction => {
             default => 'horizontal',
             type    => 'enum',
@@ -108,7 +143,7 @@ sub _pixelsort
     # and produces an identical result.
     $ctx->image->Rotate( degrees => 90 ) if $vertical;
 
-    my $rng   = $ctx->rng_for( 'pixelsort' );
+    my $rng   = _damage_rng( $ctx, $p, 'pixelsort' );
     my $lower = $p->{ lower } * 255;
     my $upper = $p->{ upper } * 255;
     my $keyer = _keyer( $p->{ key }, 255 );
@@ -292,6 +327,14 @@ The first two kilobytes are never touched: that is the header, and corrupting
 it produces a file that will not decode at all.
 DOC
     params => {
+        reroll => {
+            label     => 'Varying corruption',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            doc => 'Draw a new corruption on every frame; off freezes it, '
+                . 'so the frame breaks once and stays broken',
+        },
         hits => {
             default => 12,
             type    => 'int',
@@ -337,7 +380,7 @@ sub _databend
     return if $p->{ hits } <= 0;
     require Image::Magick;
 
-    my $rng = $ctx->rng_for( 'databend' );
+    my $rng = _damage_rng( $ctx, $p, 'databend' );
 
     my $src = $ctx->tmpfile( '.jpg' );
     $ctx->image->Set( quality => $p->{ quality } );
@@ -429,6 +472,14 @@ of a previous image sliding into the current one. Offsets are quantised to a
 macroblock grid, because a decoder can only ever be wrong in multiples of it.
 DOC
     params => {
+        reroll => {
+            label     => 'Varying blocks',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            doc       => 'Draw new blocks on every frame; off freezes it, so '
+                . 'the frame breaks once and stays broken',
+        },
         blocks => {
             default => 10,
             type    => 'int',
@@ -473,7 +524,7 @@ sub _blockshift
     my ( $ctx, $p ) = @_;
     return if $p->{ blocks } <= 0;
 
-    my $rng  = $ctx->rng_for( 'blockshift' );
+    my $rng  = _damage_rng( $ctx, $p, 'blockshift' );
     my $grid = $p->{ size };
 
     GlitchVape::Pixels->edit(
@@ -533,6 +584,14 @@ which damages a few bands and leaves the rest alone, this displaces everything,
 giving the shattered look of a frame assembled from the wrong pieces.
 DOC
     params => {
+        reroll => {
+            label     => 'Varying slices',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            doc       => 'Draw new slices on every frame; off freezes it, so '
+                . 'the frame breaks once and stays broken',
+        },
         slices => {
             default => 24,
             type    => 'int',
@@ -569,7 +628,7 @@ sub _slice
     my ( $ctx, $p ) = @_;
     return if $p->{ spread } <= 0;
 
-    my $rng  = $ctx->rng_for( 'slice' );
+    my $rng  = _damage_rng( $ctx, $p, 'slice' );
     my $wrap = $p->{ edge } eq 'wrap';
 
     GlitchVape::Pixels->edit(
@@ -644,6 +703,14 @@ at `scale` 4 is thirty-two pixels of hard-edged blocks. See
 L<GlitchVape::VGA> for why they are not drawn with a real font.
 DOC
     params => {
+        reroll => {
+            label     => 'Varying glyphs',
+            default   => 1,
+            type      => 'bool',
+            animation => 1,
+            doc       => 'Draw new glyphs and places on every frame; off '
+                . 'freezes it, so the frame breaks once and stays broken',
+        },
         runs => {
             default => 16,
             type    => 'int',
@@ -704,7 +771,7 @@ sub _vgatext
     return unless $p->{ runs } > 0;
     return unless $p->{ opacity } > 0;
 
-    my $rng = $ctx->rng_for( 'vgatext' );
+    my $rng = _damage_rng( $ctx, $p, 'vgatext' );
 
     my @chars   = GlitchVape::VGA::charset( $p->{ charset } );
     my @colours = GlitchVape::VGA::colours();

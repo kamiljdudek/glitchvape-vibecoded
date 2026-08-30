@@ -44,8 +44,15 @@ C<screen>, because a lens is not a screen but belongs in the same late pass.
 
 =head2 STAGE_INFO
 
-Each stage carries its running order, a presentable title and a line of
-description. The interface reads all three; nothing else needs the last two.
+Each stage carries its running order, a presentable title, a line of
+description and a line saying why it runs where it does. The interface reads
+all four; nothing else needs the last three.
+
+C<because> is the one that is easy to leave out and the one people actually
+want. Somebody looking at a pipeline they cannot reorder is owed a reason, and
+"the chain has an order" is not one -- so each stage says what would go wrong
+if its effects ran elsewhere, in a sentence short enough to sit under a
+heading.
 
 =cut
 
@@ -56,11 +63,16 @@ use constant STAGE_INFO => {
         blurb =>
             'Throw away resolution or change the shape of the frame. Runs '
             . 'first, because everything after it works on what is left.',
+        because => 'Everything after it works on what is left, so a frame '
+            . 'shrunk late throws away detail the effects before it drew.',
     },
     colour => {
-        order => 20,
-        title => 'Colour',
-        blurb => 'Grade it, reduce it, or force it into a fixed palette.',
+        order   => 20,
+        title   => 'Colour',
+        blurb   => 'Grade it, reduce it, or force it into a fixed palette.',
+        because => 'Grade before the picture is damaged and the damage is '
+            . 'graded too; after it, the damage keeps the colours it was '
+            . 'given.',
     },
     channels => {
         order => 30,
@@ -68,6 +80,9 @@ use constant STAGE_INFO => {
         blurb =>
             'Pull red, green and blue apart, or let colour bleed sideways '
             . 'the way composite video does.',
+        because => 'The channels have to come apart before anything smears '
+            . 'or scans them, or the smear happens once to a picture '
+            . 'instead of separately to each channel.',
     },
     damage => {
         order => 40,
@@ -75,12 +90,18 @@ use constant STAGE_INFO => {
         blurb =>
             'Corrupt the picture as data rather than as an image: sorted, '
             . 'displaced, compressed past recovery.',
+        because => 'Damage is done to the picture, not to the furniture: after '
+            . 'the overlays it would corrupt the text and the timestamp '
+            . 'rather than what they sit on.',
     },
     signal => {
         order => 50,
         title => 'Signal & Tape',
         blurb => 'What the picture picked up in transport: wobble, tracking, '
             . 'ghosting, snow.',
+        because => 'A tape artefact belongs to the transport, so it happens '
+            . 'once the picture exists and before the screen showing it '
+            . 'adds anything of its own.',
     },
     grain => {
         order => 60,
@@ -88,22 +109,35 @@ use constant STAGE_INFO => {
         blurb =>
             'The texture of the medium: film grain, and the patterns left '
             . 'by a reduced bit depth.',
+        because => 'Grain is in the medium, so it goes on before the glass. '
+            . 'Dithered afterwards and the scanlines would be drawn over a '
+            . 'pattern that should have been under them.',
     },
     optics => {
         order => 70,
         title => 'Screen & Optics',
         blurb => 'What it looks like through the glass: scanlines, phosphor, '
             . 'bloom, curvature, lens softness.',
+        because => 'This is the screen and the lens, which see everything '
+            . 'else. Scanlines applied before a downsample are eaten by '
+            . 'the resample, and a vignette applied before a chroma split '
+            . 'has its dark edges smeared into colour fringes.',
     },
     overlay => {
-        order => 80,
-        title => 'Overlays',
-        blurb => 'Text and furniture drawn on top of the finished picture.',
+        order   => 80,
+        title   => 'Overlays',
+        blurb   => 'Text and furniture drawn on top of the finished picture.',
+        because => 'Text is meant to be read, and anything running after it '
+            . 'damages it -- so the furniture goes on once the picture '
+            . 'has finished being ruined.',
     },
     framing => {
-        order => 90,
-        title => 'Framing',
-        blurb => 'The last word on the edges: bars, borders, aspect.',
+        order   => 90,
+        title   => 'Framing',
+        blurb   => 'The last word on the edges: bars, borders, aspect.',
+        because => 'The edges are the last word. Bars and borders added '
+            . 'earlier would be scanned, bled and damaged like picture, '
+            . 'when they are the frame around it.',
     },
 };
 

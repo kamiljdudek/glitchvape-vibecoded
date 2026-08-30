@@ -62,6 +62,11 @@ window talking about the same string.
 
 =head1 A DECLARATION MAY SAY HOW IT IS PRESENTED
 
+C<placeholder> is the grey text an empty entry shows. Declared rather than
+decided here because what an empty field means is a fact about the parameter:
+C<osd.date> draws no date, C<text.string> draws nothing at all, and a colour
+means no colour.
+
 C<suggest> and C<choose> both name the values a parameter offers -- a source
 this module knows, or an inline list -- and differ in what typing something
 else would mean. C<suggest> gives a combo with an entry in it, for a value the
@@ -418,6 +423,8 @@ sub _text
     my $entry = Gtk3::Entry->new;
     $entry->set_text( _as_text( $arg->{ value } ) );
     $entry->set_hexpand( 1 );
+    $entry->set_placeholder_text( $arg->{ spec }{ placeholder } )
+        if defined $arg->{ spec }{ placeholder };
 
     $entry->signal_connect(
         changed => sub {
@@ -640,10 +647,9 @@ sub _date
 
     return _picker(
         $arg,
-        icon        => 'x-office-calendar-symbolic',
-        tooltip     => 'Pick a date',
-        placeholder => 'Not shown',
-        build       => sub {
+        icon    => 'x-office-calendar-symbolic',
+        tooltip => 'Pick a date',
+        build   => sub {
             my ( $entry ) = @_;
 
             my $calendar = Gtk3::Calendar->new;
@@ -702,10 +708,9 @@ sub _time
 
     return _picker(
         $arg,
-        icon        => 'preferences-system-time-symbolic',
-        tooltip     => 'Pick a time',
-        placeholder => 'Not shown',
-        build       => sub {
+        icon    => 'preferences-system-time-symbolic',
+        tooltip => 'Pick a time',
+        build   => sub {
             my ( $entry ) = @_;
 
             my $seeking = 0;
@@ -786,7 +791,8 @@ sub _picker
     my $entry = Gtk3::Entry->new;
     $entry->set_text( _as_text( $arg->{ value } ) );
     $entry->set_hexpand( 1 );
-    $entry->set_placeholder_text( $opt{ placeholder } );
+    $entry->set_placeholder_text( $arg->{ spec }{ placeholder } )
+        if defined $arg->{ spec }{ placeholder };
 
     my $button = Gtk3::Button->new;
     $button->set_image(

@@ -50,6 +50,23 @@ would point at something not on screen.
 While a render runs, a spinner sits over the picture rather than in the bar,
 and the picture can still be panned and zoomed under it.
 
+### The list is banded by stage
+
+The pipeline is sorted by stage and the rows cannot be dragged, so an effect
+you add appears wherever its stage falls rather than where you put it. A plain
+sorted list invites the worst reading of that — a list that rearranges itself
+and refuses to be rearranged — so the rows sit under stage headings instead,
+and the order belongs to the bands rather than to the rows.
+
+Each heading's tooltip says where in the chain it runs and *why it has to*:
+data damage runs before the overlays because damage is done to the picture and
+not to the furniture; framing is last because bars added earlier would be
+scanned and bled like picture. Only the occupied stages appear.
+
+The same sentences are on the wizard's first page, under each stage, which is
+where you are choosing which part of the chain to change and therefore where
+the chain having an order is the thing you are reasoning about.
+
 ### An effect's settings are a popover
 
 A row says whether an effect is in the render and what it is called. Its

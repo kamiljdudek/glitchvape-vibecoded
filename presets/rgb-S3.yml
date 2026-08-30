@@ -39,5 +39,6 @@ effects:
     size: 7.1
     spacing: 0
     string: 'devoid of memory'
+    invent: 0
     x: 0.006
     y: 0.327

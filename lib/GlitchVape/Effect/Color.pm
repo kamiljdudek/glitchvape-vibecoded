@@ -176,6 +176,11 @@ The most physically accurate VHS artefact. Composite video allocates far less
 bandwidth to colour than to brightness, so colour detail smears horizontally
 while edges stay crisp. Reproduced by converting to YCbCr, blurring only Cb and
 Cr along one axis, and converting back.
+
+C<jitter> is what a marginal signal does across a loop: the bandwidth
+available to colour is not a constant on a tape that is struggling, so the
+smear breathes rather than sitting at one width. Nothing moves without it --
+this is a property of the transport, and a still has no transport to vary.
 DOC
     params => {
         amount => {
@@ -199,6 +204,16 @@ DOC
             max     => 4,
             doc     => 'Chroma gain applied after the bleed',
         },
+        jitter => {
+            label     => 'Bleed jitter',
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            doc       => 'How far the bleed wanders from frame to frame, as '
+                . 'a fraction of itself; 0 holds it steady',
+        },
     },
     apply => \&_chroma_bleed,
 );
@@ -212,7 +227,16 @@ sub _chroma_bleed
         && $p->{ vertical } <= 0
         && $p->{ saturation } == 1;
 
-    if ( $p->{ amount } > 0 || $p->{ vertical } > 0 )
+    # One factor for both radii rather than one each: the two are the same
+    # bandwidth measured along two axes, so a frame where the horizontal
+    # smear widened while the vertical narrowed would not be a signal getting
+    # worse, it would be two unrelated things.
+    my $wander = _bleed_wander( $ctx, $p );
+
+    my $amount   = $p->{ amount } * $wander;
+    my $vertical = $p->{ vertical } * $wander;
+
+    if ( $amount > 0 || $vertical > 0 )
     {
 
         # PerlMagick's Set(colorspace) only relabels the image, it does not
@@ -220,8 +244,10 @@ sub _chroma_bleed
         # where the whole separate/blur/recombine cycle fits in one call
         # anyway.
         my @chroma;
-        push @chroma, '-motion-blur', "0x$p->{amount}+90" if $p->{ amount } > 0;
-        push @chroma, '-blur', "0x$p->{vertical}" if $p->{ vertical } > 0;
+        push @chroma, '-motion-blur', sprintf( '0x%.3f+90', $amount )
+            if $amount > 0;
+        push @chroma, '-blur', sprintf( '0x%.3f', $vertical )
+            if $vertical > 0;
 
         $ctx->magick(
             '-colorspace', 'YCbCr',
@@ -240,6 +266,22 @@ sub _chroma_bleed
         if $p->{ saturation } != 1;
 
     return;
+}
+
+# The factor this frame's bleed is multiplied by. rng_for folds the frame
+# index in, so every frame draws its own -- which is the whole point, and is
+# why a still, whose phase is fixed, comes out exactly as it did before this
+# parameter existed.
+sub _bleed_wander
+{
+    my ( $ctx, $p ) = @_;
+
+    my $jitter = $p->{ jitter } // 0;
+
+    return 1 if $jitter <= 0;
+    return 1 if $ctx->frames <= 1;
+
+    return $ctx->rng_for( 'chroma_bleed' )->between( 1 - $jitter, 1 + $jitter );
 }
 
 # ---------------------------------------------------------------------------

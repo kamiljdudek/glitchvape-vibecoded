@@ -645,6 +645,12 @@ $R->register(
 Quantises each channel to a small number of levels using a threshold matrix,
 producing the regular cross-hatch of an early graphics adapter rather than the
 random speckle of error diffusion.
+
+C<reroll> moves the matrix to a different cell on every frame of a loop, which
+is temporal dithering: the pattern stops being a texture printed on the
+picture and starts shimmering, the way a display faking colours it does not
+have actually looks. It is off by default, because a still cannot show it and
+because the fixed cross-hatch is the thing most renders are after.
 DOC
     params => {
         map => {
@@ -660,11 +666,72 @@ DOC
             max     => 32,
             doc     => 'Levels per channel',
         },
+        reroll => {
+            label     => 'Varying pattern',
+            animation => 1,
+            default   => 0,
+            type      => 'bool',
+            doc       => 'Move the matrix each frame, so flat areas shimmer '
+                . 'rather than holding one cross-hatch',
+        },
     },
-    apply => sub {
-        my ( $ctx, $p ) = @_;
-        $ctx->magick( '-ordered-dither', "$p->{map},$p->{levels}" );
-    },
+    apply => \&_dither,
 );
+
+# How wide the threshold map repeats. Rolling by a whole period would be no
+# roll at all, so the offset is drawn from within one -- and 'threshold' has
+# no period to speak of, which is why it cannot shimmer.
+my %DITHER_PERIOD = (
+    threshold => 1,
+    checks    => 2,
+    o2x2      => 2,
+    o3x3      => 3,
+    o4x4      => 4,
+    o8x8      => 8,
+);
+
+sub _dither
+{
+    my ( $ctx, $p ) = @_;
+
+    my ( $dx, $dy ) = _dither_offset( $ctx, $p );
+
+    # ImageMagick's ordered dither has no offset of its own, so the picture is
+    # moved under the matrix instead and moved back afterwards. -roll is a
+    # circular shift, so nothing is lost at the edges and the second roll
+    # returns every pixel to where it started -- only which cell of the matrix
+    # it met has changed.
+    if ( $dx || $dy )
+    {
+        $ctx->magick( '-roll', sprintf( '%+d%+d', $dx, $dy ) );
+    }
+
+    $ctx->magick( '-ordered-dither', "$p->{map},$p->{levels}" );
+
+    if ( $dx || $dy )
+    {
+        $ctx->magick( '-roll', sprintf( '%+d%+d', -$dx, -$dy ) );
+    }
+
+    return;
+}
+
+sub _dither_offset
+{
+    my ( $ctx, $p ) = @_;
+
+    return ( 0, 0 ) unless $p->{ reroll };
+    return ( 0, 0 ) if $ctx->frames <= 1;
+
+    my $period = $DITHER_PERIOD{ $p->{ map } } // 1;
+    return ( 0, 0 ) if $period < 2;
+
+    my $rng = $ctx->rng_for( 'dither' );
+
+    return (
+        $rng->int_between( 0, $period - 1 ),
+        $rng->int_between( 0, $period - 1 )
+    );
+}
 
 1;

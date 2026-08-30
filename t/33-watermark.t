@@ -281,7 +281,7 @@ sub _sign
     is $render->( size => 20 ), $frames,
         'by default a new phrase is drawn on every frame of a loop';
 
-    is $render->( size => 20, random => 'once' ), 1,
+    is $render->( size => 20, reroll => 0 ), 1,
         'and one held for the whole render is available for a caption that '
         . 'is meant to sit still';
 
@@ -297,10 +297,46 @@ sub _sign
     my $ctx =
         GlitchVape::Context->new( image => $img, source => $src, seed => 7 );
     GlitchVape::Pipeline->new(
-        effects => { text => { size => 20, random => 'off' } } )->run( $ctx );
+        effects => { text => { size => 20, invent => 0 } } )->run( $ctx );
 
     is $ctx->image->Get( 'signature' ), $blank,
-        'and off draws nothing rather than inventing a phrase';
+        'and an empty phrase with the randomness off draws nothing rather '
+        . 'than inventing one';
+}
+
+# A phrase that was typed is drawn, and the switch above it is what says so.
+# Four presets name a phrase, and under the old rule -- a non-empty string
+# simply won -- they said it by writing one; under this one they have to turn
+# the randomness off, so this is the assertion that would have caught them
+# silently drawing Japanese instead.
+{
+    my $drawn = sub {
+        my ( %params ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new(
+            image  => $img,
+            source => $src,
+            seed   => 7
+        );
+
+        GlitchVape::Pipeline->new(
+            effects => { text => { size => 20, %params } } )->run( $ctx );
+
+        return $ctx->image->Get( 'signature' );
+    };
+
+    isnt $drawn->( string => '電脳', invent => 0 ),
+        $drawn->( string => '立体', invent => 0 ),
+        'two typed phrases draw two different pictures';
+
+    # The seed is fixed, so a picked phrase is the same picture every time --
+    # and the point here is that it is not the typed one.
+    isnt $drawn->( string => '電脳', invent => 0 ),
+        $drawn->( string => '電脳', invent => 1 ),
+        'and leaving the randomness on ignores what was typed';
 }
 
 # ---------------------------------------------------------------------------
