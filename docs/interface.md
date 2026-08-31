@@ -127,6 +127,16 @@ have and which is two spin buttons and a meridiem here, writes `PM  3:47` the
 same way. A value they cannot parse is left alone: somebody who typed
 `TUESDAY` meant it.
 
+A **seed** gets a fourth: a spin button with a reroll button beside it. It is
+the one number in any declaration nobody wants to choose. It exists so a
+render can be repeated — type it back in and the same static, the same clicks,
+the same drive come out — so it has to stay a number you can read and write
+down. But almost every time anybody touches one, what they want is not a
+particular value, it is a *different* one, and a spin button offers 1, 2, 3 as
+though the numbers near each other were near each other. So the box stays for
+the rare case and the button is there for the common one, which is every
+generated track that has a seed at all.
+
 ### The menu
 
 The hamburger at the end of the header bar holds what is done rarely enough
@@ -293,7 +303,7 @@ what is exported.
 
 ### Adding an effect is a wizard
 
-Forty-three effects are too many for one list, so **+ → Single effect…** opens
+Forty-five effects are too many for one list, so **+ → Single effect…** opens
 a three-page assistant that asks the questions in the order a person has them.
 
 **What kind of thing am I after?** The nine stages under their presentable

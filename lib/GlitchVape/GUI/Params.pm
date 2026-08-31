@@ -25,6 +25,7 @@ C<--explain>. This module makes it drive the interface too, so an effect added
 to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
 
     num with a range      Gtk3::Scale       drag it
+    seed                  Gtk3::SpinButton  with a button that rerolls it
     num without a range   Gtk3::SpinButton  no sensible track length
     int                   Gtk3::Scale       whole numbers, step 1
     bool                  Gtk3::Switch
@@ -194,10 +195,14 @@ fixed-size control should not have to find every layout that would stretch it.
 # Which control a parameter gets. A lookup table rather than a chain of
 # branches: the kinds are unrelated to one another, so there is no ordering
 # worth expressing, and a new one is an entry rather than an elsif.
+# How large a rerolled seed may be.
+use constant SEED_RANGE => 999_999;
+
 my %BUILDER = (
     bool      => \&_bool,
     enum      => \&_enum,
     numeric   => \&_numeric,
+    seed      => \&_seed,
     colour    => \&_colour,
     date      => \&_date,
     time      => \&_time,
@@ -254,8 +259,13 @@ sub _kind
 
     my $type = $arg->{ spec }{ type } // 'str';
 
-    return $type       if $type eq 'bool' || $type eq 'enum';
-    return 'numeric'   if $type eq 'int'  || $type eq 'num';
+    return $type if $type eq 'bool' || $type eq 'enum';
+
+    # Before the numeric case, because a seed is an integer and would
+    # otherwise get a spin button and nothing else.
+    return 'seed' if $arg->{ name } eq 'seed' && $type eq 'int';
+
+    return 'numeric'   if $type eq 'int' || $type eq 'num';
     return 'colour'    if _is_colour( $arg );
     return 'date'      if $arg->{ name } eq 'date';
     return 'time'      if $arg->{ name } eq 'time';
@@ -366,6 +376,53 @@ sub _numeric
     );
 
     return { control => $scale, get => sub { return $scale->get_value } };
+}
+
+=head2 Why a seed gets a button
+
+A seed is the one number in a declaration that nobody wants to choose. It is
+there so a render can be repeated -- type the number back in and the same
+static, the same clicks, the same drive -- and that is worth keeping. But
+almost every time anybody touches it, what they want is not a particular
+number, it is a I<different> one, and a spin button says the opposite: it
+offers 1, 2, 3, as though the numbers near each other were near each other.
+
+So the number stays and gets a button beside it. The button is the common
+case, the box is the rare one, and the value is still visible to be written
+down -- which a button on its own would have thrown away.
+
+=cut
+
+sub _seed
+{
+    my ( $arg ) = @_;
+
+    my $built =
+        _spin( $arg, 'int', $arg->{ spec }{ min }, $arg->{ spec }{ max } );
+
+    my $box = Gtk3::Box->new( 'horizontal', 4 );
+    $box->pack_start( $built->{ control }, 1, 1, 0 );
+
+    my $roll = Gtk3::Button->new;
+    $roll->set_image(
+        Gtk3::Image->new_from_icon_name( 'view-refresh-symbolic', 'button' ) );
+    $roll->set_tooltip_text(
+        'Pick a different one. The number stays visible, so a version you '
+            . 'like can be written down and typed back in.' );
+
+    # set_value fires value-changed, which is what tells the caller. Six
+    # figures because that is more than anybody will exhaust and few enough
+    # to read back off the screen.
+    $roll->signal_connect(
+        clicked => sub {
+            $built->{ control }->set_value( 1 + int rand SEED_RANGE );
+            return;
+        }
+    );
+
+    $box->pack_start( $roll, 0, 0, 0 );
+
+    return { control => $box, get => $built->{ get } };
 }
 
 sub _spin

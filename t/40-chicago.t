@@ -31,7 +31,14 @@ my %INK = (
     B => '0,0,168',
     _ => 'clear',
 );
-my %CHAR = reverse %INK;
+
+# The two the application's own icon brings with it, which are not interface
+# colours and do not change with the theme.
+my @ARTWORK = ( '154,118,216', '217,162,227' );
+my %CHAR    = reverse %INK;
+
+$CHAR{ $ARTWORK[ 0 ] } = 'P';    # the icon's sky
+$CHAR{ $ARTWORK[ 1 ] } = 'Q';    # and its ground
 
 # One character per pixel, so that a failure prints a picture of the window
 # rather than a list of coordinates.
@@ -183,7 +190,7 @@ sub drawable
     my ( $role ) = @_;
 
     my $font = GlitchVape::Fonts::resolve( $role ) or return 0;
-    my $size = GlitchVape::Chicago::type_size( $font );
+    my $size = GlitchVape::Chicago::smallest_type( $font );
 
     cmp_ok $size, '>=', 12, "$role is never drawn below the interface size";
     cmp_ok $size, '<=', 20, "$role is never talked up past the bar it fits";
@@ -208,7 +215,7 @@ sub only_its_own_colours
 {
     my ( $theme, $palette ) = @_;
 
-    my %ink = map { $_ => 1 } @$palette;
+    my %ink = map { $_ => 1 } @$palette, @ARTWORK;
 
     my $src = Image::Magick->new( size => '400x300' );
     $src->Read( 'xc:black' );
@@ -230,6 +237,184 @@ sub only_its_own_colours
     return $ctx->image->Get( 'signature' );
 }
 
+# The sixteen pixels of the system menu icon, as a picture.
+sub icon_block
+{
+    my ( %arg ) = @_;
+
+    return join "\n", @{ art( window( %arg ), 6, 5, 16, 16 ) };
+}
+
+# Where the caption's first letter is, for an icon of a given width. The first
+# white pixel right of where even the wider icon ends.
+sub caption_starts_at
+{
+    my ( $icon ) = @_;
+
+    my $win = GlitchVape::Chicago::render(
+        width      => 480,
+        height     => 321,
+        icon       => $icon,
+        caption    => 'Untitled',
+        menu       => undef,
+        font       => GlitchVape::Fonts::resolve( 'ui' ),
+        scrollbars => 0,
+        grip       => 0,
+        scroll     => 0,
+        thumb      => 0.5,
+    );
+
+    my @px = $win->GetPixels(
+        map       => 'RGB',
+        y         => 12,
+        width     => 480,
+        height    => 1,
+        normalize => 1
+    );
+
+    for my $x ( 22 .. 400 )
+    {
+        return $x if $px[ $x * 3 ] > 0.9 && $px[ $x * 3 + 2 ] > 0.9;
+    }
+
+    return undef;
+}
+
+# That the second letter of the icon is the first one upside down, but for the
+# one row that makes it an A.
+sub turned_over
+{
+    my ( $block ) = @_;
+
+    my $shape = sub {
+        my ( $row, $ink ) = @_;
+
+        $row =~ s/[$ink]/#/g;
+        $row =~ s/[^#]/./g;
+
+        return $row;
+    };
+
+    my @upside_down =
+        map { $shape->( substr( $_, 0, 8 ), 'W' ) }
+        reverse @{ $block }[ 3 .. 12 ];
+
+    my @letter_a =
+        map { $shape->( substr( $_, 8, 8 ), 'K' ) } @{ $block }[ 3 .. 12 ];
+
+    my @differ = grep { $upside_down[ $_ ] ne $letter_a[ $_ ] } 0 .. 9;
+
+    is scalar @differ, 1, 'the A is the V turned over, but for one row';
+
+    return unless @differ == 1;
+
+    is $letter_a[ $differ[ 0 ] ], '.######.', 'and that row is the crossbar';
+
+    return;
+}
+
+# How far the window wandered across a loop, at a given zoom.
+sub spread_at
+{
+    my ( $zoom ) = @_;
+
+    my ( @x, @y );
+    for my $n ( 0 .. 7 )
+    {
+        my ( $x, $y ) = danced(
+            width  => 400,
+            height => 300,
+            frames => 8,
+            frame  => $n,
+            set    => {
+                jitter => 3,
+                zoom   => $zoom,
+                width  => 0.5,
+                height => 0.5
+            },
+        );
+
+        next unless defined $x;
+
+        push @x, $x;
+        push @y, $y;
+    }
+
+    my @sx = sort { $a <=> $b } @x;
+    my @sy = sort { $a <=> $b } @y;
+
+    return ( $sx[ -1 ] - $sx[ 0 ], $sy[ -1 ] - $sy[ 0 ] );
+}
+
+# Every place the window landed over a loop, and the furthest it got from
+# where the first frame put it.
+sub wandering
+{
+    my ( $at, $frames, $x0, $y0 ) = @_;
+
+    my ( %seen, $worst );
+    $worst = 0;
+
+    for my $n ( 0 .. $frames - 1 )
+    {
+        my ( $x, $y ) = $at->( $n );
+        next unless defined $x;
+
+        $seen{ "$x,$y" }++;
+
+        for my $axis ( $x - $x0, $y - $y0 )
+        {
+            $worst = abs $axis if abs $axis > $worst;
+        }
+    }
+
+    return ( scalar keys %seen, $worst );
+}
+
+# That around() and client_origin() describe the window render() actually
+# builds: the hole is the client area asked for, exactly, where they said.
+sub fits_around
+{
+    my ( $menu, $bars ) = @_;
+
+    my ( $cw, $ch ) = ( 90, 70 );
+
+    my ( $ww, $wh ) = GlitchVape::Chicago::around(
+        client     => [ $cw, $ch ],
+        menu       => $menu,
+        scrollbars => $bars
+    );
+
+    my ( $hx, $hy ) = GlitchVape::Chicago::client_origin( menu => $menu );
+
+    my $win = GlitchVape::Chicago::render(
+        client     => [ $cw, $ch ],
+        menu       => $menu,
+        maximised  => 1,
+        caption    => undef,
+        font       => undef,
+        scrollbars => $bars,
+        grip       => 1,
+        scroll     => 0,
+        thumb      => 0.5,
+    );
+
+    my $said = sprintf 'menu %s, bars %d', defined $menu ? 'on' : 'off', $bars;
+
+    is join( 'x', $win->Get( 'width' ), $win->Get( 'height' ) ), "${ww}x${wh}",
+        "around() says how big the window is ($said)";
+
+    my $rows  = art( $win, $hx, $hy, $cw, $ch );
+    my @solid = grep { !m{\A _+ \z}x } @$rows;
+
+    is scalar @solid, 0, "and the hole is the client area ($said)";
+
+    is substr( art( $win, $hx - 1, $hy, 1, 1 )->[ 0 ], 0, 1 ), 'K',
+        "with the well drawn right up to its edge ($said)";
+
+    return;
+}
+
 sub window
 {
     my ( %arg ) = @_;
@@ -237,6 +422,7 @@ sub window
     return GlitchVape::Chicago::render(
         width      => 480,
         height     => 321,
+        icon       => 'notepad',
         caption    => undef,
         menu       => ' ',
         font       => undef,
@@ -523,8 +709,10 @@ sub window
 
     my $seen = inks_used( $ctx->image, 400, 300 );
 
+    my %allowed = map { $_ => 1 } keys %CHAR, @ARTWORK;
+
     my @unexpected =
-        grep { !exists $CHAR{ $_ } && $_ ne '0,0,0' } sort keys %$seen;
+        grep { !$allowed{ $_ } && $_ ne '0,0,0' } sort keys %$seen;
 
     is_deeply \@unexpected, [],
         'a window enlarged four times is still only the colours it is drawn in'
@@ -547,7 +735,7 @@ sub window
 # land and this does not.
 {
 
-    is GlitchVape::Chicago::type_size( undef ), 12,
+    is GlitchVape::Chicago::smallest_type( undef ), 12,
         'with no font there is nothing to measure and the interface size stands';
 
     my $roles = 0;
@@ -557,55 +745,28 @@ sub window
 }
 
 # ---------------------------------------------------------------------------
-# And the caller can overrule the measurement
+# The size is a plain size, with a floor the font decides
 
+# It used to be nought-means-measure-it, which put a cliff in the middle of a
+# slider: nought drew ordinary lettering, one drew lettering a pixel tall, and
+# thirteen drew ordinary lettering again. Nothing about dragging it told you
+# that, and the one value that behaved sanely was the one that did not look
+# like a size.
+#
+# So the number is now the size, and asking for less than the font can manage
+# is quietly not done. Two properties fall out and both are worth pinning:
+# bigger never means smaller, and no value means anything other than a size.
 {
     my $font = GlitchVape::Fonts::resolve( 'ui' );
 
 SKIP:
     {
-        skip 'no ui font', 1 unless $font;
+        skip 'no ui font', 5 unless $font;
 
-        my $big = GlitchVape::Chicago::render(
-            width      => 480,
-            height     => 321,
-            caption    => 'Untitled',
-            menu       => undef,
-            font       => $font,
-            type_size  => 18,
-            scrollbars => 0,
-            grip       => 0,
-            scroll     => 0,
-            thumb      => 0.5,
-        );
+        my $floor = GlitchVape::Chicago::smallest_type( $font );
 
-        my $measured = GlitchVape::Chicago::render(
-            width      => 480,
-            height     => 321,
-            caption    => 'Untitled',
-            menu       => undef,
-            font       => $font,
-            scrollbars => 0,
-            grip       => 0,
-            scroll     => 0,
-            thumb      => 0.5,
-        );
-
-        isnt $big->Get( 'signature' ), $measured->Get( 'signature' ),
-            'an explicit type_size is used instead of the measured one';
-    }
-
-SKIP:
-    {
-        my $size = GlitchVape::Chicago::type_size( $font );
-        skip 'no ui font',                                 2 unless $font;
-        skip 'this font wanted the interface size anyway', 2 unless $size > 12;
-
-        # That render() asks for the measurement rather than merely offering
-        # it. Left unpinned, a window drawn at a flat twelve would still pass
-        # every other test in this file and still be the bug.
-        my $window = sub {
-            my ( %arg ) = @_;
+        my $at = sub {
+            my ( $size ) = @_;
 
             return GlitchVape::Chicago::render(
                 width      => 480,
@@ -613,19 +774,32 @@ SKIP:
                 caption    => 'Untitled',
                 menu       => undef,
                 font       => $font,
+                type_size  => $size,
                 scrollbars => 0,
                 grip       => 0,
                 scroll     => 0,
                 thumb      => 0.5,
-                %arg,
             )->Get( 'signature' );
         };
 
-        is $window->(), $window->( type_size => $size ),
-            'a window drawn without a size is drawn at the measured one';
+        my $ordinary = $at->( undef );
 
-        isnt $window->(), $window->( type_size => 12 ),
-            'and not at the size the interface would have asked for';
+        is $at->( $floor ), $ordinary,
+            'asked for the size it can manage, that is what it draws';
+
+        # The cliff, from both sides of where it used to be.
+        is $at->( 1 ), $ordinary, 'asked for one, it draws that same size';
+        is $at->( 0 ), $ordinary, 'and nought is not a special number either';
+
+        isnt $at->( 18 ), $ordinary, 'asked for more, it draws more';
+
+        # And nothing between the floor and the top of the range is smaller
+        # than the floor, which is the whole of "bigger never means smaller".
+        my @shrunk = grep { $at->( $_ ) eq $at->( $_ - 1 ) && $_ > $floor + 1 }
+            $floor + 1 .. 18;
+
+        is_deeply \@shrunk, [], 'and every size above the floor is its own'
+            or diag "these drew the same as one size smaller: @shrunk";
     }
 }
 
@@ -716,31 +890,14 @@ SKIP:
     {
         skip 'no window found', 4 unless defined $x0;
 
-        my ( %seen, @moves );
-        for my $n ( 0 .. $frames - 1 )
-        {
-            my ( $x, $y ) = $at->( $n );
-            next unless defined $x;
+        my ( $places, $worst ) = wandering( $at, $frames, $x0, $y0 );
 
-            $seen{ "$x,$y" }++;
-            push @moves, [ $x - $x0, $y - $y0 ];
-        }
-
-        cmp_ok scalar keys %seen, '>', $frames / 2,
+        cmp_ok $places, '>', $frames / 2,
             'and it is somewhere different on most frames of the loop';
 
         # Within what was asked for. The picture is 180 tall, so the zoom is
         # one and a jitter of three is three image pixels either way -- but
         # from the *placed* position, which frame 0 has already moved off.
-        my $worst = 0;
-        for my $move ( @moves )
-        {
-            for my $axis ( @$move )
-            {
-                $worst = abs $axis if abs $axis > $worst;
-            }
-        }
-
         cmp_ok $worst, '<=', 2 * $most,
             'never further from its place than the jitter allows';
 
@@ -773,39 +930,9 @@ SKIP:
 # So that it looks the same on a phone photograph and on a thumbnail. A jitter
 # counted in image pixels would be a twitch on one and a lurch on the other.
 {
-    my $spread = sub {
-        my ( $zoom ) = @_;
 
-        my ( @x, @y );
-        for my $n ( 0 .. 7 )
-        {
-            my ( $x, $y ) = danced(
-                width  => 400,
-                height => 300,
-                frames => 8,
-                frame  => $n,
-                set    => {
-                    jitter => 3,
-                    zoom   => $zoom,
-                    width  => 0.5,
-                    height => 0.5
-                },
-            );
-
-            next unless defined $x;
-
-            push @x, $x;
-            push @y, $y;
-        }
-
-        my @sx = sort { $a <=> $b } @x;
-        my @sy = sort { $a <=> $b } @y;
-
-        return ( $sx[ -1 ] - $sx[ 0 ], $sy[ -1 ] - $sy[ 0 ] );
-    };
-
-    my ( $one_x, $one_y ) = $spread->( 1 );
-    my ( $two_x, $two_y ) = $spread->( 2 );
+    my ( $one_x, $one_y ) = spread_at( 1 );
+    my ( $two_x, $two_y ) = spread_at( 2 );
 
     is $two_x, 2 * $one_x, 'twice the zoom, twice the dance across';
     is $two_y, 2 * $one_y, 'and twice the dance down';
@@ -867,6 +994,218 @@ SKIP:
     is $painted->( 'chartreuse' ), $ordinary, 'an unknown theme is the default';
     is $painted->( undef ),        $ordinary, 'and so is no theme at all';
     is $painted->( q{} ),          $ordinary, 'and so is an empty one';
+}
+
+# ---------------------------------------------------------------------------
+# The application's own icon, in the sixteen pixels Windows gives one
+
+# Squeezing a 256-pixel icon into sixteen is a redraw, not a resize, and this
+# is the redraw. It is here rather than derived at run time for the reason
+# every other bitmap in that file is: an outline scaled to sixteen pixels is
+# mush, and the two letterforms are the whole of what has to survive.
+#
+# It comes out exact rather than approximate because the V and the A in
+# assets/artwork/icon-256.png are both drawn on a seven-by-eleven pixel grid,
+# eight cells wide and ten tall, so the pair is exactly sixteen cells across
+# and one cell becomes one pixel with nothing rounded.
+{
+    my $win = window( icon => 'glitchvape' );
+
+    is_deeply art( $win, 6, 5, 16, 16 ),
+        [
+        'PPPPPPPPPPPPPPPP', 'PPPPPPPPPPPPPPPP',
+        'PPPPPPPPPPPPPPPP', 'WWPPPPWWPPPKKPPP',
+        'WWPPPPWWPPPKKPPP', 'PWWPPWWPPPKKKKPP',
+        'PWWPPWWPPPKKKKPP', 'PWWPPWWPPPKPPKPP',
+        'PPWPPWPPPKKPPKKP', 'PPWWWWPPPKKPPKKP',
+        'PPWWWWPPPKKKKKKP', 'PPPWWPPPKKPPPPKK',
+        'PPPWWPPPKKPPPPKK', 'QQQQQQQQQQQQQQQQ',
+        'WWWWWWWWKKKKKKKK', 'QQQQQQQQQQQQQQQQ',
+        ],
+        'a white V and a black A on the purple, over their own horizon';
+
+    # The A is the V upside down with one row filled in, which is the whole
+    # of what makes an A an A. Asked of the bitmap, because if it stops being
+    # true the table has been edited by hand and one of them has drifted.
+    turned_over( art( $win, 6, 5, 16, 16 ) );
+}
+
+# ---------------------------------------------------------------------------
+# A logo does not change colour with the desktop scheme
+
+# The window is themed and the icon is not, which is how it was: an
+# application shipped its icon and the Appearance tab did not repaint it.
+{
+    my %block;
+    $block{ $_ } = icon_block( theme => $_, icon => 'glitchvape' )
+        for GlitchVape::Chicago::themes();
+
+    is $block{ rose }, $block{ default }, 'the icon is the same under rose';
+    is $block{ rain }, $block{ default }, 'and the same under rain';
+}
+
+# ---------------------------------------------------------------------------
+# Which icon it is moves the caption text, and nothing else
+
+# The page is thirteen pixels and the logo is sixteen, so the width is a
+# question rather than a constant -- it used to be written down as 13 in two
+# places, which the wider icon would have run straight over.
+{
+
+    my $wide   = caption_starts_at( 'glitchvape' );
+    my $narrow = caption_starts_at( 'notepad' );
+
+SKIP:
+    {
+        skip 'no font to set a caption in', 1
+            unless defined $wide && defined $narrow;
+
+        is $wide - $narrow, 3,
+            'the caption starts three pixels further right behind the wider icon';
+    }
+}
+
+# ---------------------------------------------------------------------------
+# An icon nobody has heard of, and one that is not an icon at all
+
+# Every glyph in the module lives in one table, so an unguarded name would let
+# 'grip' put three diagonal ribs in the caption.
+{
+    my $ordinary = icon_block( icon => 'glitchvape' );
+
+    is icon_block( icon => $_ ), $ordinary,
+        "'$_' is not an icon, so the usual one is drawn"
+        for 'chartreuse', 'grip', 'close', q{};
+}
+
+# ---------------------------------------------------------------------------
+# A window built around something, rather than to a size with a hole in it
+
+# What the maximised effect needs and the floating one does not: given what
+# has to go inside, how big is the window and where does the inside start.
+# It is the layout in render() read backwards, so the two can disagree -- and
+# the way to catch that is to build a window from around() and then measure
+# the hole render() actually left.
+{
+    fits_around( $_->[ 0 ], $_->[ 1 ] )
+        for [ undef, 0 ], [ undef, 1 ], [ 'File', 0 ], [ 'File', 1 ];
+}
+
+# ---------------------------------------------------------------------------
+# A maximised window says it is one
+
+# Two things follow from being maximised rather than floating, and a window
+# that showed neither would be a floating window drawn very large. Maximise
+# becomes Restore -- the one thing on a caption that says which of the two it
+# is -- and the sizing grip goes, because a maximised window cannot be
+# resized and a handle for doing it would be a lie.
+{
+    my $box = sub {
+        my ( %arg ) = @_;
+
+        return GlitchVape::Chicago::render(
+            width      => 480,
+            height     => 321,
+            menu       => ' ',
+            caption    => undef,
+            font       => undef,
+            scrollbars => 1,
+            grip       => 1,
+            scroll     => 0,
+            thumb      => 0.5,
+            %arg,
+        );
+    };
+
+    my $floating = $box->();
+    my $flat     = $box->( maximised => 1 );
+
+    # The middle caption button, at the offset the measured table gives it.
+    # The glyph's own blanks read as the button face they are drawn on.
+    is_deeply art( $flat, 443, 8, 9, 9 ),
+        [
+        'FFKKKKKKK', 'FFKKKKKKK', 'FFKFFFFFK', 'KKKKKKKFK',
+        'KKKKKKKFK', 'KFFFFFKFK', 'KFFFFFKKK', 'KFFFFFKFF',
+        'KKKKKKKFF',
+        ],
+        'Maximise has become Restore: two windows, the front one down and left';
+
+    isnt join( q{}, @{ art( $flat, 443, 8, 9, 9 ) } ),
+        join( q{}, @{ art( $floating, 443, 8, 9, 9 ) } ),
+        'which is not what a floating window has there';
+
+    # And the corner between the two scroll bars is bare.
+    my $corner = join q{}, @{ art( $flat, 466, 307, 8, 8 ) };
+
+    unlike $corner, qr/W/, 'and there is no sizing grip to take hold of';
+}
+
+# ---------------------------------------------------------------------------
+# The effect puts the picture inside, without touching it
+
+SKIP:
+{
+    require GlitchVape::Registry;
+
+    my $effect = GlitchVape::Registry->get( 'maximised' );
+    skip 'the maximised effect is not registered', 6 unless $effect;
+
+    is $effect->{ stage }, 'framing',
+        'a window built around the picture runs where letterbox does';
+
+    # The settings that mean something for a window laid over the picture and
+    # nothing for one built around it. A maximised window has no size, no
+    # place, nothing to shake against and nothing behind it to show through.
+    my @gone = grep { $effect->{ params }{ $_ } }
+        qw(width height gravity x y jitter opacity grip);
+
+    is_deeply \@gone, [],
+        'and carries none of the settings that would not mean anything'
+        or diag "still declared: @gone";
+
+    # A zoom of three and a picture that is not a multiple of three, so the
+    # client area has to be rounded and the direction of the rounding shows.
+    # Rounded down the picture would not fit its own frame and would be
+    # cropped by it, which is the one thing a frame must not do.
+    my ( $pw, $ph, $zoom ) = ( 160, 121, 3 );
+
+    my $src = Image::Magick->new( size => "${pw}x${ph}" );
+    $src->Read( 'gradient:#204060-#E0A0C0' );
+    my $before = $src->Get( 'signature' );
+
+    my $ctx = GlitchVape::Context->new( image => $src->Clone, seed => 5 );
+    GlitchVape::Pipeline->new( effects =>
+            { maximised => { zoom => $zoom, menu => q{}, title => q{} } } )
+        ->run( $ctx );
+
+    my $cw = int( ( $pw + $zoom - 1 ) / $zoom );
+    my $ch = int( ( $ph + $zoom - 1 ) / $zoom );
+
+    my ( $ww, $wh ) = GlitchVape::Chicago::around(
+        client     => [ $cw, $ch ],
+        menu       => undef,
+        scrollbars => 1
+    );
+
+    is join( 'x', $ctx->image->Get( 'width' ), $ctx->image->Get( 'height' ) ),
+        join( 'x', $ww * $zoom, $wh * $zoom ),
+        'the picture comes out bigger by exactly the chrome';
+
+    # The picture itself is placed, not resampled: cut it back out of the
+    # window and it is the picture that went in, to the last pixel.
+    my ( $hx, $hy ) = GlitchVape::Chicago::client_origin( menu => undef );
+
+    my $back = $ctx->image->Clone;
+    $back->Crop(
+        geometry => sprintf '%dx%d+%d+%d',
+        $pw, $ph,
+        $hx * $zoom + int( ( $cw * $zoom - $pw ) / 2 ),
+        $hy * $zoom + int( ( $ch * $zoom - $ph ) / 2 )
+    );
+    $back->Set( page => '0x0+0+0' );
+
+    is $back->Get( 'signature' ), $before,
+        'and the picture inside is the picture that went in, untouched';
 }
 
 # ---------------------------------------------------------------------------

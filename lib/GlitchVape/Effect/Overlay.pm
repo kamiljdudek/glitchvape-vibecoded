@@ -6,11 +6,14 @@ use utf8;
 
 use Encode ();
 
-use GlitchVape::Chicago  ();
-use GlitchVape::Magick   ();
-use GlitchVape::Registry ();
-use GlitchVape::Fonts    ();
-use GlitchVape::Palette  ();
+use GlitchVape::Chicago   ();
+use GlitchVape::Magick    ();
+use GlitchVape::Pixels    ();
+use GlitchVape::Starfield ();
+use GlitchVape::VGA       ();
+use GlitchVape::Registry  ();
+use GlitchVape::Fonts     ();
+use GlitchVape::Palette   ();
 
 our $VERSION = '0.01';
 
@@ -1221,6 +1224,13 @@ every face -- with the white highlight and the black dark shadow unchanged,
 because a raised edge reads as raised by being brighter than anything around
 it and a tinted highlight flattens the window.
 
+C<icon> is the picture in the top left corner. It arrives as this program's
+own -- the V and the A from F<assets/artwork/icon-256.png>, redrawn at sixteen
+pixels rather than scaled down to them -- and C<notepad> puts back the
+document page the window was scavenged from. The icon keeps its own colours
+under every theme, because an application's icon did not change with the
+desktop scheme.
+
 C<jitter> is the animation setting: how far the window may jump from where it
 was put, redrawn every frame, so that it shakes in place rather than sitting
 there. It is measured in the window's own pixels, so the dance is the same
@@ -1246,13 +1256,14 @@ it, so the lettering comes out as blocky as everything else -- a crisply set
 caption over four-pixel bevels would look like a caption pasted onto a
 photograph of a window.
 
-Which size that is comes from the font rather than from here. A stem narrower
-than one pixel misses the pixel centres a rasteriser samples at, and does so
-for some of the positions it can land in and not others -- so at twelve pixels
-W95FA writes 'File' as 'Fıle' and 'Help' intact, which reads as a broken font
-rather than as a size one pixel too small. C<type_size> measures the stem and
-takes the smallest whole size at which it reaches a pixel: twelve for the
-C<pixel> role, thirteen for W95FA. Set it yourself for bigger lettering.
+C<type_size> is that size, and twelve is what the interface itself used. It
+has a floor under it that the font decides: a stem narrower than one pixel
+misses the pixel centres a rasteriser samples at, and does so for some of the
+positions it can land in and not others -- so at twelve pixels W95FA writes
+'File' as 'Fıle' and 'Help' intact, which reads as a broken font rather than
+as a size one pixel too small. Asked for less than a font can manage, the
+window quietly draws it at what it can: twelve for the C<pixel> role, thirteen
+for W95FA. Eighteen is as large as the caption bar will hold.
 DOC
     params => {
         width => {
@@ -1315,10 +1326,18 @@ DOC
             doc     => 'Which of the schemes from the Appearance tab the '
                 . 'window is painted in',
         },
+        icon => {
+            default => 'glitchvape',
+            type    => 'enum',
+            order   => 8,
+            values  => [ GlitchVape::Chicago::icons() ],
+            doc     => 'The picture in the top left: this program, or the '
+                . 'document page the window was scavenged from',
+        },
         title => {
             default     => 'Untitled',
             type        => 'str',
-            order       => 8,
+            order       => 9,
             placeholder => 'no caption text',
             doc         => 'The caption. Empty leaves the bar and its '
                 . 'buttons with nothing written on them',
@@ -1326,7 +1345,7 @@ DOC
         menu => {
             default     => 'File  Edit  Search  Help',
             type        => 'str',
-            order       => 9,
+            order       => 10,
             placeholder => 'no menu bar at all',
             doc         => 'The menu bar. Empty removes the bar rather than '
                 . 'emptying it, because a blank strip of grey is not a menu',
@@ -1334,31 +1353,31 @@ DOC
         font => {
             default => 'ui',
             type    => 'str',
-            order   => 10,
+            order   => 11,
             doc     => 'Font role or path for both strings. The ui role is '
                 . 'W95FA where that is installed, which is what a window of '
                 . 'this period set its caption in',
         },
         type_size => {
-            default => 0,
+            default => 12,
             type    => 'int',
-            min     => 0,
-            max     => 20,
-            order   => 11,
-            doc     => 'Pointsize for both strings; 0 measures the font and '
-                . 'takes the smallest size it can be drawn at without '
-                . 'losing strokes',
+            min     => 12,
+            max     => 18,
+            order   => 12,
+            doc     => 'Size of the caption and menu lettering. Never drawn '
+                . 'smaller than the chosen font can manage, which for some '
+                . 'faces is a pixel more than this',
         },
         scrollbars => {
             default => 1,
             type    => 'bool',
-            order   => 12,
+            order   => 13,
             doc     => 'A scroll bar down the right and along the bottom',
         },
         grip => {
             default => 1,
             type    => 'bool',
-            order   => 13,
+            order   => 14,
             needs   => { scrollbars => 1 },
             doc     => 'The sizing grip in the corner where they meet',
         },
@@ -1367,7 +1386,7 @@ DOC
             type    => 'num',
             min     => 0.05,
             max     => 1,
-            order   => 14,
+            order   => 15,
             needs   => { scrollbars => 1 },
             doc     => 'How much of its bar each thumb covers, which is how '
                 . 'much of the document the window is saying it can see',
@@ -1377,7 +1396,7 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
-            order   => 15,
+            order   => 16,
             needs   => { scrollbars => 1 },
             doc     => 'Where along its bar each thumb sits',
         },
@@ -1386,7 +1405,7 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
-            order   => 16,
+            order   => 17,
             doc     => 'Overall opacity of the window',
         },
         jitter => {
@@ -1395,7 +1414,7 @@ DOC
             type      => 'num',
             min       => 0,
             max       => 24,
-            order     => 17,
+            order     => 18,
             doc       => 'How far the window may jump from where it was put, '
                 . "in the window's own pixels, redrawn every frame",
         },
@@ -1421,6 +1440,7 @@ sub _chicago
         width      => int( $want_w / $zoom ),
         height     => int( $want_h / $zoom ),
         theme      => $p->{ theme },
+        icon       => $p->{ icon },
         caption    => $p->{ title },
         menu       => $p->{ menu },
         font       => GlitchVape::Fonts::resolve( $p->{ font } ),
@@ -1545,6 +1565,425 @@ sub _chicago_place
         :                       int( ( $ih - $wh ) / 2 ) + $dy;
 
     return ( $x, $y );
+}
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+
+$R->register(
+    name    => 'stars',
+    title   => 'Starry Night',
+    stage   => 'overlay',
+    summary => 'The Norton Commander screensaver, twinkling over the picture',
+    doc     => <<'DOC',
+Norton Commander's Starry Night, drawn over the photograph: a text-mode sky
+where most stars sit as a dim C<·> and, every so often, one flares up through
+a ramp of larger characters, burns out, and comes back somewhere else.
+
+The animation is the same sky later rather than a new sky each time, which is
+the whole difference between a screensaver and a field of noise: what reads as
+twinkling is that the stars stay where they are between the moments they do
+not. A still is the sky two hundred steps in, so that flares are in progress
+rather than about to begin -- a sky where nothing has happened yet is a grid
+of identical dots. C<flare> is the pace, and under one a frame is a sky that
+twinkles rather than boils.
+
+C<dim> is the screen going dark behind it, which is what a screensaver does
+before any of this starts. At 0 the stars are simply over the picture; at 1
+the picture is gone and there is only the sky.
+
+The loop does not close, and cannot: a star that flares comes back somewhere
+else, so a sky that ended where it began would be a sky whose stars never
+move. It joins C<grain> and C<static> in that, and for the same reason nobody
+sees the join -- a handful of stars are somewhere else at every frame, so a
+handful being somewhere else at that one is not a seam.
+
+Drawn in the 8x16 text-mode font, scaled by pixel replication, in the sixteen
+colours the hardware had. See L<GlitchVape::Starfield> for the sky and
+L<GlitchVape::VGA> for the characters.
+DOC
+    params => {
+        density => {
+            default => 1.8,
+            type    => 'num',
+            min     => 0.1,
+            max     => 10,
+            order   => 1,
+            doc     => 'Stars as a percentage of the character cells there '
+                . 'are room for',
+        },
+        scale => {
+            default => 2,
+            type    => 'int',
+            min     => 1,
+            max     => 16,
+            order   => 2,
+            doc     => 'Image pixels per font pixel, so a cell is 8 by 16 '
+                . 'of these',
+        },
+        color => {
+            default => '#00AAAA',
+            type    => 'str',
+            order   => 3,
+            needs   => { random => 0 },
+            doc     => 'What a star at rest is drawn in. The original was '
+                . 'teal, and flares are white whatever this says',
+        },
+        random => {
+            label   => 'Random star colours',
+            default => 0,
+            type    => 'bool',
+            order   => 4,
+            doc     => 'Give every star its own colour from the sixteen the '
+                . 'hardware had, and keep it when the star moves',
+        },
+        flare => {
+            default => 0.6,
+            type    => 'num',
+            min     => 0,
+            max     => 8,
+            order   => 5,
+            doc     => 'Stars that begin to flare each step. Under one is a '
+                . 'sky that twinkles; several is one that boils',
+        },
+        dim => {
+            default => 0,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            order   => 6,
+            doc     => 'How far the picture behind the sky is darkened. 1 is '
+                . 'the screen blanking, which is what a screensaver does '
+                . 'before it draws anything',
+        },
+        opacity => {
+            default => 1,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            order   => 7,
+            doc     => 'How completely the stars replace what is under them',
+        },
+    },
+    apply => \&_stars,
+);
+
+sub _stars
+{
+    my ( $ctx, $p ) = @_;
+
+    return unless $p->{ opacity } > 0;
+
+    # Before anything about the grid, and through ImageMagick rather than a
+    # pixel at a time. The screen going dark is what a screensaver does before
+    # it draws a single star, so it is not conditional on there being any --
+    # a density that rounds down to no stars should still blank the screen,
+    # not quietly do nothing.
+    $ctx->image->Evaluate( operator => 'Multiply', value => 1 - $p->{ dim } )
+        if $p->{ dim } > 0;
+
+    my ( $w, $h ) = $ctx->dims;
+
+    my $scale = $p->{ scale };
+    my $cw    = GlitchVape::VGA::CELL_W * $scale;
+    my $ch    = GlitchVape::VGA::CELL_H * $scale;
+
+    my $columns = int( $w / $cw );
+    my $rows    = int( $h / $ch );
+    return if $columns < 1 || $rows < 1;
+
+    my $stars = _round( $columns * $rows * $p->{ density } / 100 );
+    return unless $stars > 0;
+
+    # The step is the frame, so frame twelve is the sky after twelve more
+    # steps than frame eleven's -- and a still is step nought, which is the
+    # settled sky rather than a fresh one.
+    my $sky = GlitchVape::Starfield::sky(
+        rng     => $ctx->rng_fixed( 'stars' ),
+        columns => $columns,
+        rows    => $rows,
+        stars   => $stars,
+        flare   => $p->{ flare },
+        step    => $ctx->frames > 1 ? $ctx->frame : 0,
+    );
+
+    my @ink  = _star_inks( $ctx, $p, $stars );
+    my @ramp = GlitchVape::Starfield::ramp();
+    my $hot  = pack 'C3', 255, 255, 255;
+
+    GlitchVape::Pixels->edit(
+        $ctx,
+        sub {
+            my ( $px ) = @_;
+
+            # A cell rendered once is a cell rendered once, and a sky is
+            # mostly the same dim character in the same colour.
+            my %cell;
+
+            for my $n ( 0 .. $#$sky )
+            {
+                my ( $col, $row, $bright ) = @{ $sky->[ $n ] };
+
+                my $char = $ramp[ $bright ];
+                my $fore = $bright ? $hot : $ink[ $n ];
+
+                $cell{ "$char/$fore" } ||= GlitchVape::VGA::cell_rows(
+                    char       => $char,
+                    fore       => $fore,
+                    back       => "\0\0\0",
+                    scale      => $scale,
+                    background => 0,
+                );
+
+                GlitchVape::VGA::blit(
+                    px         => $px,
+                    x          => $col * $cw,
+                    y          => $row * $ch,
+                    rows       => $cell{ "$char/$fore" },
+                    scale      => $scale,
+                    opacity    => $p->{ opacity },
+                    background => 0,
+                );
+            }
+
+            return;
+        }
+    );
+
+    return;
+}
+
+# One colour per star, held for the life of the render so that a star keeps
+# its colour when it burns out and comes back somewhere else. Its own stream,
+# so that turning the switch on does not shift the sky underneath it.
+sub _star_inks
+{
+    my ( $ctx, $p, $stars ) = @_;
+
+    unless ( $p->{ random } )
+    {
+        return ( _star_ink( $p->{ color } ) ) x $stars;
+    }
+
+    my $rng     = $ctx->rng_fixed( 'stars:colour' );
+    my @colours = GlitchVape::VGA::colours();
+
+    # From one rather than nought: a black star on a dark sky is a star
+    # nobody can see, and offering it as one in sixteen is offering a hole.
+    return map { $colours[ $rng->int_between( 1, $#colours ) ] } 1 .. $stars;
+}
+
+# A colour nobody can read is teal, which is what the screensaver used. Not
+# fatal: a preset with a typo in it should draw a sky, not stop the render.
+sub _star_ink
+{
+    my ( $hex ) = @_;
+
+    my @rgb = ( $hex // q{} ) =~
+        m{ \A [#]? ([0-9a-f]{2}) ([0-9a-f]{2}) ([0-9a-f]{2}) \z }xi;
+
+    return pack 'C3', 0, 170, 170 unless @rgb == 3;
+
+    return pack 'C3', map { hex } @rgb;
+}
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+
+$R->register(
+    name    => 'maximised',
+    title   => 'Maximised Window',
+    stage   => 'framing',
+    summary => 'The same 1995 window, with the picture inside it',
+    doc     => <<'DOC',
+C<chicago> drawn the other way round: instead of a window laid over the
+picture with a hole in it, a window built I<around> the picture, the way a
+maximised one is built around whatever it is showing.
+
+So it takes no size and no position. A maximised window has neither -- it is
+as big as what is in it plus its own furniture, and it is wherever the screen
+is. It runs at C<framing> for the same reason C<letterbox> does: it makes the
+picture bigger than the one it was handed, and everything that came before
+happened to the picture rather than to the frame around it.
+
+Two things follow from the window being maximised rather than floating, and
+both are drawn rather than settable. Maximise becomes Restore, which is the
+one thing on a caption that says which of the two a window is. And the sizing
+grip goes, because a maximised window cannot be resized and offering a handle
+for doing it would be a lie about what the picture is.
+
+The chrome is a whole number of window pixels across, so the client area is
+too, and the picture is centred in it. What is left over is fewer pixels than
+C<zoom> and shows as the application's own canvas -- which is what an image
+viewer looks like anyway.
+DOC
+    params => {
+        zoom => {
+            default => 0,
+            type    => 'int',
+            min     => 0,
+            max     => 12,
+            order   => 1,
+            doc     => 'Image pixels per window pixel; 0 works it out from '
+                . 'the picture',
+        },
+        theme => {
+            default => 'default',
+            type    => 'enum',
+            order   => 2,
+            values  => [ GlitchVape::Chicago::themes() ],
+            doc     => 'Which of the schemes from the Appearance tab the '
+                . 'window is painted in',
+        },
+        icon => {
+            default => 'glitchvape',
+            type    => 'enum',
+            order   => 3,
+            values  => [ GlitchVape::Chicago::icons() ],
+            doc     => 'The picture in the top left: this program, or the '
+                . 'document page the window was scavenged from',
+        },
+        title => {
+            default     => 'Untitled',
+            type        => 'str',
+            order       => 4,
+            placeholder => 'no caption text',
+            doc         => 'The caption. Empty leaves the bar and its '
+                . 'buttons with nothing written on them',
+        },
+        menu => {
+            default     => 'File  Edit  Search  Help',
+            type        => 'str',
+            order       => 5,
+            placeholder => 'no menu bar at all',
+            doc         => 'The menu bar. Empty removes the bar rather than '
+                . 'emptying it, because a blank strip of grey is not a menu',
+        },
+        font => {
+            default => 'ui',
+            type    => 'str',
+            order   => 6,
+            doc     => 'Font role or path for both strings. The ui role is '
+                . 'W95FA where that is installed, which is what a window of '
+                . 'this period set its caption in',
+        },
+        type_size => {
+            default => 12,
+            type    => 'int',
+            min     => 12,
+            max     => 18,
+            order   => 7,
+            doc     => 'Size of the caption and menu lettering. Never drawn '
+                . 'smaller than the chosen font can manage, which for some '
+                . 'faces is a pixel more than this',
+        },
+        scrollbars => {
+            default => 1,
+            type    => 'bool',
+            order   => 8,
+            doc     => 'A scroll bar down the right and along the bottom, '
+                . 'outside the picture rather than over it',
+        },
+        thumb => {
+            default => 0.55,
+            type    => 'num',
+            min     => 0.05,
+            max     => 1,
+            order   => 9,
+            needs   => { scrollbars => 1 },
+            doc     => 'How much of its bar each thumb covers, which is how '
+                . 'much of the document the window is saying it can see',
+        },
+        scroll => {
+            default => 0.15,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            order   => 10,
+            needs   => { scrollbars => 1 },
+            doc     => 'Where along its bar each thumb sits',
+        },
+    },
+    apply => \&_maximised,
+);
+
+sub _maximised
+{
+    my ( $ctx, $p ) = @_;
+    require Image::Magick;
+
+    my ( $iw, $ih ) = $ctx->dims;
+    return unless $iw && $ih;
+
+    my $zoom = int( $p->{ zoom } || 0 ) || _chicago_zoom( $ih );
+
+    my $menu = $p->{ menu };
+
+    # The window is drawn a pixel at a time and then enlarged whole, so every
+    # measurement in it is a multiple of the zoom -- the client area included.
+    # Rounded up rather than down, so the picture is never cropped to make it
+    # fit its own frame.
+    my $cw = int( ( $iw + $zoom - 1 ) / $zoom );
+    my $ch = int( ( $ih + $zoom - 1 ) / $zoom );
+
+    my $win = GlitchVape::Chicago::render(
+        client     => [ $cw, $ch ],
+        maximised  => 1,
+        theme      => $p->{ theme },
+        icon       => $p->{ icon },
+        caption    => $p->{ title },
+        menu       => $menu,
+        font       => GlitchVape::Fonts::resolve( $p->{ font } ),
+        type_size  => $p->{ type_size },
+        scrollbars => $p->{ scrollbars },
+        thumb      => $p->{ thumb },
+        scroll     => $p->{ scroll },
+    );
+
+    my ( $ww, $wh ) = ( $win->Get( 'width' ), $win->Get( 'height' ) );
+
+    if ( $zoom > 1 )
+    {
+        # Sample, not Resize: see the note in _chicago.
+        GlitchVape::Magick::check(
+            $win->Sample(
+                geometry => sprintf '%dx%d!',
+                $ww * $zoom, $wh * $zoom
+            ),
+            'maximised: could not enlarge the window'
+        );
+    }
+
+    my ( $hx, $hy ) = GlitchVape::Chicago::client_origin( menu => $menu );
+
+    # The sliver: the client area rounded up to whole window pixels is at most
+    # zoom-1 bigger than the picture, and the picture sits in the middle of it.
+    my $out = Image::Magick->new(
+        size => sprintf '%dx%d',
+        $ww * $zoom, $wh * $zoom
+    );
+    $out->Read( 'xc:' . GlitchVape::Chicago::ink( $p->{ theme }, 'F' ) );
+
+    GlitchVape::Magick::check(
+        $out->Composite(
+            image   => $ctx->image->[ 0 ],
+            compose => 'Over',
+            x       => $hx * $zoom + int( ( $cw * $zoom - $iw ) / 2 ),
+            y       => $hy * $zoom + int( ( $ch * $zoom - $ih ) / 2 ),
+        ),
+        'maximised: could not place the picture in the window'
+    );
+
+    GlitchVape::Magick::check(
+        $out->Composite( image => $win->[ 0 ], compose => 'Over' ),
+        'maximised: could not draw the window around it'
+    );
+
+    $ctx->image( $out );
+
+    return;
 }
 
 # ---------------------------------------------------------------------------

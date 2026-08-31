@@ -14,7 +14,7 @@ GlitchVape::Chicago - a 1995 window, drawn rather than stretched
 =head1 DESCRIPTION
 
 Everything needed to draw a Windows 95 window at any size: the metrics, the
-two bevel rules, and the nine glyphs that are pictures rather than rules.
+two bevel rules, and the ten glyphs that are pictures rather than rules.
 L<GlitchVape::Effect::Overlay>'s C<chicago> effect composites what comes out
 over the photograph, with the middle left transparent.
 
@@ -78,10 +78,10 @@ preset is a file and a file can outlive the version that wrote it.
 =head1 WHY THE GLYPHS ARE IN THE FILE
 
 The same argument L<GlitchVape::VGA> makes about its font, for the same
-reason. What is left once the rules have drawn everything they can is nine
+reason. What is left once the rules have drawn everything they can is ten
 small pictures, none bigger than sixteen pixels square, most of them two
-colours. Held as PNGs they would be nine files to install, nine files to
-package, and nine files that could go missing at run time; held here they are
+colours. Held as PNGs they would be ten files to install, ten files to
+package, and ten files that could go missing at run time; held here they are
 legible in a diff, and the effect cannot half-render.
 
 They are scaled by pixel replication and never by interpolation, so a window
@@ -99,8 +99,20 @@ which is what makes this a description of that window rather than of a window.
 
 The arrows, the caption glyphs and the sizing grip are geometry -- triangles,
 a bar, a box, a cross, three diagonal ribs. The document icon is the one piece
-that is somebody's artwork rather than a shape, and it is one table entry to
-replace if that matters.
+that is somebody else's artwork rather than a shape, and it is no longer what
+a window arrives with: the caption holds this program's own icon unless asked
+for the other one.
+
+That icon is the tenth bitmap and the only one that did not come off the
+screenshot. It is F<assets/artwork/icon-256.png> squeezed into the sixteen
+pixels Windows gives a system menu -- a redraw rather than a resize, because
+an outline scaled to sixteen pixels is mush and the two letterforms are the
+whole of what has to survive. It comes out exact, which is luck worth writing
+down: the V and the A there are both drawn on a seven-by-eleven pixel grid,
+eight cells wide and ten tall, so the pair is exactly sixteen cells across and
+one cell becomes one pixel with nothing rounded. Its purple and its pink are
+in C<%ARTWORK> rather than in a theme, because an application's icon did not
+change colour with the desktop scheme.
 
 =head1 WHAT SIZE THE LETTERING IS
 
@@ -123,17 +135,26 @@ size a font can be drawn at is the one where its stem reaches a whole pixel:
 
     smallest size = ceil( 1 / stem, measured as a fraction of the em )
 
-C<type_size> measures the stem by drawing an C<l> at a five-hundred-pixel em
-and reading its width, which is a measurement rather than a table, so a font
-nobody here has seen gets the same answer. The two that ship give:
+C<smallest_type> measures the stem by drawing an C<l> at a five-hundred-pixel
+em and reading its width, which is a measurement rather than a table, so a
+font nobody here has seen gets the same answer. The two that ship give:
 
     pixel role   stem 0.084 em   ->  12   its design size, unchanged
     ui   (W95FA) stem 0.080 em   ->  13   one pixel up, and legible
+
+That is a I<floor> and not the size. The size is C<type_size>'s own argument,
+twelve by default because twelve is what the interface used, and the floor
+only ever raises it. Which is the whole reason it is a floor rather than a
+value the caller has to ask for: it used to be that nought meant "measure it"
+and anything else was taken literally, so a slider went from ordinary
+lettering at nought to one-pixel lettering at one and back to ordinary at
+thirteen. Nothing about dragging it said so.
 
 Nothing is scaled to compensate. Thirteen-pixel lettering in an eighteen-pixel
 caption bar is what Windows would have done with a font that size, and the
 lettering is centred in its bar rather than set at an offset from the top, so
 a font one pixel taller than the last one still sits where it should.
+Eighteen points is as large as that bar will hold.
 
 =cut
 
@@ -175,6 +196,14 @@ my %THEME = (
         K => [ 0,   0,   0 ],
         B => [ 79,  101, 125 ],
     },
+);
+
+# Colours that belong to a picture rather than to the interface, merged into
+# whichever theme is in force. An application's icon did not change colour
+# with the desktop scheme then and does not here: a logo is a logo.
+my %ARTWORK = (
+    P => [ 154, 118, 216 ],    # the icon's sky, above the horizon
+    Q => [ 217, 162, 227 ],    # and below it
 );
 
 =head2 themes()
@@ -241,11 +270,35 @@ my %GLYPH = (
 
     # The document icon, at (6,5). Sixteen tall like every small icon of the
     # period, thirteen wide because the page it draws is not square.
-    icon => [
+    notepad => [
         '..K.K.K.K.K..', '.KWSWSWSWSWK.', 'SWKWKWKWKWKWK', 'SWWWWWWWWWWFK',
         'SWWWWWWWWWWFK', 'SWWKKKWKKWWFK', 'SWWWWWWWWWWFK', 'SWWKKKKKKWWFK',
         'SWWWWWWWWWWFK', 'SWWKKKKKKWWFK', 'SWWWWWWWWWWFK', 'SWWKKKKKKWWFK',
         'SWWWWWWWWWWFK', 'SWWWWWWWWWWFK', 'SFFFFFFFFFFFK', '.KKKKKKKKKKK.',
+    ],
+
+    # This program's own icon, squeezed into the sixteen pixels Windows gives
+    # a system menu. It is a scaling rather than a redrawing, and it comes out
+    # exact, which is luck worth writing down: the V and the A in
+    # F<assets/artwork/icon-256.png> are both drawn on a seven-by-eleven pixel
+    # grid, eight cells wide and ten tall each -- so the pair is exactly
+    # sixteen cells across, one cell to one pixel, with nothing rounded.
+    #
+    # The two letters are the same shape. Turn the V upside down and it is the
+    # A, but for one row: where the V has three rows of open stem the A has
+    # two and then a crossbar, which is the whole of what makes an A an A.
+    #
+    # The white band under the V and the black one under the A are the
+    # horizon, and they are that way round in the original too.
+    glitchvape => [
+        'PPPPPPPPPPPPPPPP', 'PPPPPPPPPPPPPPPP',
+        'PPPPPPPPPPPPPPPP', 'WWPPPPWWPPPKKPPP',
+        'WWPPPPWWPPPKKPPP', 'PWWPPWWPPPKKKKPP',
+        'PWWPPWWPPPKKKKPP', 'PWWPPWWPPPKPPKPP',
+        'PPWPPWPPPKKPPKKP', 'PPWWWWPPPKKPPKKP',
+        'PPWWWWPPPKKKKKKP', 'PPPWWPPPKKPPPPKK',
+        'PPPWWPPPKKPPPPKK', 'QQQQQQQQQQQQQQQQ',
+        'WWWWWWWWKKKKKKKK', 'QQQQQQQQQQQQQQQQ',
     ],
 
     # The three caption glyphs, at (428,15), (443,8) and (462,9). Minimise is
@@ -256,6 +309,15 @@ my %GLYPH = (
         'KKKKKKKKK', 'KKKKKKKKK', 'K.......K', 'K.......K',
         'K.......K', 'K.......K', 'K.......K', 'K.......K',
         'KKKKKKKKK',
+    ],
+
+    # What Maximise turns into once the window is. Two windows overlapping,
+    # the front one down and left -- the same nine pixels square as the box
+    # it replaces, so it sits at the same offset.
+    restore => [
+        '..KKKKKKK', '..KKKKKKK', '..K.....K', 'KKKKKKK.K',
+        'KKKKKKK.K', 'K.....K.K', 'K.....KKK', 'K.....K..',
+        'KKKKKKK..',
     ],
     close => [
         'KK....KK', '.KK..KK.', '..KKKK..', '...KK...',
@@ -303,12 +365,44 @@ my %GLYPH = (
 my %GLYPH_AT = (
     minimise => [ 4, 9 ],
     maximise => [ 3, 2 ],
+    restore  => [ 3, 2 ],
     close    => [ 4, 3 ],
     up       => [ 4, 6 ],
     down     => [ 4, 6 ],
     left     => [ 5, 4 ],
     right    => [ 6, 4 ],
 );
+
+=head2 icons()
+
+The icon names the caption can be given, in the order they should be offered.
+
+=cut
+
+sub icons { return qw(glitchvape notepad) }
+
+my %IS_ICON = map { $_ => 1 } icons();
+
+# Guarded rather than trusted, and not only against a name from a later
+# version: every glyph in this file lives in one table, so an icon named
+# 'grip' would otherwise draw three diagonal ribs in the caption.
+sub _icon_for
+{
+    my ( $name ) = @_;
+
+    return $IS_ICON{ $name // q{} } ? $name : ( icons() )[ 0 ];
+}
+
+# How wide the chosen one is. The notepad page is thirteen pixels and the logo
+# is sixteen, so everything to the right of the icon -- the caption text, and
+# the width below which the caption's own contents stop fitting -- has to ask
+# rather than assume.
+sub _icon_width
+{
+    my ( $name ) = @_;
+
+    return length $GLYPH{ _icon_for( $name ) }[ 0 ];
+}
 
 =head2 metrics()
 
@@ -326,6 +420,67 @@ sub metrics
         sunken  => SUNKEN,
         bar     => BAR,
     };
+}
+
+=head2 ink( $theme, $role )
+
+One of a theme's five inks as C<#RRGGBB>, for a caller that has to paint
+something beside the window in a colour that belongs with it.
+
+=cut
+
+sub ink
+{
+    my ( $theme, $role ) = @_;
+
+    my $palette = $THEME{ $theme    // q{} } || $THEME{ default };
+    my $rgb     = $palette->{ $role // q{} } || $palette->{ F };
+
+    return sprintf '#%02X%02X%02X', @$rgb;
+}
+
+=head2 around( %arg )
+
+    client     => [ $width, $height ]
+    menu       => the menu string, or undef
+    scrollbars => whether there are any
+
+The window size that puts a client area of that size inside it, as
+C<< ( $width, $height ) >>. The inverse of the layout in L</render( %arg )>,
+and what a window built I<around> a picture needs rather than a window built
+to a size with a hole in it.
+
+=cut
+
+sub around
+{
+    my ( %arg ) = @_;
+
+    my ( $cw, $ch ) = @{ $arg{ client } };
+
+    my $bars = $arg{ scrollbars }                          ? BAR  : 0;
+    my $menu = defined $arg{ menu } && length $arg{ menu } ? MENU : 0;
+
+    return (
+        $cw + 2 * SUNKEN + $bars + 2 * FRAME,
+        $ch + 2 * SUNKEN + $bars + 2 * FRAME + CAPTION + $menu,
+    );
+}
+
+=head2 client_origin( %arg )
+
+Where that client area's top left corner lands inside the window, as
+C<< ( $x, $y ) >>. Takes the same C<menu>.
+
+=cut
+
+sub client_origin
+{
+    my ( %arg ) = @_;
+
+    my $menu = defined $arg{ menu } && length $arg{ menu } ? MENU : 0;
+
+    return ( FRAME + SUNKEN, FRAME + CAPTION + $menu + SUNKEN );
 }
 
 =head2 minimum( %arg )
@@ -346,7 +501,12 @@ sub minimum
     # Wide enough for the caption's own contents, which is what actually binds:
     # the icon, the three buttons and their gap do not shrink.
     my $caption =
-        ICON_X + 13 + BUTTON_IN + 3 * BUTTON_W + BUTTON_GAP + BUTTON_IN;
+        ICON_X +
+        _icon_width( $arg{ icon } ) +
+        BUTTON_IN +
+        3 * BUTTON_W +
+        BUTTON_GAP +
+        BUTTON_IN;
 
     my $bars = $arg{ scrollbars } ? BAR : 0;
 
@@ -369,9 +529,13 @@ sub minimum
     width       => the window's width, in the pixels it is drawn in
     height      => its height
     theme       => which palette, from L</themes()>
+    icon        => which system-menu icon, from L</icons()>
+    client      => [ $w, $h ] in place of width and height: size it to fit
+    maximised   => Restore in place of Maximise, and no sizing grip
     caption     => the title string, or undef for a bare caption bar
     menu        => the menu string, or undef for no menu bar at all
     font        => a font file for both, from GlitchVape::Fonts
+    type_size   => the size to set them at; see L</type_size( $font, $wanted )>
     scrollbars  => draw a scroll bar down the right and along the bottom
     grip        => draw the sizing grip in the corner between them
     scroll      => 0..1, where along its bar each thumb sits
@@ -396,6 +560,12 @@ sub render
 
     my $w = $arg{ width };
     my $h = $arg{ height };
+
+    # A window asked for by what has to go inside it rather than by how big it
+    # is, which is what a maximised one is: the picture is the given and the
+    # chrome is however much the chrome is.
+    ( $w, $h ) = around( %arg, menu => $menu ) if $arg{ client };
+
     $w = $min_w if !$w || $w < $min_w;
     $h = $min_h if !$h || $h < $min_h;
 
@@ -413,7 +583,7 @@ sub render
     my $y  = FRAME;
     my $iw = $w - 2 * FRAME;
 
-    _caption( $buf, $x, $y, $iw );
+    _caption( $buf, $x, $y, $iw, $arg{ icon }, $arg{ maximised } );
     $y += CAPTION;
 
     if ( defined $menu )
@@ -429,10 +599,14 @@ sub render
 
     _text(
         $img,
-        $arg{ font },
-        $arg{ type_size } || type_size( $arg{ font } ),
-        $arg{ caption },
-        $menu, $w
+        {
+            font    => $arg{ font },
+            size    => type_size( $arg{ font }, $arg{ type_size } ),
+            caption => $arg{ caption },
+            menu    => $menu,
+        },
+        $w,
+        _icon_width( $arg{ icon } )
     );
 
     return $img;
@@ -443,21 +617,22 @@ sub render
 
 sub _caption
 {
-    my ( $buf, $x, $y, $w ) = @_;
+    my ( $buf, $x, $y, $w, $icon, $maximised ) = @_;
 
     _fill( $buf, $x, $y, $w, CAPTION, 'B' );
-    _glyph( $buf, $x + ICON_X, $y + ICON_Y, 'icon' );
+    _glyph( $buf, $x + ICON_X, $y + ICON_Y, _icon_for( $icon ) );
 
     # From the right, because that is where they are anchored: Windows leaves
     # a gap before Close and none between the other two, so that the button
     # that loses the work is the one that is hard to hit by accident.
     my $at = $x + $w - BUTTON_IN - BUTTON_W;
 
-    for my $button (
-        [ close    => BUTTON_GAP ],
-        [ maximise => 0 ],
-        [ minimise => 0 ]
-        )
+    # Maximise is Restore once the window is maximised, which is the one
+    # thing on the caption that says which of the two it is.
+    my $middle = $maximised ? 'restore' : 'maximise';
+
+    for my $button ( [ close => BUTTON_GAP ], [ $middle => 0 ],
+        [ minimise => 0 ] )
     {
         my ( $glyph, $gap ) = @$button;
 
@@ -510,7 +685,11 @@ sub _well
     _scrollbar( $buf, $arg, horizontal => [ $ix, $iy + $dh, $dw, BAR ] );
 
     _fill( $buf, $ix + $dw, $iy + $dh, BAR, BAR, 'F' );
-    _glyph( $buf, $ix + $dw, $iy + $dh, 'grip' ) if $arg->{ grip };
+
+    # A maximised window cannot be resized, so it does not offer a handle for
+    # doing it -- whatever the setting says.
+    _glyph( $buf, $ix + $dw, $iy + $dh, 'grip' )
+        if $arg->{ grip } && !$arg->{ maximised };
 
     return;
 }
@@ -699,7 +878,7 @@ sub _canvas
         # A name nobody here knows is the default rather than an error. A
         # preset written against a later version should come out looking
         # ordinary, not fail to draw.
-        ink  => $THEME{ $theme } || $THEME{ default },
+        ink  => { %ARTWORK, %{ $THEME{ $theme } || $THEME{ default } } },
         data => "\0" x ( $w * $h * 4 ),
     };
 }
@@ -795,13 +974,39 @@ sub _image
 # over four-pixel bevels is a photograph of a window with a caption pasted on;
 # the whole illusion is that this is a small picture somebody has zoomed into.
 
-=head2 type_size( $font )
+=head2 type_size( $font, $wanted )
 
-The smallest whole pointsize C<$font> can be drawn at without losing strokes,
-never below the twelve the interface wants and never above C<TEXT_MAX>.
+The pointsize to set the window's lettering at: C<$wanted>, or the twelve the
+interface itself used if that is not given -- but never smaller than C<$font>
+can be drawn at without losing strokes.
 
-Measured, not looked up: see L</WHAT SIZE THE LETTERING IS> for why the answer
-is a property of the font rather than of this program.
+The floor is what makes this a plain size rather than a setting with a trick
+in it. Asking for less than a font can manage is always a mistake, so it is
+quietly not done, and the number can be read as the size it is: a bigger one
+never gives smaller lettering, and there is no value that means something
+other than a size.
+
+Measured rather than looked up -- see L</WHAT SIZE THE LETTERING IS> for why
+the floor is a property of the font rather than of this program.
+
+=cut
+
+sub type_size
+{
+    my ( $font, $wanted ) = @_;
+
+    $wanted = TEXT_SIZE unless $wanted && $wanted > 0;
+
+    my $floor = smallest_type( $font );
+
+    return $wanted > $floor ? $wanted : $floor;
+}
+
+=head2 smallest_type( $font )
+
+The floor on its own: the smallest whole pointsize C<$font> can be drawn at
+without losing strokes, never below the twelve the interface wants and never
+above C<TEXT_MAX>.
 
 =cut
 
@@ -809,7 +1014,7 @@ is a property of the font rather than of this program.
 # render child is a fresh process each time anyway.
 my %SIZE_FOR;
 
-sub type_size
+sub smallest_type
 {
     my ( $font ) = @_;
 
@@ -881,7 +1086,10 @@ sub _measure
 
 sub _text
 {
-    my ( $img, $font, $size, $caption, $menu, $w ) = @_;
+    my ( $img, $bar, $w, $icon ) = @_;
+
+    my ( $font, $size, $caption, $menu ) =
+        @{ $bar }{ qw(font size caption menu) };
 
     return unless $font;
 
@@ -890,7 +1098,7 @@ sub _text
         # Up to the first caption button and no further. A caption too long
         # for its bar is cut off, as it is on the real thing -- letting it run
         # under the buttons turns Minimise into a letterform.
-        my $from = FRAME + ICON_X + 13 + CAPTION_GAP;
+        my $from = FRAME + ICON_X + $icon + CAPTION_GAP;
         my $to   = $w - FRAME - BUTTON_IN - 3 * BUTTON_W - BUTTON_GAP;
 
         _annotate( $img, $font, $size, $caption, '#FFFFFF',

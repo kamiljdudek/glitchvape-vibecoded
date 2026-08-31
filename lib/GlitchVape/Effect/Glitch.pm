@@ -819,11 +819,12 @@ sub _vgatext
                     my $char = $chars[ $rng->int_between( 0, $#chars ) ];
                     my $key  = "$char/$fore/$back";
 
-                    $cell{ $key } ||= _cell_rows(
-                        $char,
-                        $colours[ $fore ],
-                        $colours[ $back ],
-                        $scale, $p->{ background }
+                    $cell{ $key } ||= GlitchVape::VGA::cell_rows(
+                        char       => $char,
+                        fore       => $colours[ $fore ],
+                        back       => $colours[ $back ],
+                        scale      => $scale,
+                        background => $p->{ background },
                     );
 
                     for my $r ( 0 .. GlitchVape::VGA::CELL_H - 1 )
@@ -832,7 +833,15 @@ sub _vgatext
                     }
                 }
 
-                _blit( $px, $x, $y, \@row, $p );
+                GlitchVape::VGA::blit(
+                    px         => $px,
+                    x          => $x,
+                    y          => $y,
+                    rows       => \@row,
+                    scale      => $scale,
+                    opacity    => $p->{ opacity },
+                    background => $p->{ background },
+                );
             }
 
             return;
@@ -872,122 +881,6 @@ sub _run_origin
         $rng->int_between( 0, $columns - $cells ) * $cw,
         $rng->int_between( 0, $rows - 1 ) * $ch,
     );
-}
-
-# One character cell as sixteen strings, one per font row, each already
-# widened to the scaled cell width. With the background off, the pixels the
-# glyph does not light become a run of NUL bytes and are treated as holes by
-# the blit rather than as black.
-sub _cell_rows
-{
-    my ( $char, $fore, $back, $scale, $background ) = @_;
-
-    my $glyph = GlitchVape::VGA::glyph( $char )
-        || GlitchVape::VGA::glyph( ' ' );
-
-    my $lit   = $fore x $scale;
-    my $unlit = $back x $scale;
-    $unlit = "\0\0\0" x $scale unless $background;
-
-    my @rows;
-
-    for my $byte ( @$glyph )
-    {
-        my $row = q{};
-
-        for my $bit ( 0 .. GlitchVape::VGA::CELL_W - 1 )
-        {
-            if ( $byte & ( 1 << ( GlitchVape::VGA::CELL_W - 1 - $bit ) ) )
-            {
-                $row .= $lit;
-            }
-            else
-            {
-                $row .= $unlit;
-            }
-        }
-
-        push @rows, $row;
-    }
-
-    return \@rows;
-}
-
-# Write the run's rows into the buffer, each font row repeated `scale` times.
-sub _blit
-{
-    my ( $px, $x, $y, $rows, $p ) = @_;
-
-    my $scale      = $p->{ scale };
-    my $opacity    = $p->{ opacity };
-    my $background = $p->{ background };
-
-    my $wide = length( $rows->[ 0 ] ) / 3;
-    my $line = 0;
-
-    for my $row ( @$rows )
-    {
-        for my $again ( 1 .. $scale )
-        {
-            my $at = $y + $line;
-            $line++;
-
-            last if $at >= $px->height;
-
-            my $under = $px->rect( $x, $at, $wide, 1 );
-            my $over  = $row;
-
-            $over = _punch( $over, $under ) unless $background;
-            $over = _blend( $over, $under, $opacity ) if $opacity < 1;
-
-            $px->set_rect( $x, $at, $wide, 1, $over );
-        }
-    }
-
-    return;
-}
-
-# Put the picture back wherever the glyph left a hole. The holes are NUL
-# triples, which no CGA colour is -- black is a colour the card can draw, so
-# it has to stay drawable.
-sub _punch
-{
-    my ( $over, $under ) = @_;
-
-    my $out = q{};
-
-    for my $n ( 0 .. length( $over ) / 3 - 1 )
-    {
-        my $pixel = substr $over, $n * 3, 3;
-
-        if ( $pixel eq "\0\0\0" )
-        {
-            $pixel = substr $under, $n * 3, 3;
-        }
-
-        $out .= $pixel;
-    }
-
-    return $out;
-}
-
-sub _blend
-{
-    my ( $over, $under, $opacity ) = @_;
-
-    # Not named @a and @b: those belong to sort, and assigning to them
-    # without localising is a way to break an unrelated sort elsewhere.
-    my @top    = unpack 'C*', $over;
-    my @bottom = unpack 'C*', $under;
-
-    my $keep = 1 - $opacity;
-
-    for my $n ( 0 .. $#top )
-    {
-        $top[ $n ] = int( $top[ $n ] * $opacity + $bottom[ $n ] * $keep );
-    }
-
-    return pack 'C*', @top;
 }
 
 1;

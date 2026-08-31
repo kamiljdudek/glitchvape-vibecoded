@@ -19,6 +19,7 @@ BEGIN
 }
 
 use GlitchVape              ();
+use GlitchVape::Generator   ();
 use GlitchVape::Registry    ();
 use GlitchVape::GUI::Params ();
 
@@ -376,6 +377,99 @@ sub shown_as
     {
         is_deeply [ $parse->( $bad ) ], \@fallback,
             "'$bad' falls back rather than being read as a date";
+    }
+}
+
+# ---------------------------------------------------------------------------
+# A seed is a number nobody wants to choose
+
+# The same argument as the calendar's, from the other direction. A seed is
+# there so a render can be repeated -- type the number back in and the same
+# clicks come out -- so it has to stay a number you can read and type. But
+# almost every time anybody touches one, what they want is not a particular
+# number, it is a different one, and a spin button offers 1, 2, 3 as though
+# the numbers near each other were near each other.
+#
+# So both: the box for the rare case and a button for the common one.
+{
+    my @with_seed =
+        grep { GlitchVape::Generator::get( $_ )->{ params }{ seed } }
+        GlitchVape::Generator::kinds();
+
+    ok scalar @with_seed, 'some generated tracks have a seed';
+
+    for my $kind ( @with_seed )
+    {
+        my $spec = GlitchVape::Generator::get( $kind )->{ params }{ seed };
+
+        my $built = GlitchVape::GUI::Params->build(
+            effect    => $kind,
+            name      => 'seed',
+            spec      => $spec,
+            value     => 1,
+            on_change => sub { },
+        );
+
+        my @kids =
+              $built->{ control }->can( 'get_children' )
+            ? $built->{ control }->get_children
+            : ();
+
+        my ( $spin ) = grep { $_->isa( 'Gtk3::SpinButton' ) } @kids;
+        my ( $roll ) =
+            grep { $_->isa( 'Gtk3::Button' ) && !$_->isa( 'Gtk3::SpinButton' ) }
+            @kids;
+
+        ok $spin, "$kind keeps a box the number can be typed into";
+        ok $roll, "and a button beside it for the case nobody types";
+    }
+}
+
+# ---------------------------------------------------------------------------
+# The button picks a different one, and says so
+
+{
+    my $spec = GlitchVape::Generator::get( 'drive' )->{ params }{ seed };
+
+    my @told;
+    my $built = GlitchVape::GUI::Params->build(
+        effect    => 'drive',
+        name      => 'seed',
+        spec      => $spec,
+        value     => 1,
+        on_change => sub { push @told, $_[ 0 ] },
+    );
+
+    my @kids = $built->{ control }->get_children;
+    my ( $spin ) = grep { $_->isa( 'Gtk3::SpinButton' ) } @kids;
+    my ( $roll ) =
+        grep { $_->isa( 'Gtk3::Button' ) && !$_->isa( 'Gtk3::SpinButton' ) }
+        @kids;
+
+SKIP:
+    {
+        skip 'no reroll button', 4 unless $spin && $roll;
+
+        my %seen;
+        for ( 1 .. 8 )
+        {
+            $roll->clicked;
+            $seen{ $built->{ get }->() }++;
+        }
+
+        cmp_ok scalar keys %seen, '>', 5,
+            'eight presses give eight or nearly eight different seeds';
+
+        cmp_ok scalar @told, '>=', 6,
+            'and the caller hears about each one, so the track re-renders';
+
+        # Which is the half a bare button would have thrown away: a seed you
+        # liked can be written down and put back.
+        $spin->set_value( 4242 );
+
+        is $built->{ get }->(), 4242, 'a seed can still be typed in by hand';
+
+        ok $roll->get_tooltip_text, 'and the button says what it does';
     }
 }
 

@@ -22,7 +22,7 @@ GlitchVape::GUI::Wizard - the three-page Add Effect assistant
 
 =head1 DESCRIPTION
 
-Forty-three effects are too many for one list. The assistant asks three
+Forty-five effects are too many for one list. The assistant asks three
 questions in the order a person actually has them:
 
 =over 4

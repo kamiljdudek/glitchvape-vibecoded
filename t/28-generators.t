@@ -9,14 +9,64 @@ use lib "$FindBin::Bin/../lib";
 
 use Test::More;
 
+use GlitchVape::Drive     ();
 use GlitchVape::Generator ();
 use GlitchVape::Geiger    ();
 use GlitchVape::Heart     ();
+use GlitchVape::Random    ();
 use GlitchVape::Wav       ();
 
-# The two generators whose point is their timing rather than their timbre.
-# What is pinned here is the timing: a Geiger counter that ticks evenly is not
-# a Geiger counter, and a heartbeat with equal gaps is a drum loop.
+# The generators whose point is their timing rather than their timbre. What is
+# pinned here is the timing: a Geiger counter that ticks evenly is not a Geiger
+# counter, a heartbeat with equal gaps is a drum loop, and a hard disk that
+# seeks at a steady rate is a metronome in a box.
+
+# The gaps between one drive's seeks, in seconds.
+sub seek_gaps
+{
+    my ( $seek ) = @_;
+
+    return map { $seek->[ $_ ][ 0 ] - $seek->[ $_ - 1 ][ 0 ] } 1 .. $#$seek;
+}
+
+# One seek on its own: how long it rings for, roughly what pitch, and how
+# loud. Zero crossings stand in for pitch, as a rate rather than a count --
+# the chirps being compared are different lengths, so counting over a fixed
+# window counts silence for one of them and they come out equal.
+sub one_seek
+{
+    my ( $distance ) = @_;
+
+    my @sample = ( 0 ) x int( GlitchVape::Drive::RATE * 0.2 );
+    my $rng    = GlitchVape::Random->new( seed => 4 );
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    GlitchVape::Drive::_chirp( \@sample, 10, $distance, $rng );
+    ## use critic
+
+    my $ends = 0;
+    my $peak = 0;
+    for my $n ( 0 .. $#sample )
+    {
+        next unless abs $sample[ $n ] > 0.002;
+
+        $ends = $n;
+        $peak = abs $sample[ $n ] if abs $sample[ $n ] > $peak;
+    }
+
+    my $crossings = 0;
+    for my $n ( 11 .. $ends )
+    {
+        $crossings++ if ( $sample[ $n ] >= 0 ) != ( $sample[ $n - 1 ] >= 0 );
+    }
+
+    my $hz =
+          $ends > 11
+        ? $crossings * GlitchVape::Drive::RATE / ( 2 * ( $ends - 10 ) )
+        : 0;
+
+    return ( $ends, $hz, $peak );
+}
 
 # ---------------------------------------------------------------------------
 # Both are registered, and the interface can find an icon without being told
@@ -29,6 +79,7 @@ use GlitchVape::Wav       ();
 
     ok $kind{ geiger }, 'geiger is a registered kind';
     ok $kind{ heart },  'heart is a registered kind';
+    ok $kind{ drive },  'drive is a registered kind';
 
     for my $k ( GlitchVape::Generator::kinds() )
     {
@@ -380,6 +431,154 @@ sub split_gaps
     my $line = GlitchVape::Heart::describe( { bpm => 70, sway => 15 } );
     like $line, qr/\N{PLUS-MINUS SIGN}15/,
         'and the fluctuation is reported as a character, not as bytes';
+}
+
+# ---------------------------------------------------------------------------
+# A drive's seeks come in bursts, which is what says hard disk
+
+# The one thing that makes the sound recognisable, and the one an even
+# scattering of ticks would lose. A drive is idle almost all the time and then
+# something reads a file and the head moves twenty times in half a second, so
+# the gaps have to be bimodal: a cloud of short ones inside bursts and a
+# handful of long ones between them.
+#
+# Asked of the seek schedule rather than of the samples, because a rattle of
+# seeks fifteen milliseconds apart overlaps in the wave and no onset detector
+# would separate them -- the same reason t/28's Geiger tests read the click
+# schedule instead of the audio.
+{
+    my $spec = {
+        seconds  => 60,
+        activity => 0.35,
+        travel   => 0.3,
+        seed     => 5,
+    };
+
+    my $seek = GlitchVape::Drive::seeks( $spec, 60 );
+
+    cmp_ok scalar @$seek, '>', 30, 'a drive at rest still does some work';
+
+    my @gap = seek_gaps( $seek );
+
+    my $inside  = grep { $_ < 0.1 } @gap;
+    my $between = grep { $_ > 0.5 } @gap;
+
+    cmp_ok $inside,  '>', 0.5 * scalar @gap, 'most gaps are inside a burst';
+    cmp_ok $between, '>', 2, 'and some are the quiet between bursts';
+
+    # Which is the bit an even scatter would fail: the longest quiet has to be
+    # many times the typical gap, not a few times it.
+    my @sorted = sort { $a <=> $b } @gap;
+    my $median = $sorted[ $#sorted / 2 ];
+
+    cmp_ok $sorted[ -1 ], '>', 10 * $median,
+        'and the longest quiet dwarfs the usual gap, as an idle drive does';
+}
+
+# ---------------------------------------------------------------------------
+# Activity changes the quiet, not the bursts
+
+# Turning it up should mean the drive is asked for something more often, not
+# that it seeks faster while it is working -- a drive's seek rate inside a
+# burst is a property of the drive.
+{
+    my $busy = sub {
+        my ( $activity ) = @_;
+
+        my $seek = GlitchVape::Drive::seeks(
+            { seconds => 60, activity => $activity, travel => 0.3, seed => 9 },
+            60
+        );
+
+        my @gap = seek_gaps( $seek );
+
+        my @inside = sort { $a <=> $b } grep { $_ < 0.1 } @gap;
+
+        return ( scalar @$seek, $inside[ $#inside / 2 ] );
+    };
+
+    my ( $quiet, $quiet_gap ) = $busy->( 0.1 );
+    my ( $loud,  $loud_gap )  = $busy->( 0.9 );
+
+    cmp_ok $loud, '>', 3 * $quiet, 'a busy drive does far more work';
+
+    cmp_ok abs( $loud_gap - $quiet_gap ), '<', 0.01,
+        'but the seeks inside a burst are as far apart either way';
+
+    is_deeply GlitchVape::Drive::seeks(
+        { seconds => 60, activity => 0, seed => 9 }, 60
+        ),
+        [], 'and at nothing at all it only spins';
+}
+
+# ---------------------------------------------------------------------------
+# A longer seek is a longer, lower chirp
+
+# The other half of what makes it a drive rather than a click track. The head
+# is a mass on a coil: a hop is a tick and a full stroke is a lower brrp, and
+# seek time goes as roughly the square root of the distance because the
+# actuator spends the move speeding up and then slowing down.
+{
+
+    my ( $hop_len,  $hop_pitch,  $hop_peak )  = one_seek( 0.02 );
+    my ( $full_len, $full_pitch, $full_peak ) = one_seek( 1 );
+
+    cmp_ok $full_len, '>', 2 * $hop_len,
+        'a full stroke rings far longer than a hop';
+
+    cmp_ok $full_pitch, '<', 0.75 * $hop_pitch,
+        'and audibly lower, which is the actuator driven harder for longer'
+        or diag sprintf 'hop %.0f Hz, full stroke %.0f Hz', $hop_pitch,
+        $full_pitch;
+
+    # Nothing anywhere near full scale, at any distance. An unnormalised
+    # two-pole resonator has a gain of eighty at the ringiest end of the
+    # range, and what came out was not loud, it was clipped.
+    for my $distance ( 0, 0.25, 0.5, 0.75, 1 )
+    {
+        my ( undef, undef, $peak ) = one_seek( $distance );
+
+        cmp_ok $peak, '<', 0.8,
+            "a seek of $distance leaves headroom rather than clipping";
+    }
+}
+
+# ---------------------------------------------------------------------------
+# The whole thing comes out as audio, and stays inside the rails
+
+{
+    my $spec = {
+        seconds  => 3,
+        activity => 1,
+        travel   => 1,
+        fan      => 1,
+        rpm      => 7200,
+        gain     => 1,
+        seed     => 2,
+    };
+
+    my $pcm = GlitchVape::Drive::pcm( $spec );
+
+    is length( $pcm ) / 2, int( GlitchVape::Drive::RATE * 3 ),
+        'three seconds of samples come out of a three second drive';
+
+    # Every part of the sound at its loudest, at unity. What the generator
+    # mixes for itself has to fit; gain above 1 is the caller asking for more
+    # than fits, and quantise clamps that rather than wrapping it.
+    my $clipped = grep { abs $_ >= 32_767 } unpack 's<*', $pcm;
+
+    is $clipped, 0, 'and with every part of it at its loudest, nothing clips';
+
+    is GlitchVape::Drive::pcm( { %$spec, seed => 2 } ), $pcm,
+        'the same seed gives the same drive';
+
+    isnt GlitchVape::Drive::pcm( { %$spec, seed => 3 } ), $pcm,
+        'and a different one does not';
+
+    my $fanless = GlitchVape::Drive::pcm( { %$spec, fan => 0, activity => 0 } );
+
+    is $fanless, GlitchVape::Wav::silence( int( GlitchVape::Drive::RATE * 3 ) ),
+        'no fan and no work is a drive that is switched off';
 }
 
 done_testing;

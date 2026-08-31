@@ -5,6 +5,7 @@ use warnings;
 use utf8;
 
 use GlitchVape::DTMF   ();
+use GlitchVape::Drive  ();
 use GlitchVape::Geiger ();
 use GlitchVape::Heart  ();
 use GlitchVape::Noise  ();
@@ -488,6 +489,38 @@ DOC
     render => sub {
         my ( %arg ) = @_;
         return GlitchVape::Heart::render( %arg );
+    },
+);
+
+__PACKAGE__->register(
+    kind    => 'drive',
+    label   => 'Hard disk',
+    icon    => 'drive-harddisk-symbolic',
+    summary => 'A drive working, under the whirr of a fan',
+    doc     => <<'DOC',
+A spinning-platter drive: air noise and a faint blade tone from the fan, the
+spindle turning under it, and on top the chirps of the head being flung across
+the platter and stopped.
+
+Seeks come in bursts rather than scattered evenly, because that is what a
+drive does -- long quiet, then a rattle while something reads a file, then
+quiet again. A seek's pitch and length come from how far the head went, so the
+same drive reading one file and being defragmented sound different: short hops
+tick, a full stroke is a lower and longer chirp.
+
+It has no natural end: under a soundtrack it simply carries on working.
+DOC
+    params   => GlitchVape::Drive::params(),
+    order    => [ GlitchVape::Drive::param_order() ],
+    duration => \&GlitchVape::Drive::duration,
+    describe => \&GlitchVape::Drive::describe,
+    resolve  => sub {
+        my ( $spec ) = @_;
+        return resolve_params( GlitchVape::Drive::params(), $spec );
+    },
+    render => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Drive::render( %arg );
     },
 );
 

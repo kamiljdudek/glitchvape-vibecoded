@@ -7,7 +7,7 @@ without noticing, and how each of them is checked.
 
 ## What it is
 
-A Perl image pipeline that puts a photograph through a chain of forty-three
+A Perl image pipeline that puts a photograph through a chain of forty-five
 VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Pure Perl
 apart from the effects, which shell out to ImageMagick, and the animated
 writers, which shell out to ffmpeg.
@@ -21,7 +21,7 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 |---|---|
 | `bin/` | `glitchvape` (CLI), `glitchvape-batch`, `glitchvape-gui` |
 | `lib/GlitchVape.pm` | the façade — `render()`, which every front end calls |
-| `lib/GlitchVape/Effect/*.pm` | the forty-three effects, grouped by theme not by stage |
+| `lib/GlitchVape/Effect/*.pm` | the forty-five effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
@@ -61,8 +61,9 @@ a type or a range.
 
 Parameter *kinds* map to widgets in `GUI/Params.pm`: `num` with a range → a
 slider marked at its default, `bool` → a switch, `enum` → a combo, and a few
-string parameters get something better based on their name (a colour picker, a
-font-role combo, a calendar for `osd.date`, a clock for `osd.time`).
+parameters get something better based on their name (a colour picker, a
+font-role combo, a calendar for `osd.date`, a clock for `osd.time`, a reroll
+button beside any `seed`).
 
 A parameter may also say how it wants to be *presented*, and these are read by
 the window and by `--explain` alike — never by the render:
@@ -174,7 +175,10 @@ Two modules keep pictures in their own source rather than in `assets/`, and
 the same argument covers both.
 
 `GlitchVape::VGA` holds an 8x16 text-mode font as hex, because a TrueType
-renderer antialiases and hints and a text-mode display could do neither.
+renderer antialiases and hints and a text-mode display could do neither. It
+also holds the cell rasteriser and the blit, because two effects paint text
+cells now -- `vgatext` and `stars` -- and a second copy of a blitter is a
+second place for a rounding to drift.
 `GlitchVape::Chicago` holds the nine glyphs a Windows 95 window needs that are
 pictures rather than rules -- the document icon, three caption glyphs, four
 arrows and the sizing grip -- as one character per pixel, keyed by a five-ink
@@ -182,8 +186,14 @@ palette.
 
 Everything else about that window is a *rule*: two bevels, four flat fills and
 a 50% dither, applied at metrics that do not change with the window's size.
-That is what lets the size be a setting at all, and it is checked the only way
-it can be: `t/40-chicago.t` renders the window at the size of the screenshot
+That is what lets the size be a setting at all — and it is what lets the same
+module serve `chicago`, which lays a window over the picture with a hole in
+it, and `maximised`, which builds one *around* the picture at `framing`.
+`around()` is that layout read backwards: given what has to go inside, how big
+is the window. The two can disagree, so the test builds a window from
+`around()` and then measures the hole `render()` actually left.
+
+It is checked the only way it can be: `t/40-chicago.t` renders the window at the size of the screenshot
 every measurement came off and compares it, region by region, against the
 pixels that screenshot had. The screenshot itself is gone; the test is now
 the record of it.
@@ -364,15 +374,15 @@ says what it does and this says what else was tried.
 `GlitchVape::Generator` is a registry in the same sense `Registry` is: one
 `register()` call produces the `--generate`/`--gen` validation, the
 `--list-generators` entry, the widgets in the wizard and the row in the Add
-popover. Four kinds so far — `dtmf`, `static`, `geiger`, `heart` — each a
-module beside it exposing `params`, `param_order`, `duration`, `pcm`, `render`
-and `describe`.
+popover. Five kinds so far — `dtmf`, `static`, `geiger`, `heart`, `drive` —
+each a module beside it exposing `params`, `param_order`, `duration`, `pcm`,
+`render` and `describe`.
 
 **Adding a kind must not require editing the GUI.** The icon is part of the
 declaration for exactly that reason: it used to be a mapping keyed on kind
 inside `GUI.pm`, in two copies that had drifted apart.
 
-Two of them are about timing rather than timbre, and the timing is the part
+Three of them are about timing rather than timbre, and the timing is the part
 worth protecting:
 
 - **`geiger`** draws inter-click gaps from the exponential distribution
@@ -384,6 +394,15 @@ worth protecting:
 - **`heart`** puts S1 and S2 closer together than S2 and the next S1, and
   scales systole by the square root of the cycle so it is the *pause* that
   disappears as the rate rises. Equal gaps would be a drum loop.
+
+- **`drive`** alternates idle and burst, because a hard disk is quiet almost
+  all the time and then seeks twenty times in half a second. One distribution
+  of gaps gives an even scatter of ticks, which is the failure `geiger` avoids
+  by going the other way. Turning `activity` up lengthens the quiet and leaves
+  the bursts alone, since how fast a drive seeks while working is a property of
+  the drive. Its chirps are a swept resonance whose pitch and length come from
+  how far the head went, seek time going as the square root of distance —
+  which is why one file being read and a defragment sound different.
 
 Those tests read the click schedule by replacing `Geiger::_click`, because
 once the rate is high enough for dead time to bind the clicks overlap and no
@@ -401,6 +420,13 @@ modelling rather than a choice:
 | re-rolls every frame | the medium at an instant — grain, tape noise, damage |
 | moves if asked | `drift`, `pulse`, `rate`: the picture or the pattern travelling |
 | identical every frame | the setup — resolution, colour maps, lens, framing |
+
+A fourth exists in one place: `stars` is the *same* thing later. Its sky is
+stepped rather than re-rolled, because what reads as twinkling is that stars
+stay where they are between the moments they do not. Frame N is the sky after
+N steps, computed from the seed each time rather than carried between frames,
+which a render has no way to do. It cannot close its loop and does not pretend
+to: a star that flares comes back somewhere else.
 
 It lines up with the stages almost exactly, which is not a coincidence: damage,
 signal and grain are things happening *now*, while format, colour, optics and
@@ -532,6 +558,15 @@ half again as long as the one that follows.
   going forward is what made the page ahead complete.
   `GlitchVape::GUI::Assistant` finds it -- by what it responds to, since its
   label is translated -- and keeps it hidden, for both assistants.
+
+- **Walking a hash's keys draws from the RNG in a random order.** Perl
+  randomises hash order per process, so a simulation that iterates
+  `keys %something` and draws a number per key gives a different answer on
+  every run from the same seed — which is the one promise this program makes
+  about seeds. `GlitchVape::Starfield` sorts, and `t/41-starfield.t` proves it
+  by running the same seed in four processes under different
+  `PERL_HASH_SEED`s. It cannot be caught in one process, because the order is
+  fixed for the life of one.
 
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first

@@ -163,6 +163,19 @@ my %GLYPH = (
     # sit at mid-cell, where CP437 has it and where it stops looking like
     # a glyph that failed to land.
     '~' => '000000000062928C0000000000000000',
+
+    # The six the Norton Commander screensaver twinkled through, in the order
+    # it used them: CP437 250, 249, 7, 4, 254 and 15. A brightness ramp rather
+    # than a set to pick from -- four lit pixels at the dim end and
+    # forty-eight at the bright one -- which is what makes a star drawn one
+    # after another read as flaring rather than as changing character.
+    '·' => '00000000000000181800000000000000',
+    '∙' => '0000000000003C3C3C3C000000000000',
+    '•' => '00000000003C7E7E7E7E3C0000000000',
+    '◆' => '00000000183C7EFF7E3C180000000000',
+    '■' => '00000000007E7E7E7E7E7E0000000000',
+    '☼' => '000018993C7EFFFF7E3C991800000000',
+
     '░' => '88228822882288228822882288228822',
     '▒' => 'AA55AA55AA55AA55AA55AA55AA55AA55',
     '▓' => 'EEBBEEBBEEBBEEBBEEBBEEBBEEBBEEBB',
@@ -247,6 +260,133 @@ sub glyph
     return $ROWS{ $char } = undef unless defined $hex;
 
     return $ROWS{ $char } = [ unpack 'C*', pack 'H*', $hex ];
+}
+
+=head2 cell_rows( %arg )
+
+    char       => the character to draw
+    fore       => three bytes of RGB for the lit pixels
+    back       => three bytes for the unlit ones
+    scale      => image pixels per font pixel
+    background => draw the unlit pixels at all
+
+One character cell as sixteen strings, one per font row, each already widened
+to the scaled cell width. With C<background> off the pixels the glyph does not
+light become a run of NUL bytes, which L</blit( %arg )> treats as holes rather
+than as black.
+
+=cut
+
+sub cell_rows
+{
+    my ( %arg ) = @_;
+
+    my $glyph = glyph( $arg{ char } ) || glyph( q{ } );
+
+    my $lit   = $arg{ fore } x $arg{ scale };
+    my $unlit = $arg{ back } x $arg{ scale };
+    $unlit = "\0\0\0" x $arg{ scale } unless $arg{ background };
+
+    my @rows;
+
+    for my $byte ( @$glyph )
+    {
+        my $row = q{};
+
+        for my $bit ( 0 .. CELL_W - 1 )
+        {
+            $row .= $byte & ( 1 << ( CELL_W - 1 - $bit ) ) ? $lit : $unlit;
+        }
+
+        push @rows, $row;
+    }
+
+    return \@rows;
+}
+
+=head2 blit( %arg )
+
+    px         => a GlitchVape::Pixels buffer
+    x, y       => where the cell's top left corner goes
+    rows       => what L</cell_rows( %arg )> returned
+    scale      => image pixels per font pixel, again
+    opacity    => how completely the cell replaces what is under it
+    background => whether the unlit pixels are ink or holes
+
+Paints one cell, or a row of them joined side by side, into the buffer. Each
+font row is repeated C<scale> times, which is the pixel replication the whole
+module exists for.
+
+=cut
+
+sub blit
+{
+    my ( %arg ) = @_;
+
+    my ( $px, $x, $y ) = @arg{ qw(px x y) };
+
+    my $wide = length( $arg{ rows }[ 0 ] ) / 3;
+    my $line = 0;
+
+    for my $row ( @{ $arg{ rows } } )
+    {
+        for my $again ( 1 .. $arg{ scale } )
+        {
+            my $at = $y + $line;
+            $line++;
+
+            last if $at >= $px->height;
+
+            my $under = $px->rect( $x, $at, $wide, 1 );
+            my $over  = $row;
+
+            $over = _punch( $over, $under ) unless $arg{ background };
+            $over = _blend( $over, $under, $arg{ opacity } )
+                if $arg{ opacity } < 1;
+
+            $px->set_rect( $x, $at, $wide, 1, $over );
+        }
+    }
+
+    return;
+}
+
+# The NUL pixels of an unbackgrounded cell, replaced by whatever was there.
+sub _punch
+{
+    my ( $over, $under ) = @_;
+
+    my $out = q{};
+
+    for my $n ( 0 .. length( $over ) / 3 - 1 )
+    {
+        my $pixel = substr $over, $n * 3, 3;
+
+        $pixel = substr $under, $n * 3, 3 if $pixel eq "\0\0\0";
+
+        $out .= $pixel;
+    }
+
+    return $out;
+}
+
+sub _blend
+{
+    my ( $over, $under, $opacity ) = @_;
+
+    # Not named @a and @b: those belong to sort, and assigning to them
+    # without localising is a way to break an unrelated sort elsewhere.
+    my @top    = unpack 'C*', $over;
+    my @bottom = unpack 'C*', $under;
+
+    my $keep = 1 - $opacity;
+
+    for my $n ( 0 .. $#top )
+    {
+        $top[ $n ] = int( $top[ $n ] * $opacity + $bottom[ $n ] * $keep );
+    }
+
+    return pack 'C*', @top;
 }
 
 =head2 charset( $name )

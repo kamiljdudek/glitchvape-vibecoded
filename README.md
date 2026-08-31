@@ -437,7 +437,7 @@ whatever you changed on top.
 
 ## Effects
 
-43 effects, sorted automatically into a signal chain. Order is not a free
+45 effects, sorted automatically into a signal chain. Order is not a free
 choice — scanlines applied before a downsample get eaten by the resample — so
 each effect declares a stage and the pipeline sorts by it.
 
@@ -450,8 +450,8 @@ each effect declares a stage and the pipeline sorts by it.
 | **signal** | Signal & Tape | `wave` `tracking` `head_switch` `ghost` `vhold` `interlace` `dropout` `static` |
 | **grain** | Grain & Dither | `grain` `dither` |
 | **optics** | Screen & Optics | `scanlines` `grille` `bloom` `vignette` `curvature` `halftone` `cmyk` `glare` `softness` `flicker` |
-| **overlay** | Overlays | `text` `osd` `grid` `watermark` `chicago` |
-| **framing** | Framing | `letterbox` |
+| **overlay** | Overlays | `text` `osd` `grid` `watermark` `chicago` `stars` |
+| **framing** | Framing | `letterbox` `maximised` |
 
 The left column is the identifier — what `--explain` reports and what the
 library calls it. The middle column is what the interface shows, because a
@@ -556,7 +556,8 @@ encoder (`.mp4`, `.webm`, `.gif`).
 ### Audio
 
 A loop can carry a soundtrack: an audio file, or one of four generated
-tracks — dialling tones, radio static, a Geiger counter, a heartbeat. The
+tracks — dialling tones, radio static, a Geiger counter, a heartbeat, a hard
+disk working. The
 loop repeats to cover the track rather than the track being cut to the
 loop.
 

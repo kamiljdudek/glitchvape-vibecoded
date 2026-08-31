@@ -180,6 +180,52 @@ valve closing is a broadband thud and a sine burst gives a synthesised kick
 drum. Almost none of it is above 200 Hz, so 16 kHz is generous rather than a
 compromise.
 
+#### `drive` — a hard disk working
+
+| | | |
+|---|---|---|
+| `seconds` | 20 | length, when nothing else sets it |
+| `activity` | 0.35 | how often the drive is asked for something |
+| `travel` | 0.3 | how far the head goes |
+| `fan` | 0.4 | the whirr behind it |
+| `rpm` | 5400 | spindle speed, which sets the pitch of the whine |
+| `gain` | 0.7 | level |
+| `seed` | 1 | the same seed gives the same work |
+
+Almost nothing that makes a drive recognisable is timbre. A recording of one
+seek is one seek; what says *hard disk* is the **pattern** — long quiet, then
+a rattle, then quiet again — which is why this is worth generating rather than
+sampling.
+
+So the seeks are not a Poisson process the way the Geiger clicks are. Drawing
+gaps from one distribution gives an even scatter of ticks, which is exactly
+the failure that generator goes out of its way to avoid. There are two states
+instead: idle waits an exponential gap, and a burst is a run of seeks a few
+tens of milliseconds apart whose length is geometric, so most bursts are short
+and the occasional one runs on. Turning `activity` up lengthens the quiet and
+leaves the bursts alone, because how fast a drive seeks while it is working is
+a property of the drive rather than of how busy it is.
+
+The other half is that **a seek's pitch is how far the head went**. The head
+is a mass on a voice coil, driven hard, moved and stopped, so a seek is a
+resonance swept downward as the mechanism settles — it is the sweep that makes
+it a chirp rather than a click. Seek time goes as roughly the square root of
+the distance, because the actuator spends the move speeding up and then
+slowing down rather than travelling at a speed. A short hop is a tick around
+2.7 kHz lasting four milliseconds; a full stroke starts near 1 kHz and takes
+five times as long. `travel` is which of those you mostly get, which is the
+difference between one file being read and a defragment.
+
+The chirp is a two-pole resonator driven by noise, and its input is normalised
+by `1 - r²`: such a filter's gain at its own frequency goes as `1/(1-r)`, which
+at the ringiest end of the range is a factor of eighty. Unnormalised it does
+not come out loud, it comes out clipped — which it did.
+
+The bed is air noise low-passed to a rumble, plus a tone at the fan's
+blade-pass frequency and the spindle under that. Noise alone is a hiss; the
+tones are what make it a machine, and they are kept faint, because a fan you
+can hear the pitch of is a fan with something wrong with it.
+
 ### Mixing, and which one is in charge
 
 Give `--audio` and any number of `--generate` together and they are all
