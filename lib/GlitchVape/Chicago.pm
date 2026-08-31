@@ -53,6 +53,28 @@ below it has a face one, with its white a ring further in.
 Getting one of the four inks wrong turns a raised edge into a sunken one,
 which is why they are written here once and nowhere else.
 
+=head1 THE THREE PALETTES
+
+Five inks draw the whole interface, and the letters above are their I<roles>
+rather than their colours: face, highlight, shadow, dark shadow, caption. A
+theme is a complete set of the five, so nothing has to know which theme is in
+force -- every drawing primitive here is handed the buffer, and the palette
+rides on the buffer.
+
+C<default> is what the screenshot came in and what Windows arrived in: a
+neutral grey window under a navy caption, which is the odd one out, because
+its caption is a colour that appears nowhere else in the chrome.
+
+C<rose> and C<rain> are two of the schemes from the Appearance tab, and each
+is really two colours: a dark that is both the caption bar and every shadowed
+edge, and a light that is every face. The highlight stays white and the dark
+shadow stays black in all three. That is not laziness -- a raised edge reads
+as raised because its lit side is brighter than anything else on the screen,
+and tinting the highlight flattens the window into a coloured rectangle.
+
+A name this build does not know is the default rather than an error, because a
+preset is a file and a file can outlive the version that wrote it.
+
 =head1 WHY THE GLYPHS ARE IN THE FILE
 
 The same argument L<GlitchVape::VGA> makes about its font, for the same
@@ -119,13 +141,49 @@ a font one pixel taller than the last one still sits where it should.
 # them: a screenshot of it quantises to these and nothing else. Named for what
 # they do rather than what they look like, because 'face' stays the right name
 # if the palette is ever themed and '#C0C7C8' does not.
-my %INK = (
-    F => [ 192, 199, 200 ],    # face: every flat surface
-    W => [ 255, 255, 255 ],    # highlight: the lit edge of a raised thing
-    S => [ 135, 136, 143 ],    # shadow: the shaded edge
-    K => [ 0,   0,   0 ],      # dark shadow, and text
-    B => [ 0,   0,   168 ],    # the active caption
+my %THEME = (
+
+    # What the screenshot every measurement came off was set to, and what
+    # Windows arrived in: a neutral grey window under a navy caption. The odd
+    # one out below, because its caption is a colour that appears nowhere else
+    # in the chrome -- the two after it tint the whole window from one dark.
+    default => {
+        F => [ 192, 199, 200 ],    # face: every flat surface
+        W => [ 255, 255, 255 ],    # highlight: the lit edge of a raised thing
+        S => [ 135, 136, 143 ],    # shadow: the shaded edge
+        K => [ 0,   0,   0 ],      # dark shadow, and text
+        B => [ 0,   0,   168 ],    # the active caption
+    },
+
+    # Two of the schemes that shipped in the Appearance tab, each two colours:
+    # a dark that is both the caption bar and every shadowed edge, and a light
+    # that is every face. The highlight stays white and the dark shadow stays
+    # black, as they did there -- a raised edge reads as raised because its lit
+    # side is brighter than anything else on the screen, and tinting that
+    # flattens the whole window.
+    rose => {
+        F => [ 207, 175, 183 ],
+        W => [ 255, 255, 255 ],
+        S => [ 159, 96,  112 ],
+        K => [ 0,   0,   0 ],
+        B => [ 159, 96,  112 ],
+    },
+    rain => {
+        F => [ 131, 153, 177 ],
+        W => [ 255, 255, 255 ],
+        S => [ 79,  101, 125 ],
+        K => [ 0,   0,   0 ],
+        B => [ 79,  101, 125 ],
+    },
 );
+
+=head2 themes()
+
+The theme names, in the order they should be offered.
+
+=cut
+
+sub themes { return qw(default rose rain) }
 
 # Every measurement, in the pixels the interface is drawn in. None of these is
 # a proportion of anything: that is the whole point of the file.
@@ -310,6 +368,7 @@ sub minimum
 
     width       => the window's width, in the pixels it is drawn in
     height      => its height
+    theme       => which palette, from L</themes()>
     caption     => the title string, or undef for a bare caption bar
     menu        => the menu string, or undef for no menu bar at all
     font        => a font file for both, from GlitchVape::Fonts
@@ -340,7 +399,7 @@ sub render
     $w = $min_w if !$w || $w < $min_w;
     $h = $min_h if !$h || $h < $min_h;
 
-    my $buf = _canvas( $w, $h );
+    my $buf = _canvas( $w, $h, $arg{ theme } );
 
     # Outside in, because that is the order the parts are nested and because
     # each one is then drawn over the face the one before it left behind. The
@@ -623,13 +682,24 @@ sub _dither
 # ---------------------------------------------------------------------------
 # The buffer
 
+# The palette rides on the buffer rather than on a package variable, because
+# every drawing primitive here is handed the buffer already: a theme is then
+# one argument at the top and nothing to thread through the twenty calls that
+# put ink down.
 sub _canvas
 {
-    my ( $w, $h ) = @_;
+    my ( $w, $h, $theme ) = @_;
+
+    $theme = 'default' unless defined $theme && length $theme;
 
     return {
-        w    => $w,
-        h    => $h,
+        w => $w,
+        h => $h,
+
+        # A name nobody here knows is the default rather than an error. A
+        # preset written against a later version should come out looking
+        # ordinary, not fail to draw.
+        ink  => $THEME{ $theme } || $THEME{ default },
         data => "\0" x ( $w * $h * 4 ),
     };
 }
@@ -638,7 +708,8 @@ sub _fill
 {
     my ( $buf, $x, $y, $w, $h, $ink ) = @_;
 
-    my $rgb = $INK{ $ink } or die "GlitchVape::Chicago: no ink '$ink'\n";
+    my $rgb = $buf->{ ink }{ $ink }
+        or die "GlitchVape::Chicago: no ink '$ink'\n";
     my $run = pack( 'C4', @$rgb, 255 );
 
     for my $row ( $y .. $y + $h - 1 )

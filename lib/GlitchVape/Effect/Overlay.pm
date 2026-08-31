@@ -1213,6 +1213,27 @@ and does not grow with the window, so a wider one has the same four-pixel
 border and one longer scroll bar rather than a fatter everything.
 L<GlitchVape::Chicago> is where that anatomy lives.
 
+C<theme> is the palette, and there are three: C<default>, the neutral grey
+window under a navy caption that Windows arrived in, and C<rose> and C<rain>,
+two of the schemes from its Appearance tab. Each of those is two colours -- a
+dark that is both the caption bar and every shadowed edge, and a light that is
+every face -- with the white highlight and the black dark shadow unchanged,
+because a raised edge reads as raised by being brighter than anything around
+it and a tinted highlight flattens the window.
+
+C<jitter> is the animation setting: how far the window may jump from where it
+was put, redrawn every frame, so that it shakes in place rather than sitting
+there. It is measured in the window's own pixels, so the dance is the same
+size on a phone photograph and on a thumbnail.
+
+It is not called C<drift>, which everywhere else here means a pattern
+travelling in a direction over the loop -- a journey, snapped by
+C<Context::travel> to whole repeats so that it arrives back where it set out.
+This one goes nowhere. It closes its loop all the same, by the easier route:
+C<Context::rng_phase> keys the roll on the frame's position around the loop
+rather than on its index, so the frame after the last one is the first one
+again.
+
 C<zoom> is how many image pixels one of the window's own pixels becomes, and
 it is a whole number because the alternative is interpolation -- a soft grey
 where there should be a one-pixel white highlight, which is precisely the
@@ -1286,10 +1307,18 @@ DOC
             doc     => 'Image pixels per window pixel; 0 works it out from '
                 . 'the picture',
         },
+        theme => {
+            default => 'default',
+            type    => 'enum',
+            order   => 7,
+            values  => [ GlitchVape::Chicago::themes() ],
+            doc     => 'Which of the schemes from the Appearance tab the '
+                . 'window is painted in',
+        },
         title => {
             default     => 'Untitled',
             type        => 'str',
-            order       => 7,
+            order       => 8,
             placeholder => 'no caption text',
             doc         => 'The caption. Empty leaves the bar and its '
                 . 'buttons with nothing written on them',
@@ -1297,7 +1326,7 @@ DOC
         menu => {
             default     => 'File  Edit  Search  Help',
             type        => 'str',
-            order       => 8,
+            order       => 9,
             placeholder => 'no menu bar at all',
             doc         => 'The menu bar. Empty removes the bar rather than '
                 . 'emptying it, because a blank strip of grey is not a menu',
@@ -1305,7 +1334,7 @@ DOC
         font => {
             default => 'ui',
             type    => 'str',
-            order   => 9,
+            order   => 10,
             doc     => 'Font role or path for both strings. The ui role is '
                 . 'W95FA where that is installed, which is what a window of '
                 . 'this period set its caption in',
@@ -1315,7 +1344,7 @@ DOC
             type    => 'int',
             min     => 0,
             max     => 20,
-            order   => 10,
+            order   => 11,
             doc     => 'Pointsize for both strings; 0 measures the font and '
                 . 'takes the smallest size it can be drawn at without '
                 . 'losing strokes',
@@ -1323,13 +1352,13 @@ DOC
         scrollbars => {
             default => 1,
             type    => 'bool',
-            order   => 11,
+            order   => 12,
             doc     => 'A scroll bar down the right and along the bottom',
         },
         grip => {
             default => 1,
             type    => 'bool',
-            order   => 12,
+            order   => 13,
             needs   => { scrollbars => 1 },
             doc     => 'The sizing grip in the corner where they meet',
         },
@@ -1338,7 +1367,7 @@ DOC
             type    => 'num',
             min     => 0.05,
             max     => 1,
-            order   => 13,
+            order   => 14,
             needs   => { scrollbars => 1 },
             doc     => 'How much of its bar each thumb covers, which is how '
                 . 'much of the document the window is saying it can see',
@@ -1348,7 +1377,7 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
-            order   => 14,
+            order   => 15,
             needs   => { scrollbars => 1 },
             doc     => 'Where along its bar each thumb sits',
         },
@@ -1357,8 +1386,18 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
-            order   => 15,
+            order   => 16,
             doc     => 'Overall opacity of the window',
+        },
+        jitter => {
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 24,
+            order     => 17,
+            doc       => 'How far the window may jump from where it was put, '
+                . "in the window's own pixels, redrawn every frame",
         },
     },
     apply => \&_chicago,
@@ -1381,6 +1420,7 @@ sub _chicago
     my $win = GlitchVape::Chicago::render(
         width      => int( $want_w / $zoom ),
         height     => int( $want_h / $zoom ),
+        theme      => $p->{ theme },
         caption    => $p->{ title },
         menu       => $p->{ menu },
         font       => GlitchVape::Fonts::resolve( $p->{ font } ),
@@ -1420,6 +1460,7 @@ sub _chicago
     }
 
     my ( $x, $y ) = _chicago_place( $p, $iw, $ih, $cw * $zoom, $ch * $zoom );
+    ( $x, $y ) = _chicago_dance( $ctx, $p, $zoom, $x, $y );
 
     GlitchVape::Magick::check(
         $ctx->image->Composite(
@@ -1432,6 +1473,39 @@ sub _chicago
     );
 
     return;
+}
+
+# A new place every frame, near the one it was put in. Not a drift: everywhere
+# else here that word is a journey, a pattern travelling in a direction and
+# snapped to whole repeats so that it arrives back where it set out. This is a
+# window that will not sit still, which is a different thing and gets a
+# different word.
+#
+# It closes its loop all the same, and by an easier route. Context::rng_phase
+# keys the roll on where the frame sits around the loop rather than on which
+# frame it is, so the frame after the last one is the first one again; and the
+# seam is invisible regardless, because every frame is already somewhere else
+# and one more jump among them reads as one more jump.
+#
+# Measured in the window's own pixels and multiplied up by the zoom, so the
+# dance is the same size on the screen whatever the picture's resolution --
+# and so the window stays on the grid it was drawn on, which a jump of some
+# other number of image pixels would not disturb but would look arbitrary
+# beside everything else here.
+sub _chicago_dance
+{
+    my ( $ctx, $p, $zoom, $x, $y ) = @_;
+
+    my $most = $p->{ jitter } || 0;
+
+    return ( $x, $y ) if $most <= 0 || $ctx->frames <= 1;
+
+    my $rng = $ctx->rng_phase( 'chicago' );
+
+    return (
+        $x + $zoom * _round( $rng->between( -$most, $most ) ),
+        $y + $zoom * _round( $rng->between( -$most, $most ) ),
+    );
 }
 
 # One window pixel per image pixel would leave a four-pixel border on a

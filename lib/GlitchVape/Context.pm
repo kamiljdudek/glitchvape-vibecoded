@@ -220,6 +220,51 @@ sub rng_fixed
         $self->{ rng }->derive( $name );
 }
 
+=head2 rng_phase( $name )
+
+Like C<rng_for>, but keyed on where the frame sits around the loop rather than
+on which frame it is, so that the frame after the last one is the first one
+again.
+
+The three streams are the three answers to "how random is this, frame to
+frame", and an effect wants exactly one of them:
+
+    rng_for     a fresh roll every frame, and no two loops line up
+    rng_phase   a fresh roll every frame, and the loop closes
+    rng_fixed   one roll, held for the whole render
+
+C<rng_for> is right for noise -- grain, static, dropouts. Those never close
+and are not meant to: film grain that repeated every twenty-four frames would
+read as a texture stuck to the lens rather than as grain, and the seam is
+invisible anyway because every frame is already unlike the one before it.
+
+C<rng_phase> is for the things that jump about but are I<one thing> doing it:
+a window shaking in place, a caption that will not sit still. There the seam
+is invisible for the same reason -- one more jump among all the others -- but
+the thing itself is recognisable from frame to frame, so a loop that came back
+to a different position would be a jolt somebody could point at.
+
+The two are the same stream on a still and the same stream on any frame of the
+first pass; they differ only at the wrap, which is the whole point.
+
+=cut
+
+sub rng_phase
+{
+    my ( $self, $name ) = @_;
+
+    return $self->rng_for( $name ) if $self->{ frames } <= 1;
+
+    # The frame index modulo the loop, which is the frame's position around it
+    # -- the same thing phase() returns, counted in frames rather than as a
+    # fraction. In a real render this is the frame index and changes nothing;
+    # it is what happens at frame == frames that this is for.
+    my $at = $self->{ frame } % $self->{ frames };
+
+    return $self->{ _rngs }{ "phase:$name#$at" } ||=
+        $self->{ rng }->derive( "$name#$at" );
+}
+
 =head2 dims()
 
 C<< ($width, $height) >> of the working image.

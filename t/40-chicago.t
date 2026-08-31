@@ -64,6 +64,172 @@ sub art
     return \@rows;
 }
 
+# The top-left of the caption bar, by its blue, which on a flat dark source is
+# the only blue there is. Where the window put itself, in other words.
+sub caption_corner
+{
+    my ( $img, $w, $h ) = @_;
+
+    my @px = $img->GetPixels(
+        map       => 'RGB',
+        width     => $w,
+        height    => $h,
+        normalize => 1
+    );
+
+    for my $y ( 0 .. $h - 1 )
+    {
+        for my $x ( 0 .. $w - 1 )
+        {
+            my $i = ( $y * $w + $x ) * 3;
+
+            next
+                unless $px[ $i ] < 0.02
+                && $px[ $i + 1 ] < 0.02
+                && abs( $px[ $i + 2 ] - 168 / 255 ) < 0.02;
+
+            return ( $x, $y );
+        }
+    }
+
+    return ( undef, undef );
+}
+
+# One frame of a window with a jitter on it, and where it landed.
+sub danced
+{
+    my ( %arg ) = @_;
+
+    my $w = $arg{ width };
+    my $h = $arg{ height };
+
+    my $img = Image::Magick->new( size => "${w}x${h}" );
+    $img->Read( 'xc:#101018' );
+
+    my $ctx = GlitchVape::Context->new( image => $img, seed => 5 );
+    $ctx->frames( $arg{ frames } );
+    $ctx->frame( $arg{ frame } );
+
+    GlitchVape::Pipeline->new( effects => { chicago => $arg{ set } } )
+        ->run( $ctx );
+
+    return ( caption_corner( $ctx->image, $w, $h ), $ctx->image );
+}
+
+# Coverage across the middle of an 'l', in pixels. Antialiasing on, because
+# what is being measured is the outline and not the rasteriser's opinion of
+# it: a stem that covers six tenths of one pixel and four tenths of the next
+# is six tenths and four tenths, whatever a hard rasteriser would make of it.
+sub stem_width
+{
+    my ( $font, $size ) = @_;
+
+    my $probe = Image::Magick->new( size => '80x80' );
+    $probe->Read( 'xc:none' );
+    $probe->Annotate(
+        text      => 'l',
+        font      => $font,
+        pointsize => $size,
+        fill      => 'black',
+        gravity   => 'NorthWest',
+        x         => 20,
+        y         => 20,
+        antialias => 'true',
+    );
+
+    my @px = $probe->GetPixels(
+        map       => 'A',
+        width     => 80,
+        height    => 80,
+        normalize => 1
+    );
+
+    my @rows = grep {
+        my $y = $_;
+        grep { $px[ $y * 80 + $_ ] > 0 } 0 .. 79
+    } 0 .. 79;
+    return 0 unless @rows;
+
+    my $mid = $rows[ $#rows / 2 ];
+    my $sum = 0;
+    $sum += $px[ $mid * 80 + $_ ] for 0 .. 79;
+
+    return $sum;
+}
+
+# Every colour a finished render used, as a hash.
+sub inks_used
+{
+    my ( $img, $w, $h ) = @_;
+
+    my @px = $img->GetPixels( map => 'RGB', width => $w, height => $h );
+
+    my %seen;
+    for my $at ( 0 .. $w * $h - 1 )
+    {
+        my @c = map { int( $_ / 257 + 0.5 ) } @px[ $at * 3 .. $at * 3 + 2 ];
+        $seen{ join ',', @c }++;
+    }
+
+    return \%seen;
+}
+
+# What type_size promises, asked of one font role: never below the size the
+# interface wants, never above the bar it has to fit, and at the size it gives
+# the stem reaches a whole pixel -- which is the property the whole
+# measurement exists for. Returns whether there was a font to ask at all.
+sub drawable
+{
+    my ( $role ) = @_;
+
+    my $font = GlitchVape::Fonts::resolve( $role ) or return 0;
+    my $size = GlitchVape::Chicago::type_size( $font );
+
+    cmp_ok $size, '>=', 12, "$role is never drawn below the interface size";
+    cmp_ok $size, '<=', 20, "$role is never talked up past the bar it fits";
+
+    cmp_ok stem_width( $font, $size ), '>=', 1,
+        "at $size the $role stem covers a whole pixel";
+
+    # And it is the *smallest* such size, not merely a safe one -- which is
+    # only a claim where the font needed talking up at all.
+    return 1 unless $size > 12;
+
+    cmp_ok stem_width( $font, $size - 1 ), '<', 1,
+        "and one pixel smaller it would not, which is why $role was raised";
+
+    return 1;
+}
+
+# One theme rendered, and the check that it is drawn only in the inks it
+# declares. Returns the signature, so the caller can also say the themes
+# differ from one another.
+sub only_its_own_colours
+{
+    my ( $theme, $palette ) = @_;
+
+    my %ink = map { $_ => 1 } @$palette;
+
+    my $src = Image::Magick->new( size => '400x300' );
+    $src->Read( 'xc:black' );
+
+    my $ctx = GlitchVape::Context->new( image => $src, seed => 5 );
+    GlitchVape::Pipeline->new(
+        effects => {
+            chicago =>
+                { theme => $theme, zoom => 3, width => 0.9, height => 0.9 }
+        }
+    )->run( $ctx );
+
+    my $seen  = inks_used( $ctx->image, 400, 300 );
+    my @stray = grep { !$ink{ $_ } && $_ ne '0,0,0' } sort keys %$seen;
+
+    is_deeply \@stray, [], "$theme is drawn only in its own colours"
+        or diag "not in the $theme palette: @stray";
+
+    return $ctx->image->Get( 'signature' );
+}
+
 sub window
 {
     my ( %arg ) = @_;
@@ -355,22 +521,10 @@ sub window
         }
     )->run( $ctx );
 
-    my ( $w, $h ) = ( 400, 300 );
-    my @px = $ctx->image->GetPixels(
-        map    => 'RGB',
-        width  => $w,
-        height => $h
-    );
-
-    my %seen;
-    for my $at ( 0 .. $w * $h - 1 )
-    {
-        my @c = map { int( $_ / 257 + 0.5 ) } @px[ $at * 3 .. $at * 3 + 2 ];
-        $seen{ join ',', @c }++;
-    }
+    my $seen = inks_used( $ctx->image, 400, 300 );
 
     my @unexpected =
-        grep { !exists $CHAR{ $_ } && $_ ne '0,0,0' } sort keys %seen;
+        grep { !exists $CHAR{ $_ } && $_ ne '0,0,0' } sort keys %$seen;
 
     is_deeply \@unexpected, [],
         'a window enlarged four times is still only the colours it is drawn in'
@@ -392,69 +546,12 @@ sub window
 # whether a particular word survives depends on where its glyphs happen to
 # land and this does not.
 {
-    my $stem = sub {
-        my ( $font, $size ) = @_;
-
-        my $probe = Image::Magick->new( size => '80x80' );
-        $probe->Read( 'xc:none' );
-        $probe->Annotate(
-            text      => 'l',
-            font      => $font,
-            pointsize => $size,
-            fill      => 'black',
-            gravity   => 'NorthWest',
-            x         => 20,
-            y         => 20,
-            antialias => 'true',
-        );
-
-        my @px = $probe->GetPixels(
-            map       => 'A',
-            width     => 80,
-            height    => 80,
-            normalize => 1
-        );
-
-        my @rows = grep {
-            my $y = $_;
-            grep { $px[ $y * 80 + $_ ] > 0 } 0 .. 79
-        } 0 .. 79;
-        return 0 unless @rows;
-
-        # Coverage across the middle of the stem, in pixels. Antialiasing on,
-        # because what is being measured is the outline and not the
-        # rasteriser's opinion of it.
-        my $mid = $rows[ $#rows / 2 ];
-        my $sum = 0;
-        $sum += $px[ $mid * 80 + $_ ] for 0 .. 79;
-
-        return $sum;
-    };
 
     is GlitchVape::Chicago::type_size( undef ), 12,
         'with no font there is nothing to measure and the interface size stands';
 
     my $roles = 0;
-    for my $role ( GlitchVape::Fonts::roles() )
-    {
-        my $font = GlitchVape::Fonts::resolve( $role ) or next;
-        $roles++;
-
-        my $size = GlitchVape::Chicago::type_size( $font );
-
-        cmp_ok $size, '>=', 12, "$role is never drawn below the interface size";
-        cmp_ok $size, '<=', 20, "$role is never talked up past the bar it fits";
-
-        cmp_ok $stem->( $font, $size ), '>=', 1,
-            "at $size the $role stem covers a whole pixel";
-
-        # And it is the *smallest* such size, not merely a safe one -- which
-        # is only a claim where the font needed talking up at all.
-        next unless $size > 12;
-
-        cmp_ok $stem->( $font, $size - 1 ), '<', 1,
-            "and one pixel smaller it would not, which is why $role was raised";
-    }
+    $roles += drawable( $_ ) for GlitchVape::Fonts::roles();
 
     ok $roles, 'there was at least one font to ask';
 }
@@ -530,6 +627,246 @@ SKIP:
         isnt $window->(), $window->( type_size => 12 ),
             'and not at the size the interface would have asked for';
     }
+}
+
+# ---------------------------------------------------------------------------
+# The jitter closes its loop, and leaves a still alone
+
+# The two properties t/31-drift.t applies to every effect that declares a
+# 'drift'. This one is not a drift -- it goes nowhere, it shakes in place --
+# so it is outside that sweep and has to say them here instead.
+#
+# Closing matters for the ordinary reason: a video plays a loop end to end and
+# then starts it over, so a last frame that does not come back to the first
+# puts a jolt in at the join, once per repeat, for as long as the file plays.
+# What makes it possible to close something this random is Context::rng_phase,
+# which keys the roll on the frame's position around the loop rather than on
+# its index -- see t/31-drift.t, where that stream is pinned.
+#
+# Leaving a still alone matters because presets carry the parameter: rendering
+# one as a still has to give the picture it gave before the parameter existed,
+# whatever it is set to.
+{
+    my $frames = 12;
+
+    my $frame = sub {
+        my ( $n, $at ) = @_;
+
+        my ( undef, undef, $img ) = danced(
+            width  => 240,
+            height => 180,
+            frames => $at,
+            frame  => $n,
+            set    => { jitter => 7, width => 0.7, height => 0.7 },
+        );
+
+        return $img->Get( 'signature' );
+    };
+
+    is $frame->( $frames, $frames ), $frame->( 0, $frames ),
+        'the frame after the last one is the first one again';
+
+    my $still = sub {
+        my ( $jitter ) = @_;
+
+        my ( undef, undef, $img ) = danced(
+            width  => 240,
+            height => 180,
+            frames => 1,
+            frame  => 0,
+            set    => { jitter => $jitter, width => 0.7, height => 0.7 },
+        );
+
+        return $img->Get( 'signature' );
+    };
+
+    is $still->( 24 ), $still->( 0 ),
+        'and a still is the picture it would have been without the setting';
+}
+
+# ---------------------------------------------------------------------------
+# The window dances, and it is the same window that dances
+
+# What the two checks above cannot say: that the window *moves rather than
+# changes*. A jitter that redrew the window somewhere else, or redrew it
+# differently, would satisfy both of them.
+{
+    my $frames = 12;
+    my $most   = 3;
+
+    # Small and flat, so the only blue in the picture is the caption bar and
+    # finding it is finding the window.
+    my $at = sub {
+        my ( $n ) = @_;
+
+        return danced(
+            width  => 240,
+            height => 180,
+            frames => $frames,
+            frame  => $n,
+            set    => { jitter => $most, width => 0.7, height => 0.7 },
+        );
+    };
+
+    my ( $x0, $y0, $frame0 ) = $at->( 0 );
+
+    ok defined $x0, 'the window is findable by the blue of its caption';
+
+SKIP:
+    {
+        skip 'no window found', 4 unless defined $x0;
+
+        my ( %seen, @moves );
+        for my $n ( 0 .. $frames - 1 )
+        {
+            my ( $x, $y ) = $at->( $n );
+            next unless defined $x;
+
+            $seen{ "$x,$y" }++;
+            push @moves, [ $x - $x0, $y - $y0 ];
+        }
+
+        cmp_ok scalar keys %seen, '>', $frames / 2,
+            'and it is somewhere different on most frames of the loop';
+
+        # Within what was asked for. The picture is 180 tall, so the zoom is
+        # one and a jitter of three is three image pixels either way -- but
+        # from the *placed* position, which frame 0 has already moved off.
+        my $worst = 0;
+        for my $move ( @moves )
+        {
+            for my $axis ( @$move )
+            {
+                $worst = abs $axis if abs $axis > $worst;
+            }
+        }
+
+        cmp_ok $worst, '<=', 2 * $most,
+            'never further from its place than the jitter allows';
+
+        cmp_ok $worst, '>', 0, 'and it does move at all';
+
+        # The point of the whole thing: what arrives at the new position is
+        # the same window, not a differently-drawn one. Cut the caption bar
+        # out of two frames at wherever each of them put it, and the pixels
+        # have to match to the last one.
+        my $bar = sub {
+            my ( $img, $x, $y ) = @_;
+
+            my $cut = $img->Clone;
+            $cut->Crop( geometry => sprintf '60x18+%d+%d', $x, $y );
+            $cut->Set( page => '0x0+0+0' );
+
+            return $cut->Get( 'signature' );
+        };
+
+        my ( $x5, $y5, $frame5 ) = $at->( 5 );
+
+        is $bar->( $frame5, $x5, $y5 ), $bar->( $frame0, $x0, $y0 ),
+            'and the window that arrives is the one that left';
+    }
+}
+
+# ---------------------------------------------------------------------------
+# The dance is measured in the window's own pixels
+
+# So that it looks the same on a phone photograph and on a thumbnail. A jitter
+# counted in image pixels would be a twitch on one and a lurch on the other.
+{
+    my $spread = sub {
+        my ( $zoom ) = @_;
+
+        my ( @x, @y );
+        for my $n ( 0 .. 7 )
+        {
+            my ( $x, $y ) = danced(
+                width  => 400,
+                height => 300,
+                frames => 8,
+                frame  => $n,
+                set    => {
+                    jitter => 3,
+                    zoom   => $zoom,
+                    width  => 0.5,
+                    height => 0.5
+                },
+            );
+
+            next unless defined $x;
+
+            push @x, $x;
+            push @y, $y;
+        }
+
+        my @sx = sort { $a <=> $b } @x;
+        my @sy = sort { $a <=> $b } @y;
+
+        return ( $sx[ -1 ] - $sx[ 0 ], $sy[ -1 ] - $sy[ 0 ] );
+    };
+
+    my ( $one_x, $one_y ) = $spread->( 1 );
+    my ( $two_x, $two_y ) = $spread->( 2 );
+
+    is $two_x, 2 * $one_x, 'twice the zoom, twice the dance across';
+    is $two_y, 2 * $one_y, 'and twice the dance down';
+}
+
+# ---------------------------------------------------------------------------
+# Three palettes, and only three colours in each
+
+# A theme is the whole palette and not a tint applied afterwards, so the test
+# is the same one the zoom gets: every pixel of the window has to be one of
+# the inks that theme is drawn in. A themed window with a stray #C0C7C8 in it
+# is one that painted something before the theme was consulted.
+{
+    my %PALETTE = (
+        default =>
+            [ '255,255,255', '192,199,200', '135,136,143', '0,0,0', '0,0,168' ],
+        rose => [ '255,255,255', '207,175,183', '159,96,112', '0,0,0' ],
+        rain => [ '255,255,255', '131,153,177', '79,101,125', '0,0,0' ],
+    );
+
+    my @names = GlitchVape::Chicago::themes();
+    is_deeply \@names, [ qw(default rose rain) ],
+        'the themes are the three that are offered, in that order';
+
+    my %signature;
+    $signature{ $_ } = only_its_own_colours( $_, $PALETTE{ $_ } ) for @names;
+
+    isnt $signature{ rose }, $signature{ default },
+        'rose is not the default with a different name on it';
+    isnt $signature{ rain }, $signature{ rose }, 'and rain is not rose';
+}
+
+# ---------------------------------------------------------------------------
+# A theme nobody has heard of is the default, not a failure
+
+# Presets are files, and a file can outlive the version that wrote it. Asked
+# for a palette this build does not have, the window comes out ordinary rather
+# than not coming out.
+{
+    my $painted = sub {
+        my ( $theme ) = @_;
+
+        return GlitchVape::Chicago::render(
+            width      => 200,
+            height     => 140,
+            theme      => $theme,
+            caption    => undef,
+            menu       => undef,
+            font       => undef,
+            scrollbars => 1,
+            grip       => 1,
+            scroll     => 0,
+            thumb      => 0.5,
+        )->Get( 'signature' );
+    };
+
+    my $ordinary = $painted->( 'default' );
+
+    is $painted->( 'chartreuse' ), $ordinary, 'an unknown theme is the default';
+    is $painted->( undef ),        $ordinary, 'and so is no theme at all';
+    is $painted->( q{} ),          $ordinary, 'and so is an empty one';
 }
 
 # ---------------------------------------------------------------------------

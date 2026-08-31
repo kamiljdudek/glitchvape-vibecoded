@@ -24,6 +24,9 @@ A C<Gtk3::ImageView>, which brings zoom and pan with it. Inspecting a glitch
 at 1:1 is most of what the preview is for -- C<chroma_bleed> and C<dither> are
 invisible fitted to a pane.
 
+Scaled nearest-neighbour rather than smoothly. See
+L</WHY THE PREVIEW DOES NOT INTERPOLATE>.
+
 =item Animated
 
 GStreamer, playing the encoded loop through C<gtksink> into a widget in the
@@ -35,6 +38,26 @@ GdkPixbuf, which does not need a pipeline.
 GStreamer is loaded on first use rather than at startup, so a machine without
 it -- or without the H.264 decoder the loop needs -- runs the still interface
 normally and only reports a problem if the user asks for an animation.
+
+=head1 WHY THE PREVIEW DOES NOT INTERPOLATE
+
+C<Gtk3::ImageView> scales with Cairo's C<good> filter unless told otherwise,
+and for a photograph that is the right answer. For this program it is not.
+
+Almost everything here is an artefact one pixel across: the gap between two
+scanlines, the checker of a dither, a grain, a halftone cell, the one-pixel
+white highlight that is the only thing making a bevel look raised. Smoothed
+into a pane at eighty per cent, every one of those becomes a soft grey
+suggestion of itself -- and the preview stops being a smaller version of the
+export and becomes a different picture, which is exactly the claim
+L<GlitchVape::GUI::Render> makes it must not break.
+
+It shows worst on C<chicago>, whose whole subject is hard edges: at anything
+but 1:1 the caption goes fuzzy and the window reads as a photograph of a
+screen rather than as a screen. But it was never only that effect, and
+C<nearest> is the honest filter for all of them. Enlarged it gives square
+pixels, which is what the artefact is; reduced it drops pixels rather than
+averaging them, which is the same lie a smaller screen tells.
 
 =cut
 
@@ -59,6 +82,9 @@ sub new
         muted    => 0,
         on_error => $arg{ on_error },
     }, $class;
+
+    # Nearest rather than Cairo's default: see above.
+    $self->{ view }->set_interpolation( 'nearest' );
 
     $self->{ stack }->set_transition_type( 'crossfade' );
     $self->{ stack }->set_transition_duration( 120 );

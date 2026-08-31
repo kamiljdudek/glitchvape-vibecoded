@@ -454,4 +454,22 @@ my %claimed;
     $gui->{ b_animate }->set_active( 0 );
 }
 
+# ---------------------------------------------------------------------------
+# The preview scales naively
+
+# Gtk3::ImageView smooths by default -- Cairo's 'good' filter -- and for a
+# photograph that is right. Here it is not: almost everything this program
+# makes is an artefact one pixel across, and the preview pane is very rarely
+# the size of the render, so a smoothed preview is a picture of a different
+# render. It shows worst on the hard edges of 'chicago', and it was never only
+# that effect.
+{
+    my $view = $gui->{ preview }{ view };
+
+    ok $view, 'the preview has an image view in it';
+
+    is $view->get_interpolation, 'nearest',
+        'which scales by dropping and repeating pixels rather than averaging';
+}
+
 done_testing;

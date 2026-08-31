@@ -495,6 +495,20 @@ full size.
 |---|---|---|---|---|
 | `vhs-decay`, 12 MP source | 1.9 s | 2.8 s | 3.6 s | 8.0 s |
 
+The pane then shows that render at whatever zoom fits it, which is almost
+never 1:1, and **the scaling is nearest-neighbour**. Smoothing it would be
+right for a photograph and is wrong for everything this program adds to one:
+a scanline gap, a dither checker, a grain, the one-pixel highlight that makes
+a bevel look raised — each is an artefact one pixel across, and averaged into
+a pane at 90% every one of them becomes a soft grey suggestion of itself. It
+shows worst on `chicago`, whose whole subject is hard edges. Enlarged, the
+preview gives square pixels; reduced, it drops them rather than blending them,
+which is the same lie a smaller screen tells.
+
+The animated preview does not get this: it plays an H.264 loop through
+GStreamer's `gtksink`, which exposes no filter of its own. A loop therefore
+previews softer than the file it came from.
+
 ### The cache
 
 `$XDG_CACHE_HOME/glitchvape`, or `~/.cache/glitchvape`. Working files go in a

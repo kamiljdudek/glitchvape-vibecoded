@@ -413,6 +413,28 @@ effects arrive with it on, because a tape being chewed while it plays is what
 they are for; `dither` arrives with it off, because a shimmer nobody asked for
 would change what every preset using one already renders.
 
+There are three random streams, not two, and an effect wants exactly one:
+
+| | |
+|---|---|
+| `rng_for` | a fresh roll every frame, and no two loops line up |
+| `rng_phase` | a fresh roll every frame, and the loop closes |
+| `rng_fixed` | one roll, held for the whole render |
+
+`rng_phase` keys on the frame's position around the loop rather than on its
+index, so the frame after the last one is the first one again. It is what lets
+something random close, which `chicago`'s `jitter` is: that one shakes the
+window in place rather than travelling, so there is no period for
+`Context::travel` to snap and it is deliberately not called a drift. The seam
+is invisible either way — one more jump among all the others — but the window
+is recognisable frame to frame, so coming back to a *different* position would
+be a jolt somebody could point at, which is not true of grain.
+
+`t/31-drift.t` is driven off the registry and so covers every effect declaring
+a `drift` the day it is declared. A moving parameter under any other name is
+outside that sweep and owes the same two proofs — the loop closes, and a still
+is untouched — in its own file.
+
 `t/38-reroll.t` walks the registry and proves both halves for every effect
 that declares one, so an effect growing a `reroll` is covered the day it is
 declared. Two effects need a nudge before the question can even be asked, and
@@ -488,6 +510,15 @@ half again as long as the one that follows.
   counter so a preview of the effect you have just navigated away from is
   dropped instead of appearing under the new one's heading, and `_finish`
   keeps a `gone` flag for the same reason.
+- **`Gtk3::ImageView` smooths, and the preview pane is almost never 1:1.**
+  Its `interpolation` defaults to Cairo's `good`, and the preview is shown at
+  whatever zoom fits the pane — 0.905 on an ordinary window — so every
+  one-pixel artefact this program makes is averaged away before anybody sees
+  it. `GUI/Preview.pm` sets `nearest`, which is what keeps the claim that a
+  preview differs from the export only in scale. The animated preview cannot
+  be fixed the same way: `gtksink` exposes no filter, and the loop is H.264
+  besides.
+
 - **A `Gtk3::Assistant` must not be destroyed from its own `apply` handler.**
   Gtk's click handler goes on to work out whether a page follows this one, so
   the window is freed and then read: a `GTK_IS_ASSISTANT` assertion and a

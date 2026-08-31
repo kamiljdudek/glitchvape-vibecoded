@@ -130,4 +130,48 @@ for my $effect ( @drifters )
     ok $off eq $on, "$effect ignores drift when there is only one frame";
 }
 
+# ---------------------------------------------------------------------------
+# The stream a drift can be random from and still close
+
+# Every drift above closes by arithmetic: Context::travel snaps a distance to
+# whole repeats. Not everything that moves can -- 'chicago' has a jitter,
+# which picks a new place every frame and travels nowhere, so there is no
+# period to snap. Context::rng_phase is what lets that close instead: it keys
+# the roll on where the frame sits around the loop rather than on which frame
+# it is. It is tested here because closing loops is what this file is about;
+# the jitter itself is in t/40-chicago.t.
+#
+# The contract has two halves and both matter. Inside one pass it must be
+# rng_for exactly, or a drift built on it would render differently for no
+# reason anybody asked for; at the wrap it must not be, which is the whole
+# point of having it.
+{
+    my $rolls = sub {
+        my ( $method, $frame, $length ) = @_;
+
+        my $ctx = GlitchVape::Context->new( seed => 41 );
+        $ctx->frames( $length );
+        $ctx->frame( $frame );
+
+        return $ctx->$method( 'probe' )->rand;
+    };
+
+    for my $frame ( 0, 1, 5, 11 )
+    {
+        is $rolls->( 'rng_phase', $frame, 12 ),
+            $rolls->( 'rng_for', $frame, 12 ),
+            "on frame $frame of a loop rng_phase is rng_for";
+    }
+
+    is $rolls->( 'rng_phase', 12, 12 ), $rolls->( 'rng_phase', 0, 12 ),
+        'and the frame after the last one is the first one again';
+
+    isnt $rolls->( 'rng_for', 12, 12 ), $rolls->( 'rng_for', 0, 12 ),
+        'which rng_for is not, and is not meant to be';
+
+    # A still has no loop to come round, so there is nothing to distinguish.
+    is $rolls->( 'rng_phase', 0, 1 ), $rolls->( 'rng_for', 0, 1 ),
+        'on a still the two are the same stream';
+}
+
 done_testing;
