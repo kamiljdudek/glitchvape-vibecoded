@@ -246,23 +246,29 @@ different flags — `pod2usage` reads the same block.
 
 Both packagings are built on every push to main by
 `.github/workflows/packages.yml`, which uploads the three `.deb`s, the three
-`.rpm`s and the source RPM as artifacts. Each is built on the distribution it
-is for: the `.deb`s on a bare `ubuntu-slim` runner, the RPMs in a
-`fedora:latest` container, which is why that job needs `ubuntu-latest` — a
-slim job is itself an unprivileged container and cannot start one.
+`.rpm`s and the source RPM as artifacts. Each is built in a container of the
+distribution it is for — `debian:trixie` and `fedora:latest` — and each
+installs its build-dependencies out of its own packaging file, `apt-get
+build-dep ./package` reading `debian/control` and `dnf builddep` reading the
+spec. Neither job repeats a dependency list; repeating one was tried and it
+drifted from `debian/control` inside an hour.
 
-Building the RPMs anywhere but Fedora was tried and is a trap. It can be made
-to work — supply `%{perl_vendorlib}` through `RPMDEFINES` and stand the
-`BuildRequires` list down with `--nodeps`, which is what the escape hatch in
-`rpm-tools` is for — and it produces three `.rpm` files that pass. What it
-does not do is exercise the spec: with the dependency list skipped, the
-buildroot is whatever the runner happened to have. Every one of the missing
-`BuildRequires` found so far — `prove`, `FindBin`, `lib`, `Digest::SHA`, a
-YAML parser, the `magick` binary as distinct from the Perl binding, and a CJK
-font with fontconfig to see it by — was invisible on Debian, where one `perl`
-package carries most of them and a workstation has the rest. A minimal
-Fedora buildroot has exactly what the spec asks for, which is the whole
-reason to build there.
+Building either on the runner itself was tried and neither works. The RPMs
+need `%{perl_vendorlib}` supplied by hand and the `BuildRequires` list stood
+down with `--nodeps`, which produces three `.rpm` files without exercising the
+spec anybody will actually build: with the dependency list skipped, the
+buildroot is whatever the runner happened to have. The `.deb`s need
+ImageMagick 7, and `ubuntu-slim` is Ubuntu 24.04, which ships version 6 —
+there is no `magick` binary there at all, `Tools` finds `convert` instead, and
+five tests fail under it.
+
+That is the argument for the containers, and it is the same argument twice:
+every missing `BuildRequires` found so far — `prove`, `FindBin`, `lib`,
+`Digest::SHA`, a YAML parser, the `magick` binary as distinct from the Perl
+binding, and a CJK font with fontconfig to see it by — was invisible on a
+workstation, where one `perl` package carries most of them and the rest are
+simply already installed. A container has exactly what the packaging asked
+for and nothing else, which is the point.
 
 ## Conventions
 
