@@ -103,7 +103,7 @@ jobs:
           ls -l build/*.deb
           for p in build/*.deb; do dpkg-deb -I "$p"; done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: glitchvape-deb
           path: build/*.deb
@@ -150,13 +150,13 @@ jobs:
             rpm -qp --requires "$p"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: glitchvape-srpm
           path: build/rpmbuild/SRPMS/*.src.rpm
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: glitchvape-rpm
           path: build/rpmbuild/RPMS/*/*.rpm
