@@ -63,9 +63,20 @@ jobs:
           set -eux
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y --no-install-recommends git make perl dpkg-dev
+          # ca-certificates by name, because git only *Recommends* it and
+          # --no-install-recommends is what keeps this container lean. Without
+          # it actions/checkout fails on the TLS handshake to github.com --
+          # "Problem with the SSL CA cert (path? access rights?)" -- which
+          # reads like a runner fault and is a missing package. Fedora needs
+          # no equivalent: there git depends on it outright.
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            git \
+            make \
+            perl \
+            dpkg-dev
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The Build-Depends list lives in package/debian/control and nowhere
       # else. apt reads it straight out of a directory holding a debian/ --
@@ -120,7 +131,7 @@ jobs:
           # form is the dnf4 spelling, for an older base image.
           dnf -y install dnf5-plugins || dnf -y install 'dnf-command(builddep)'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install what the spec asks for
         run: dnf -y builddep package/glitchvape.spec
