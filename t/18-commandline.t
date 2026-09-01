@@ -8,6 +8,19 @@ use FindBin ();
 use lib "$FindBin::Bin/../lib";
 
 use Test::More;
+
+# CommandLine.pm reaches GUI::Export, which is a Gtk3 module, so this test
+# cannot even compile in a buildroot without the bindings -- which is what a
+# mock chroot and a container image both are. It needs no *display*: nothing
+# below opens a window, only turns state into a string. Guarded like the
+# tests that do need one, because the failure is otherwise a compile abort
+# with no plan, which reads as a broken test rather than a missing package.
+BEGIN
+{
+    eval { require Gtk3; 1 }
+        or plan skip_all => 'Gtk3 is not available';
+}
+
 use GlitchVape                   ();
 use GlitchVape::GUI::CommandLine ();
 use GlitchVape::GUI::State       ();

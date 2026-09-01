@@ -244,6 +244,26 @@ Manual pages are generated from the tools' own POD at install time rather than
 committed, so `man glitchvape` and `glitchvape --help` cannot document
 different flags — `pod2usage` reads the same block.
 
+Both packagings are built on every push to main by
+`.github/workflows/packages.yml`, which uploads the three `.deb`s, the three
+`.rpm`s and the source RPM as artifacts. Each is built on the distribution it
+is for: the `.deb`s on a bare `ubuntu-slim` runner, the RPMs in a
+`fedora:latest` container, which is why that job needs `ubuntu-latest` — a
+slim job is itself an unprivileged container and cannot start one.
+
+Building the RPMs anywhere but Fedora was tried and is a trap. It can be made
+to work — supply `%{perl_vendorlib}` through `RPMDEFINES` and stand the
+`BuildRequires` list down with `--nodeps`, which is what the escape hatch in
+`rpm-tools` is for — and it produces three `.rpm` files that pass. What it
+does not do is exercise the spec: with the dependency list skipped, the
+buildroot is whatever the runner happened to have. Every one of the missing
+`BuildRequires` found so far — `prove`, `FindBin`, `lib`, `Digest::SHA`, a
+YAML parser, the `magick` binary as distinct from the Perl binding, and a CJK
+font with fontconfig to see it by — was invisible on Debian, where one `perl`
+package carries most of them and a workstation has the rest. A minimal
+Fedora buildroot has exactly what the spec asks for, which is the whole
+reason to build there.
+
 ## Conventions
 
 - **`make tidy` and `make critic` before finishing.** `.perltidyrc` and

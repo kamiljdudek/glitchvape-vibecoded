@@ -45,9 +45,48 @@ BuildRequires:  libappstream-glib
 
 # The suite is Perl-only apart from the effects, which need ImageMagick. It
 # skips the window tests when there is no display, so it runs under mock.
+#
+# Every one of these was found by building in an empty buildroot rather than
+# by reading the tests, and none of them would have been missed on Debian:
+# there, one `perl` package carries the lot. Fedora splits what used to be
+# the core library into a package per module, so a buildroot has exactly what
+# is asked for and nothing else -- which is the environment mock and every
+# container image provide, and the one this has to build in.
 BuildRequires:  perl(Test::More)
+# `make test` is prove, a *program*, and nothing providing Test::More brings
+# it: it is perl-Test-Harness.
+BuildRequires:  perl(Test::Harness)
+# Every test file locates the checkout it is running from with these two.
+BuildRequires:  perl(FindBin)
+BuildRequires:  perl(lib)
+# The interface's cache is content-addressed on the resolved configuration,
+# and this is what addresses it.
+BuildRequires:  perl(Digest::SHA)
+# A preset is YAML, so a buildroot that cannot read one runs no test that
+# loads a preset. Either parser will do at run time -- see the Requires below
+# -- but a build has to name one, and this is the one Config.pm reaches for
+# first.
+BuildRequires:  perl(YAML::XS)
 BuildRequires:  perl(Image::Magick)
+# And ImageMagick itself, which is a separate thing to ask for: the binding
+# is a library, and GlitchVape::Tools shells out to `magick` for what the
+# binding cannot do in-process. With only the binding the effects tests
+# announce "ImageMagick is not installed" and skip, so %%check passes having
+# rendered nothing -- which is worse than failing. debian/control has said
+# both for the same reason.
+BuildRequires:  ImageMagick
 BuildRequires:  perl(File::Which)
+# And a CJK font, with fontconfig to see it by.
+#
+# "A missing font is a different-looking render, never an error" holds for
+# every role that has a bundled candidate to fall through to. The cjk role
+# has none -- the faces that carry the glyphs are far too large to bundle --
+# so `text` and `watermark` do not degrade, they die, and %%check with them is
+# the only place that would notice. The font this names is the one the base
+# package Recommends, so the suite renders with what a user will actually
+# have rather than with whatever happened to be in the buildroot.
+BuildRequires:  fontconfig
+BuildRequires:  google-noto-sans-cjk-fonts
 
 Requires:       ImageMagick
 Requires:       perl-interpreter
@@ -67,6 +106,13 @@ Requires:       perl(Image::Magick)
 Requires:       perl(List::Util)
 Requires:       perl(Pod::Usage)
 Requires:       perl(Scalar::Util)
+
+# A preset is a YAML file and presets are what this program is for, so this
+# is not optional the way the Recommends below are: without a parser every
+# --preset fails at the first file it opens. Config.pm takes either, trying
+# YAML::XS first and falling back to YAML::PP, so the dependency says either
+# rather than picking one on the user's behalf.
+Requires:       (perl(YAML::XS) or perl(YAML::PP))
 
 # Named as paths rather than as packages: /usr/bin/ffmpeg is provided both by
 # Fedora's ffmpeg-free and by RPM Fusion's ffmpeg, and a package name would

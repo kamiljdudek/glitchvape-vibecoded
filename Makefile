@@ -321,14 +321,27 @@ install-man:
 # Installed scripts find the modules on @INC like anything else, so the
 # checkout's `use lib` has to go. Left in, it would put a directory that does
 # not exist -- or worse, one that does -- ahead of the installed library.
+#
+# FindBin itself is a separate question, and conflating the two broke every
+# install of the window: glitchvape-gui asks FindBin where it is so that Open
+# can start a second instance of *this* program, which is a fact it needs
+# whether it was installed or not. So the `use lib` line always goes, and the
+# `use FindBin ()` beside it goes only when nothing else in the script names
+# the package -- and both halves are asserted, because a script left using
+# FindBin without loading it does not fail to compile. $FindBin::RealBin is
+# simply undef, and the program spawns /RealScript out of the root directory.
 .PHONY: fix-inc
 fix-inc:
-	for s in $(SCRIPT_LIST); do \
-	    sed -i -e '/^use FindBin ();$$/d' \
-	           -e '\|^use lib "\$$FindBin::Bin/\.\./lib";$$|d' \
-	        $(DESTDIR)$(BINDIR)/$$s; \
-	    ! grep -q 'FindBin' $(DESTDIR)$(BINDIR)/$$s \
-	        || { echo "install: $$s still refers to FindBin" >&2; exit 1; }; \
+	set -e; for s in $(SCRIPT_LIST); do \
+	    f=$(DESTDIR)$(BINDIR)/$$s; \
+	    sed -i -e '\|^use lib "\$$FindBin::Bin/\.\./lib";$$|d' $$f; \
+	    grep -q 'FindBin::' $$f || sed -i -e '/^use FindBin ();$$/d' $$f; \
+	    ! grep -q '^use lib ' $$f \
+	        || { echo "install: $$s still adds a lib directory of its own" >&2; \
+	             exit 1; }; \
+	    ! grep -q 'FindBin::' $$f || grep -q '^use FindBin ();' $$f \
+	        || { echo "install: $$s uses FindBin but no longer loads it" >&2; \
+	             exit 1; }; \
 	done
 
 # What goes into the tarball, and so into the src.rpm. Everything the build

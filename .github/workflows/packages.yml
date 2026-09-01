@@ -1,0 +1,151 @@
+# Builds every package this project ships, on every commit to main: the three
+# .deb files, the three .rpm files and the source RPM, each uploaded as an
+# artifact.
+#
+# All of it from the tarball `make dist` writes, which is the point of doing
+# it here at all -- a file the tarball failed to include is a build failure in
+# CI rather than a package that is quietly missing something -- and both
+# packagings run the suite on the way through, the RPM in %check and the .deb
+# in override_dh_auto_test.
+#
+# Each packaging is built on the distribution it is for. The .debs on a bare
+# Ubuntu runner, the RPMs in a Fedora container -- which needs `ubuntu-latest`
+# rather than `ubuntu-slim`, because a slim job is itself an unprivileged
+# container and cannot start one. It is worth the larger runner: the
+# alternative was supplying %{perl_vendorlib} by hand and standing down the
+# BuildRequires list with --nodeps, since Debian's rpm has none of Fedora's
+# macros, and that builds *an* rpm without exercising the spec anybody will
+# actually build.
+
+name: packages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push to main makes the first one's packages uninteresting.
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # The three .deb packages
+  #
+  # On ubuntu-slim, which is all this needs: dpkg-buildpackage wants a Debian
+  # system and the runner is one, so there is nothing to arrange but the
+  # build-dependencies.
+  deb:
+    name: deb
+    runs-on: ubuntu-slim
+    steps:
+      # Before the checkout, because git is one of the things a slim image may
+      # not have -- and actions/checkout without it says nothing, it quietly
+      # downloads a tarball over the REST API instead.
+      - name: Install the build tools
+        run: |
+          set -eux
+          # The image may or may not run us as root; sudo is only meaningful
+          # if it does not.
+          SUDO=; [ "$(id -u)" -eq 0 ] || SUDO=sudo
+          export DEBIAN_FRONTEND=noninteractive
+          $SUDO apt-get update
+          # ImageMagick's Perl binding is in universe on Ubuntu, and what a
+          # slim image has enabled is not documented. Asked for only when it
+          # is actually missing, so this costs nothing on an image that
+          # already has it.
+          if ! apt-cache policy libimage-magick-perl | grep -q 'Candidate: [0-9]'; then
+            $SUDO apt-get install -y --no-install-recommends software-properties-common
+            $SUDO add-apt-repository -y universe
+            $SUDO apt-get update
+          fi
+          # debhelper and dpkg-dev build it; the rest is what debian/control
+          # names under Build-Depends, needed because the build runs the
+          # suite. No X: the window tests skip themselves when Gtk3 or a
+          # display is missing.
+          $SUDO apt-get install -y --no-install-recommends \
+            git \
+            make \
+            perl \
+            debhelper \
+            dpkg-dev \
+            fakeroot \
+            imagemagick \
+            libimage-magick-perl \
+            libfile-which-perl
+
+      - uses: actions/checkout@v4
+
+      # Unpacks the tarball into build/, moves package/debian into place and
+      # builds there, so nothing is written into the checkout.
+      - name: Build
+        run: make deb
+
+      - name: What was built
+        run: |
+          set -eux
+          ls -l build/*.deb
+          for p in build/*.deb; do dpkg-deb -I "$p"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glitchvape-deb
+          path: build/*.deb
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # The source RPM and the three binary RPMs
+  #
+  # In the container the spec is written for, so %{perl_vendorlib} resolves,
+  # perl-generators produces the dependencies, %{?dist} is real and %check
+  # runs the suite under the interpreter the package will ship against. There
+  # is nothing to arrange but the tools: `make rpms` is the whole build.
+  rpm:
+    name: rpm
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      # Before the checkout: the base image has neither git nor make.
+      - name: Install the build tools
+        run: |
+          set -eux
+          dnf -y install git make rpm-build
+          # builddep reads the spec, so the BuildRequires list stays in one
+          # place. Fedora moved the subcommand to dnf5-plugins; the second
+          # form is the dnf4 spelling, for an older base image.
+          dnf -y install dnf5-plugins || dnf -y install 'dnf-command(builddep)'
+
+      - uses: actions/checkout@v4
+
+      - name: Install what the spec asks for
+        run: dnf -y builddep package/glitchvape.spec
+
+      # Both, from the one tarball: the source package is what a build service
+      # is handed, and the binaries are what shows it builds.
+      - name: Build
+        run: make rpms
+
+      - name: What was built
+        run: |
+          set -eux
+          ls -l build/rpmbuild/SRPMS/*.src.rpm build/rpmbuild/RPMS/*/*.rpm
+          for p in build/rpmbuild/RPMS/*/*.rpm; do
+            rpm -qip "$p"
+            rpm -qp --requires "$p"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glitchvape-srpm
+          path: build/rpmbuild/SRPMS/*.src.rpm
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glitchvape-rpm
+          path: build/rpmbuild/RPMS/*/*.rpm
+          if-no-files-found: error

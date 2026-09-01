@@ -13,6 +13,17 @@ Build-Depends:
  imagemagick <!nocheck>,
  libimage-magick-perl <!nocheck>,
  libfile-which-perl <!nocheck>,
+# A preset is YAML, so without a parser every test that loads one fails. It
+# is here rather than assumed because a buildd chroot has what is asked for
+# and nothing else -- the same reason the RPM spec names it.
+ libyaml-libyaml-perl <!nocheck>,
+# The cjk role is the one with no bundled candidate to fall through to, so
+# `text` and `watermark` die rather than render differently when nothing
+# satisfies it -- and a buildd chroot satisfies nothing it was not told to.
+# fontconfig as well as the font, because fc-list is how a system font is
+# found at all.
+ fontconfig <!nocheck>,
+ fonts-noto-cjk <!nocheck>,
 Standards-Version: 4.7.0
 Homepage: https://github.com/kamiljdudek/glitchvape-vibecoded
 Vcs-Browser: https://github.com/kamiljdudek/glitchvape-vibecoded
@@ -26,6 +37,12 @@ Depends:
  imagemagick,
  libimage-magick-perl,
  libfile-which-perl,
+# A preset is a YAML file and presets are what this program is for, so this
+# is not optional the way the Recommends below are: without a parser every
+# --preset fails at the first file it opens. Config.pm takes either, trying
+# YAML::XS first and falling back to YAML::PP, so this names both rather than
+# choosing one on the user's behalf.
+ libyaml-libyaml-perl | libyaml-pp-perl,
 # Named as a path rather than as a package because Debian ships ffmpeg and
 # some derivatives substitute their own build; a package name would pick a
 # side the user has already picked. Without it the animated writers are gone
