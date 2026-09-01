@@ -325,7 +325,7 @@ sub _palette
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my $remap = GlitchVape::Palette::remap_file( $p->{ name }, $ctx->tmpdir );
+    my $remap = GlitchVape::Palette::remap_file( $p->{ name }, $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
     # image, so a copy has to be kept before anything modifies it.
@@ -384,7 +384,7 @@ sub _duotone
     return if $p->{ strength } <= 0;
 
     my $stops = GlitchVape::Palette::duotone( $p->{ name } );
-    my $clut  = GlitchVape::Palette::gradient_file( $stops, $ctx->tmpdir );
+    my $clut  = GlitchVape::Palette::gradient_file( $stops, $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
     # image, so a copy has to be kept before anything modifies it.
@@ -438,7 +438,8 @@ sub _gradient_map
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my $clut = GlitchVape::Palette::gradient_file( $p->{ name }, $ctx->tmpdir );
+    my $clut =
+        GlitchVape::Palette::gradient_file( $p->{ name }, $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
     # image, so a copy has to be kept before anything modifies it.

@@ -113,6 +113,8 @@ sub new
     $scroll->add( $self->{ body } );
     $box->pack_start( $scroll, 1, 1, 0 );
 
+    $box->pack_start( $self->_reset_button, 0, 0, 0 );
+
     # popdown() closes with a transition, so the widget's own visibility lags
     # behind the decision by the length of it. Callers ask this object whether
     # it is up and expect the answer to be true the instant it is, so the
@@ -270,6 +272,73 @@ sub _build
     # the popover and nothing inside it, so the scroller and the separator
     # between them would never be realised and the popover would open empty.
     $self->{ box }->show_all;
+
+    $self->_sync_reset;
+
+    return;
+}
+
+# The same button the Add Effect wizard puts at the foot of its settings
+# page, and for the same reason: an effect fifteen sliders deep is a thing
+# people get lost in, and the way back is not fifteen gestures.
+#
+# Outside the scroller rather than at the end of it, so that it is in the same
+# place for every effect. A button that follows the end of a scrolling list is
+# a button that moves as the list is browsed.
+sub _reset_button
+{
+    my ( $self ) = @_;
+
+    my $button = Gtk3::Button->new_with_mnemonic( '_Reset to defaults' );
+    $button->set_halign( 'end' );
+    $button->set_tooltip_text(
+        'Put every setting back to the value the effect declares' );
+
+    $button->signal_connect( clicked => sub { $self->_reset_params; return } );
+
+    $self->{ reset } = $button;
+
+    return $button;
+}
+
+# Insensitive while there is nothing to put back, which is the same argument
+# as the greyed parameters above it: a button that would do nothing should say
+# so rather than being pressed to find out.
+sub _sync_reset
+{
+    my ( $self ) = @_;
+
+    my $button = $self->{ reset } or return;
+    my $name   = $self->{ effect };
+
+    my $held = $name ? $self->{ state }->effects->{ $name } : undef;
+
+    $button->set_sensitive(
+        $held && !GlitchVape::Registry->at_defaults(
+            $name, $held->{ params } || {}
+        ) ? 1 : 0
+    );
+
+    return;
+}
+
+# Replaced with a freshly resolved set rather than emptied, because that is
+# the shape add_effect leaves behind and everything downstream reads params as
+# a hash with every key in it.
+sub _reset_params
+{
+    my ( $self ) = @_;
+
+    my $name = $self->{ effect } or return;
+
+    my $held = $self->{ state }->effects->{ $name } or return;
+
+    $held->{ params } = GlitchVape::Registry->resolve_params( $name, {} );
+
+    $self->_build;
+    $self->_sync_reset;
+
+    $self->{ on_change }->() if $self->{ on_change };
 
     return;
 }
@@ -464,6 +533,7 @@ sub _set_param
     # Before the render, not after: the switch that was just moved may have
     # decided whether the four controls under it mean anything.
     $self->_sync_needs;
+    $self->_sync_reset;
 
     $self->{ on_change }->() if $self->{ on_change };
     return;

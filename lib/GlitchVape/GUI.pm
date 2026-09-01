@@ -487,6 +487,11 @@ sub _build_menu
         undef,
         [ 'Save as preset…', sub { return $self->_save_preset }, 'preset' ],
         undef,
+        [
+            'Reset all effects to defaults',
+            sub { return $self->_reset_effects },
+            'reset'
+        ],
         [ 'Clear all effects', sub { return $self->_clear_effects }, 'clear' ],
         [ 'Clear preview cache', sub { return $self->_clear_cache } ],
         undef,
@@ -2446,6 +2451,58 @@ sub _animate_spec
 # In the menu rather than beside the effect list: it discards every effect at
 # once, which is not something to have within a slip of the Add button. It is
 # an ordinary edit, so undo steps back over it like any other.
+# Every effect in the pipeline back to what it declares, in one step.
+#
+# Beside Clear all effects rather than beside Undo, because it is the same
+# kind of act: throwing away work on the pipeline. The difference is which
+# work -- Clear throws away which effects are in it, this throws away what
+# they were set to and keeps the pipeline.
+#
+# One history entry for the lot. Fifteen effects reset one at a time would be
+# fifteen presses of Undo to get back, which is not an undo anybody would use.
+# Whether any effect in the pipeline has been moved off its declaration.
+sub _anything_moved
+{
+    my ( $self ) = @_;
+
+    return 0 unless $self->{ state };
+
+    my $effects = $self->{ state }->effects;
+
+    for my $name ( keys %$effects )
+    {
+        return 1
+            unless GlitchVape::Registry->at_defaults( $name,
+            $effects->{ $name }{ params } || {} );
+    }
+
+    return 0;
+}
+
+sub _reset_effects
+{
+    my ( $self ) = @_;
+
+    return unless $self->{ state };
+
+    my $effects = $self->{ state }->effects;
+
+    for my $name ( keys %$effects )
+    {
+        $effects->{ $name }{ params } =
+            GlitchVape::Registry->resolve_params( $name, {} );
+    }
+
+    # The preset is a claim about the parameters as much as about which
+    # effects are in the pipeline, and it is no longer true of these.
+    $self->{ state }->preset( undef );
+
+    $self->_reload_widgets;
+    $self->_touch;
+
+    return;
+}
+
 sub _clear_effects
 {
     my ( $self ) = @_;
@@ -3590,6 +3647,11 @@ sub _sync_actions
     $self->{ b_adjust }->set_sensitive( $ready && $selected );
     $self->{ m_preset }->set_sensitive( $have );
     $self->{ m_clear }->set_sensitive( $ready );
+
+    # Greyed while every effect already is at its defaults, the same argument
+    # as the button in the settings popover: a menu entry that would do
+    # nothing should say so rather than be chosen to find out.
+    $self->{ m_reset }->set_sensitive( $ready && $self->_anything_moved );
     $self->{ m_command }->set_sensitive( $have );
     $self->{ m_seed }->set_sensitive( $have );
     $self->{ b_apply }->set_sensitive( $have );

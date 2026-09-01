@@ -9,10 +9,11 @@ use lib "$FindBin::Bin/../lib";
 use File::Temp ();
 use Test::More;
 
-use GlitchVape           ();
-use GlitchVape::Context  ();
-use GlitchVape::Pipeline ();
-use GlitchVape::Tools    ();
+use GlitchVape                 ();
+use GlitchVape::Context        ();
+use GlitchVape::Effect::Screen ();
+use GlitchVape::Pipeline       ();
+use GlitchVape::Tools          ();
 
 plan skip_all => 'ImageMagick is not installed'
     unless GlitchVape::Tools::have( 'magick' );
@@ -172,6 +173,72 @@ for my $effect ( @drifters )
     # A still has no loop to come round, so there is nothing to distinguish.
     is $rolls->( 'rng_phase', 0, 1 ), $rolls->( 'rng_for', 0, 1 ),
         'on a still the two are the same stream';
+}
+
+# ---------------------------------------------------------------------------
+# A wobble is a drift under another name, and closes like one
+
+# 'cmyk' rocks its four screen angles over the loop rather than travelling
+# them, so it is outside the sweep above -- which greps the registry for a
+# parameter called 'drift'. It owes the same two proofs here.
+#
+# The angles are what is checked rather than the pixels: four screens a
+# quarter of a degree apart make a picture that differs from its neighbour in
+# ways no signature comparison would tell you anything useful about, and the
+# angles are the thing the parameter actually moves.
+{
+    my $plates = {
+        cyan    => 15,
+        magenta => 75,
+        yellow  => 0,
+        black   => 45,
+        wobble  => 1.5,
+    };
+
+    my $at = sub {
+        my ( $frame, $count ) = @_;
+
+        my $ctx = GlitchVape::Context->new( seed => 1 );
+        $ctx->frames( $count );
+        $ctx->frame( $frame );
+
+        ## no critic (Subroutines::ProtectPrivateSubs)
+        return [ GlitchVape::Effect::Screen::_angles( $ctx, $plates ) ];
+        ## use critic
+    };
+
+    is_deeply $at->( 12, 12 ), $at->( 0, 12 ),
+        'cmyk comes back to the angles it started the loop on';
+
+    isnt join( q{}, @{ $at->( 3, 12 ) } ), join( q{}, @{ $at->( 0, 12 ) } ),
+        'having moved them in between';
+
+    is_deeply $at->( 0, 1 ), [ 15, 75, 0, 45 ],
+        'and a still is set at exactly the angles it was given';
+
+    # The plates move against one another rather than together, which is the
+    # difference between a rosette breathing and the whole screen turning.
+    my $moved = $at->( 3, 12 );
+    my $from  = [ 15, 75, 0, 45 ];
+
+    my @way = map { $moved->[ $_ ] <=> $from->[ $_ ] } 0 .. 3;
+
+    ok(
+        ( grep { $_ > 0 } @way ) && ( grep { $_ < 0 } @way ),
+        'with some plates ahead of where they started and some behind'
+    );
+
+    # Quantised, so that a loop asks for a couple of dozen screens rather than
+    # four per frame -- each of which is a rotation of a square twice the
+    # picture's diagonal.
+    my %angle;
+    for my $frame ( 0 .. 23 )
+    {
+        $angle{ $_ }++ for @{ $at->( $frame, 24 ) };
+    }
+
+    cmp_ok scalar keys %angle, '<', 24 * 4 / 2,
+        'and far fewer distinct screens than frames times plates';
 }
 
 done_testing;

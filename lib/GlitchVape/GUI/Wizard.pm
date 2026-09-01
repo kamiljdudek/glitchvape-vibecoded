@@ -371,6 +371,15 @@ sub _effect_page
     my $box = Gtk3::Box->new( 'vertical', 8 );
     $box->set_border_width( 12 );
 
+    # Which category this is a list of, above the box that can take you out
+    # of it. The first page is a list of nine and the second is a list of
+    # effects, and without this the second page does not say which of the nine
+    # it came from -- so coming back to it after a detour, or arriving at it
+    # by the keyboard, meant guessing from the contents.
+    my $heading = Gtk3::Label->new;
+    $heading->set_xalign( 0 );
+    $box->pack_start( $heading, 0, 0, 0 );
+
     my $search = Gtk3::SearchEntry->new;
     $search->set_placeholder_text( 'Search effects…' );
     $box->pack_start( $search, 0, 0, 0 );
@@ -425,10 +434,11 @@ sub _effect_page
     $scope->get_style_context->add_class( 'dim-label' );
     $box->pack_start( $scope, 0, 0, 0 );
 
-    $self->{ effect_search } = $search;
-    $self->{ effect_list }   = $list;
-    $self->{ effect_scope }  = $scope;
-    $self->{ effect_page }   = $box;
+    $self->{ effect_heading } = $heading;
+    $self->{ effect_search }  = $search;
+    $self->{ effect_list }    = $list;
+    $self->{ effect_scope }   = $scope;
+    $self->{ effect_page }    = $box;
 
     return $box;
 }
@@ -551,16 +561,28 @@ sub _note_scope
     my ( $self ) = @_;
 
     my $query = $self->{ query };
-    my $label = $self->{ effect_scope };
+    my $info  = GlitchVape::Registry->stage_info( $self->{ stage } );
+    my $where = $info ? $info->{ title } : 'the whole chain';
 
+    my $heading = $self->{ effect_heading };
+    my $label   = $self->{ effect_scope };
+
+    # The two say different things and have to keep agreeing: the heading is
+    # where you are, the note under the list is what that place is for. A
+    # search moves you somewhere else, so both have to say so -- a heading
+    # still naming one category over a list showing all of them is worse than
+    # no heading at all.
     if ( defined $query && length $query )
     {
-        $label->set_text( 'Searching every category. Clear the box to go '
-                . 'back to the one you picked.' );
+        $heading->set_markup( '<b>Every category</b>' );
+
+        $label->set_text( "Searching every category. Clear the box to go "
+                . "back to $where." );
         return;
     }
 
-    my $info = GlitchVape::Registry->stage_info( $self->{ stage } );
+    $heading->set_markup( '<b>' . _escape( $where ) . '</b>' );
+
     $label->set_text( $info ? $info->{ blurb } : q{} );
     return;
 }
@@ -649,50 +671,12 @@ sub _sync_reset
 
     my $button = $self->{ reset_button } or return;
 
-    $button->set_sensitive( $self->_at_defaults ? 0 : 1 );
+    $button->set_sensitive(
+        GlitchVape::Registry->at_defaults( $self->{ effect },
+            $self->{ params } ) ? 0 : 1
+    );
 
     return;
-}
-
-# Against a freshly resolved set rather than against the raw declaration, so
-# both sides have been through the same coercion -- otherwise a slider that
-# handed back 0.35 would compare unequal to a declared '0.35'.
-sub _at_defaults
-{
-    my ( $self ) = @_;
-
-    my $name = $self->{ effect } or return 1;
-
-    my $defaults = eval { GlitchVape::Registry->resolve_params( $name, {} ) }
-        or return 1;
-
-    my $spec = GlitchVape::Registry->get( $name );
-
-    for my $key ( keys %$defaults )
-    {
-        my $type = $spec->{ params }{ $key }{ type } // 'str';
-
-        my $now = $self->{ params }{ $key };
-        my $was = $defaults->{ $key };
-
-        return 0 if defined $now xor defined $was;
-        next unless defined $now;
-
-        if ( $type eq 'list' )
-        {
-            return 0 if join( ',', @$now ) ne join( ',', @$was );
-        }
-        elsif ( $type eq 'num' || $type eq 'int' )
-        {
-            return 0 if $now != $was;
-        }
-        else
-        {
-            return 0 if $now ne $was;
-        }
-    }
-
-    return 1;
 }
 
 =head2 _reset_params

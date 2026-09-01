@@ -415,13 +415,14 @@ sub shown_as
             ? $built->{ control }->get_children
             : ();
 
-        my ( $spin ) = grep { $_->isa( 'Gtk3::SpinButton' ) } @kids;
-        my ( $roll ) =
-            grep { $_->isa( 'Gtk3::Button' ) && !$_->isa( 'Gtk3::SpinButton' ) }
-            @kids;
+        my ( $shown ) = grep { $_->isa( 'Gtk3::Label' ) } @kids;
+        my ( $roll )  = grep { $_->isa( 'Gtk3::Button' ) } @kids;
 
-        ok $spin, "$kind keeps a box the number can be typed into";
-        ok $roll, "and a button beside it for the case nobody types";
+        ok $shown, "$kind shows the seed it is using";
+        ok $roll,  'and a button is the only way to change it';
+
+        ok !( grep { $_->isa( 'Gtk3::Entry' ) } @kids ),
+            'with nothing to type an exact one into';
     }
 }
 
@@ -440,15 +441,13 @@ sub shown_as
         on_change => sub { push @told, $_[ 0 ] },
     );
 
-    my @kids = $built->{ control }->get_children;
-    my ( $spin ) = grep { $_->isa( 'Gtk3::SpinButton' ) } @kids;
-    my ( $roll ) =
-        grep { $_->isa( 'Gtk3::Button' ) && !$_->isa( 'Gtk3::SpinButton' ) }
-        @kids;
+    my @kids      = $built->{ control }->get_children;
+    my ( $shown ) = grep { $_->isa( 'Gtk3::Label' ) } @kids;
+    my ( $roll )  = grep { $_->isa( 'Gtk3::Button' ) } @kids;
 
 SKIP:
     {
-        skip 'no reroll button', 4 unless $spin && $roll;
+        skip 'no reroll button', 4 unless $shown && $roll;
 
         my %seen;
         for ( 1 .. 8 )
@@ -463,14 +462,141 @@ SKIP:
         cmp_ok scalar @told, '>=', 6,
             'and the caller hears about each one, so the track re-renders';
 
-        # Which is the half a bare button would have thrown away: a seed you
-        # liked can be written down and put back.
-        $spin->set_value( 4242 );
-
-        is $built->{ get }->(), 4242, 'a seed can still be typed in by hand';
+        # Shown rather than hidden, because seeing it change is how anybody
+        # knows the button did anything -- and that number is what travels in
+        # a saved preset and in the copied command line.
+        is $shown->get_text, $built->{ get }->(),
+            'the number on screen is the seed being used';
 
         ok $roll->get_tooltip_text, 'and the button says what it does';
     }
+}
+
+# ---------------------------------------------------------------------------
+# A number that names the values people use gets the list, not a track
+
+# The same argument as the calendar and the seed, a third time. A slider is
+# for a quantity, and a drive's spindle is not one: it spins at 5400 or 7200,
+# and a track between them is a track whose whole length is wrong answers.
+#
+# Typeable rather than closed, because the number still means something on its
+# own -- and the declared range still has the last word over what is typed.
+{
+    my $spec = GlitchVape::Generator::get( 'drive' )->{ params }{ rpm };
+
+    ok $spec->{ suggest }, 'the spindle names the speeds drives were built at';
+
+    my @told;
+    my $built = GlitchVape::GUI::Params->build(
+        effect    => 'drive',
+        name      => 'rpm',
+        spec      => $spec,
+        value     => 5400,
+        on_change => sub { push @told, $_[ 0 ] },
+    );
+
+    my $combo = $built->{ control };
+
+    isa_ok $combo, 'Gtk3::ComboBoxText',
+        'an int that suggests values gets a list rather than a slider';
+
+    my @offered;
+    $combo->get_model->foreach(
+        sub { push @offered, $_[ 0 ]->get_value( $_[ 2 ], 0 ); return 0 } );
+
+    is_deeply \@offered, [ 4200, 5400, 7200, 10_000, 15_000 ],
+        'and offers exactly the ones the declaration names';
+
+    is $built->{ get }->(), 5400, 'opening on the one it was given';
+
+    # Still an entry underneath: a drive that spun at something else is a
+    # drive somebody may want.
+    $combo->get_child->set_text( 6800 );
+
+    is $built->{ get }->(), 6800, 'a speed not on the list can be typed';
+    is $told[ -1 ],         6800, 'and the caller hears about it';
+}
+
+# ---------------------------------------------------------------------------
+# A colour is recognised by what it is, not by what it is called
+
+# There was a list of four names here -- tint, color, shadow, background --
+# and cmyk.paper is a colour that is not one of them, so it got a plain box
+# for a thing nobody can spell. Anything whose default is a hex triplet is a
+# colour whatever it is called, which is the same argument the rest of this
+# module rests on: the declaration says what a parameter is.
+{
+    my $picker = sub {
+        my ( $effect, $name ) = @_;
+
+        my $spec = GlitchVape::Registry->get( $effect )->{ params }{ $name };
+        return 0 unless $spec;
+
+        my $built = GlitchVape::GUI::Params->build(
+            effect    => $effect,
+            name      => $name,
+            spec      => $spec,
+            value     => $spec->{ default },
+            on_change => sub { },
+        );
+
+        my @kids =
+              $built->{ control }->can( 'get_children' )
+            ? $built->{ control }->get_children
+            : ();
+
+        return scalar grep { $_->isa( 'Gtk3::ColorButton' ) } @kids;
+    };
+
+    ok $picker->( 'cmyk', 'paper' ),
+        'the paper a halftone is printed on gets a picker';
+
+    # The named ones still do: two of these declare no hex default at all --
+    # a tint is empty until it is asked for, and a letterbox is 'black'.
+    for my $pair (
+        [ 'grade',     'tint' ],
+        [ 'letterbox', 'color' ],
+        [ 'curvature', 'background' ],
+        [ 'text',      'shadow' ],
+        )
+    {
+        ok $picker->( @$pair ), "$pair->[0].$pair->[1] still gets one";
+    }
+
+    # And a number is not a colour however it is spelled.
+    ok !$picker->( 'cmyk', 'pitch' ), 'a screen ruling does not get one';
+}
+
+# ---------------------------------------------------------------------------
+# Four angles are four controls
+
+# They were one text box holding '15,75,0,45', which is four numbers in a
+# trench coat: no range, no label saying which ink is which, and a typo
+# anywhere in it failing the whole effect.
+{
+    my $spec = GlitchVape::Registry->get( 'cmyk' )->{ params };
+
+    ok !$spec->{ angles }, 'the comma-separated box is gone';
+
+    for my $ink ( qw(cyan magenta yellow black) )
+    {
+        ok $spec->{ $ink }, "there is a control for the $ink plate";
+
+        my $built = GlitchVape::GUI::Params->build(
+            effect    => 'cmyk',
+            name      => $ink,
+            spec      => $spec->{ $ink },
+            value     => $spec->{ $ink }{ default },
+            on_change => sub { },
+        );
+
+        isa_ok $built->{ control }, 'Gtk3::Scale', "and $ink is a track";
+    }
+
+    is_deeply
+        [ map { $spec->{ $_ }{ default } } qw(cyan magenta yellow black) ],
+        [ 15, 75, 0, 45 ],
+        'opening on the classical angles the string used to hold';
 }
 
 done_testing;

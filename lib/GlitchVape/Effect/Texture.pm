@@ -211,13 +211,13 @@ sub _bitmap
     my $sh = int( $h / $p->{ factor } ) || 1;
 
     my $remap =
-        GlitchVape::Palette::remap_file( $p->{ palette }, $ctx->tmpdir );
+        GlitchVape::Palette::remap_file( $p->{ palette }, $ctx->cachedir );
 
     my @args = ( '-filter', 'Point', '-resize', "${sw}x${sh}!" );
 
     if ( $p->{ matrix } ne 'none' && $p->{ amount } > 0 )
     {
-        my $tile = _bayer_file( $p->{ matrix }, $ctx->tmpdir );
+        my $tile = _bayer_file( $p->{ matrix }, $ctx->cachedir );
 
         # result = amount*tile + image - amount/2, so the matrix is centred on
         # zero and shifts a pixel either way rather than only brightening it.

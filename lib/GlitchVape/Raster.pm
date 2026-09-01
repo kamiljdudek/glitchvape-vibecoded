@@ -93,8 +93,17 @@ sub scanline_tile
     my $offset    = int( $opt{ offset } || 0 );
     my $soft      = $opt{ softness } || 0;
 
-    $spacing   = 1        if $spacing < 1;
-    $thickness = $spacing if $thickness > $spacing;
+    $spacing = 1 if $spacing < 1;
+
+    # One row lighter than the spacing, never equal to it. A line as thick as
+    # the gap between lines is not a thick line, it is no line at all: every
+    # row comes out dark and the whole effect collapses into a flat multiply.
+    # At the default spacing of three that was the top thirty of the
+    # thickness slider's thirty-two positions doing nothing but dimming the
+    # picture, which reads as the effect having been turned off.
+    my $most = $spacing - 1;
+    $most      = 1     if $most < 1;
+    $thickness = $most if $thickness > $most;
 
     my $dark = int( 255 * ( 1 - $opacity ) + 0.5 );
     $dark = 0 if $dark < 0;

@@ -147,7 +147,12 @@ my @PARAM = (
         min     => 1800,
         max     => 15_000,
         default => 5400,
-        doc     => 'Revolutions per minute, which sets the pitch of the '
+
+        # The speeds drives were actually built at. Typeable rather than
+        # closed, because the number means something on its own and a drive
+        # that spun at something else is a drive somebody may want.
+        suggest   => [ 4200, 5400, 7200, 10_000, 15_000 ],
+              doc => 'Revolutions per minute, which sets the pitch of the '
             . 'whine and of the fan tone under it. 3600 is an old drive, '
             . '5400 a quiet one, 7200 a desktop, 15000 something in a rack.',
     },

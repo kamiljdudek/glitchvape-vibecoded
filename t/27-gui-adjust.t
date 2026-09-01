@@ -18,8 +18,9 @@ BEGIN
         or plan skip_all => 'no display';
 }
 
-use GlitchVape      ();
-use GlitchVape::GUI ();
+use GlitchVape           ();
+use GlitchVape::GUI      ();
+use GlitchVape::Registry ();
 
 local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 
@@ -414,6 +415,106 @@ sub select_effect
 
     $gui->{ state }->remove_effect( 'osd' );
     $gui->_rebuild_effects;
+}
+
+# ---------------------------------------------------------------------------
+# Reset to defaults, in the popover and for the whole pipeline
+
+# An effect fifteen sliders deep is a thing people get lost in, and the way
+# back should not be fifteen gestures. The Add Effect wizard already had this
+# at the foot of its settings page; the popover is the same page reached later
+# and wanted the same button.
+#
+# The declared values are read back out of the registry rather than written
+# down here, so this stays true of an effect whose defaults are retuned.
+sub declared
+{
+    my ( $name, $key ) = @_;
+
+    return GlitchVape::Registry->resolve_params( $name, {} )->{ $key };
+}
+
+{
+    $gui->_reset_effects;
+    open_on( 'scanlines' );
+
+    my $reset = $gui->{ adjust }{ reset };
+
+    ok $reset, 'the popover has a reset button';
+
+    ok !$reset->get_sensitive, 'greyed while there is nothing to put back';
+
+    $gui->{ state }->param( 'scanlines', 'spacing', 11 );
+    $gui->{ state }->param( 'scanlines', 'opacity', 0.9 );
+    $gui->{ adjust }->show_effect( 'scanlines' );
+
+    ok $reset->get_sensitive, 'and live once something has moved';
+
+    $reset->clicked;
+
+    is $gui->{ state }->param( 'scanlines', 'spacing' ),
+        declared( 'scanlines', 'spacing' ),
+        'pressing it puts every setting back';
+    is $gui->{ state }->param( 'scanlines', 'opacity' ),
+        declared( 'scanlines', 'opacity' ),
+        'not only the one last touched';
+
+    ok !$reset->get_sensitive, 'and it greys itself again';
+
+    # The effect is still in the pipeline: this is reset, not remove.
+    my %present = map { $_ => 1 } $gui->{ state }->effect_names;
+    ok $present{ scanlines }, 'the effect itself is still there';
+}
+
+# ---------------------------------------------------------------------------
+# And the same for everything at once, from the menu
+
+# Beside Clear all effects rather than beside Undo, because it is the same
+# kind of act -- throwing away work on the pipeline. The difference is which
+# work: Clear throws away which effects are in it, this throws away what they
+# were set to.
+{
+    # Put both back: the blocks above this one add and remove effects, and
+    # what is being tested here is that the reset reaches all of them rather
+    # than only the selected one.
+    $gui->{ state }->add_effect( $_ ) for qw(scanlines vignette);
+    $gui->_rebuild_effects;
+
+    $gui->{ state }->param( 'scanlines', 'spacing',  9 );
+    $gui->{ state }->param( 'vignette',  'strength', 0.9 );
+    $gui->_sync_actions;
+
+    ok $gui->{ m_reset }->get_sensitive,
+        'the menu entry is live while anything has moved';
+
+    my ( $before ) = $gui->{ state }->depth;
+    $gui->{ dirty } = 0;
+
+    $gui->_reset_effects;
+
+    is $gui->{ state }->param( 'scanlines', 'spacing' ),
+        declared( 'scanlines', 'spacing' ),
+        'and it resets every effect in the pipeline';
+    is $gui->{ state }->param( 'vignette', 'strength' ),
+        declared( 'vignette', 'strength' ), 'not just the selected one';
+
+    my %present = map { $_ => 1 } $gui->{ state }->effect_names;
+    ok $present{ scanlines } && $present{ vignette },
+        'leaving the pipeline itself alone';
+
+    # Not fifteen history entries for fifteen effects -- not any, yet. One
+    # Apply is one history entry here, so a change to the pipeline marks it
+    # dirty and the next render is what records it, which is how clearing the
+    # pipeline and moving a slider both already behave.
+    my ( $after ) = $gui->{ state }->depth;
+
+    is $after, $before, 'it puts nothing in the history by itself';
+    ok $gui->{ dirty },
+        'and the next Apply is what records the lot as one step';
+
+    $gui->_sync_actions;
+    ok !$gui->{ m_reset }->get_sensitive,
+        'after which there is nothing left to reset';
 }
 
 done_testing;

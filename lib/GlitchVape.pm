@@ -276,13 +276,20 @@ sub _render_animation
     my @paths;
     my @timings;
 
+    # One for the whole loop. Screens, tiles and colour lookups depend on the
+    # settings and not on the frame, and a context's own tmpdir dies with the
+    # frame -- so without this every frame rebuilds what the one before it
+    # just built. See L<GlitchVape::Context/cachedir()>.
+    my $cache = File::Temp->newdir( 'glitchvape_cache_XXXXXX', TMPDIR => 1 );
+
     for my $n ( 0 .. $frames - 1 )
     {
         my $ctx = GlitchVape::Context->new(
-            image   => $source->Clone,
-            source  => $job->{ input },
-            seed    => $job->{ seed },
-            verbose => $arg->{ verbose },
+            image    => $source->Clone,
+            source   => $job->{ input },
+            seed     => $job->{ seed },
+            verbose  => $arg->{ verbose },
+            cachedir => "$cache",
         );
         $ctx->frames( $frames );
         $ctx->frame( $n );

@@ -127,15 +127,19 @@ have and which is two spin buttons and a meridiem here, writes `PM  3:47` the
 same way. A value they cannot parse is left alone: somebody who typed
 `TUESDAY` meant it.
 
-A **seed** gets a fourth: a spin button with a reroll button beside it. It is
-the one number in any declaration nobody wants to choose. It exists so a
-render can be repeated — type it back in and the same static, the same clicks,
-the same drive come out — so it has to stay a number you can read and write
-down. But almost every time anybody touches one, what they want is not a
-particular value, it is a *different* one, and a spin button offers 1, 2, 3 as
-though the numbers near each other were near each other. So the box stays for
-the rare case and the button is there for the common one, which is every
-generated track that has a seed at all.
+A **seed** is shown rather than typed: the number, and a button that picks a
+different one. It is the one value in any declaration nobody wants to *choose*
+— the numbers near each other are not near each other, so a box offering 1, 2,
+3 offers a walk through a space with no order. It stays visible because seeing
+it change is how you know the button did something, and because that number is
+what travels in a saved preset and in the copied command line, which is where
+anybody repeating a render is working from.
+
+A **number that names the values people use** gets that list rather than a
+slider, typeable so the ones it does not name are still reachable. A drive's
+spindle spins at 4200, 5400, 7200, 10000 or 15000; a track between them is a
+track whose whole length is wrong answers. The declared range still has the
+last word over anything typed.
 
 ### The menu
 
@@ -151,7 +155,8 @@ grouping is visible rather than merely intended:
 | move | **Undo** / **Redo** | the same actions as the header-bar pair; here because a menu is where a keyboard-first user looks for them |
 | change | **Randomize** | a new seed — reshuffles every effect that draws on randomness, leaving the parameters alone |
 | keep | **Save as preset…** | writes the current settings to `presets/`, usable immediately as `-p <name>` |
-| discard | **Clear all effects** | empties the pipeline without leaving the image; an ordinary edit, so undo steps back over it |
+| discard | **Reset all effects to defaults** | keeps the pipeline, puts every setting in it back to what the effect declares |
+| | **Clear all effects** | empties the pipeline without leaving the image; an ordinary edit, so undo steps back over it |
 | | **Clear preview cache** | empties the render store; nothing is lost but time |
 | settings | **Preferences…** | General, Preview, Metadata and Watermarking, in a stack — the settings that belong to the program rather than to a photograph |
 | | **Export profiles…** | named export settings, kept separately for videos and for stills |
@@ -312,11 +317,18 @@ Categories are the pipeline stages rather than a taxonomy invented alongside
 them, because where an effect runs and what it is for are the same fact.
 
 **Which one?** Everything unused in that category, by name and summary, with a
-search box. Search deliberately reaches outside the chosen category — someone
-who types `scanline` while standing in Colour meant the effect, not the
-category — and matches the presentable name, the summary *and* the identifier,
-so knowing either spelling is enough. A note under the list says which scope
-is in force.
+search box. The category's own name is in bold **above** the box, because a
+list of effects does not otherwise say which of the nine it came from —
+arriving here by the keyboard, or coming back after a detour, meant working
+that out from the contents.
+
+Search deliberately reaches outside the chosen category — someone who types
+`scanline` while standing in Colour meant the effect, not the category — and
+matches the presentable name, the summary *and* the identifier, so knowing
+either spelling is enough. That moves you out of the category, so the heading
+stops naming one and the note under the list says which to clear the box to
+get back to. The two are always saying different things: the heading is where
+you are, the note is what that place is for.
 
 On both list pages a click **picks** a row; only a double click or Enter moves
 on. GtkListBox activates on a single click by default, which made touching a
@@ -338,7 +350,16 @@ under the wrong heading.
 
 **Reset to defaults**, at the foot of the settings, puts every parameter back
 to what the effect declares — and greys itself out while there is nothing to
-put back, the same argument as the greyed parameters above it.
+put back, the same argument as the greyed parameters above it. The settings
+popover has the same button at the same place, because it is the same page
+reached later: an effect fifteen sliders deep is a thing people get lost in,
+and the way back should not be fifteen gestures.
+
+**Reset all effects to defaults** in the menu does it for the whole pipeline
+at once. It sits beside *Clear all effects* because it is the same kind of act
+— throwing away work on the pipeline — and the difference is which work:
+Clear throws away which effects are in it, this throws away what they were set
+to and keeps them.
 
 Nothing reaches the pipeline until Apply. The wizard previews against a
 detached copy of the state, so cancelling — at any point, however many
@@ -518,6 +539,13 @@ which is the same lie a smaller screen tells.
 The animated preview does not get this: it plays an H.264 loop through
 GStreamer's `gtksink`, which exposes no filter of its own. A loop therefore
 previews softer than the file it came from.
+
+The pane keeps **where you were looking**. Zooming in is a deliberate act, so
+Apply re-renders under it rather than snapping back to whole-picture — which
+it used to, making "zoom in on the artefact, then adjust the slider that makes
+it" two gestures where the second undid the first. Fitted stays the default,
+and changing the preview size re-fits, because an offset measured against the
+old render means nothing against a bigger one.
 
 ### The cache
 

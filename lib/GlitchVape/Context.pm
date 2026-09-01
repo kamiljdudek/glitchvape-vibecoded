@@ -44,8 +44,12 @@ sub new
         frame   => 0,
         frames  => 1,
         tmpdir  => undef,
-        _rngs   => {},
-        _timing => [],
+
+        # Given by the animation loop so that the frames share one, and left
+        # undef by everything else: see L</cachedir()>.
+        cachedir => $arg{ cachedir },
+        _rngs    => {},
+        _timing  => [],
     }, $class;
 
     return $self;
@@ -309,9 +313,40 @@ sub tmpdir
     return "$self->{tmpdir}";
 }
 
+=head2 cachedir()
+
+Where a file that depends only on the settings goes -- a screen, a tile, a
+colour lookup table. The same directory for every frame of one animation,
+which C<tmpdir> is not.
+
+Every frame is rendered from its own context, so a cache kept in C<tmpdir>
+lives exactly one frame: C<cmyk> was rebuilding four two-thousand-pixel
+rotations per frame for screens it had already built, and the same went for
+the scanline and grille tiles, the Bayer matrices and the palette lookups.
+Eight frames of C<cmyk> cost eight times one frame rather than the one-and-a-
+bit the module claimed.
+
+Separate from C<tmpdir> rather than shared with it, because the per-frame
+scratch files are numbered from one in each frame and sharing the directory
+would have frame two writing over frame one's working files.
+
+Falls back to C<tmpdir> when nobody handed one over, which is what a still
+does: there is one frame, so the two are the same thing.
+
+=cut
+
+sub cachedir
+{
+    my ( $self ) = @_;
+
+    return "$self->{cachedir}" if $self->{ cachedir };
+
+    return $self->tmpdir;
+}
+
 =head2 tmpfile( $suffix )
 
-Path to a not-yet-existing file inside L</tmpdir>.
+Path to a not-yet-existing file inside C<tmpdir>.
 
 =cut
 

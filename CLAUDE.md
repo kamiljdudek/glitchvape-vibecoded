@@ -568,6 +568,16 @@ half again as long as the one that follows.
   `PERL_HASH_SEED`s. It cannot be caught in one process, because the order is
   fixed for the life of one.
 
+- **A cache in `$ctx->tmpdir` lives exactly one frame.** Every frame of an
+  animation is rendered from its own `Context`, whose temp directory dies with
+  it — so `cmyk` was rebuilding four rotations of a square twice the picture's
+  diagonal for screens it had built the frame before, and the same went for
+  the scanline and grille tiles, the Bayer matrices and the palette lookups.
+  Eight frames of `cmyk` cost eight times one frame. Anything keyed on the
+  settings rather than on the frame goes in `$ctx->cachedir`, which the
+  animation loop hands to every frame; `tmpdir` stays per-frame, because the
+  scratch files are numbered from one in each.
+
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first
   frame rather than after twenty-four renders.

@@ -505,6 +505,61 @@ sub resolve_params
     return \%out;
 }
 
+=head2 at_defaults( $name, $params )
+
+Whether C<$params> is what the effect would have been given had nobody
+touched it. True for an effect that is not registered, and for an empty hash.
+
+Compared against a freshly resolved set rather than against the raw
+declaration, so both sides have been through the same coercion -- otherwise a
+slider handing back C<0.35> would compare unequal to a declared C<'0.35'>.
+
+Here rather than in the interface because two front ends ask it -- the Add
+Effect wizard and the settings popover -- and because whether a hash matches a
+declaration is a question about the declaration.
+
+=cut
+
+sub at_defaults
+{
+    my ( $class, $name, $params ) = @_;
+
+    my $spec = get( $class, $name ) or return 1;
+
+    my $defaults = eval { resolve_params( $class, $name, {} ) } or return 1;
+
+    for my $key ( keys %$defaults )
+    {
+        my $type = $spec->{ params }{ $key }{ type } // 'str';
+
+        # A key that is not there is a key nobody set, and an effect renders
+        # an unset parameter at its default -- so an empty hash is at its
+        # defaults, which is what makes clearing one a way of resetting it.
+        next unless exists $params->{ $key };
+
+        my $now = $params->{ $key };
+        my $was = $defaults->{ $key };
+
+        return 0 if defined $now xor defined $was;
+        next unless defined $now;
+
+        if ( $type eq 'list' )
+        {
+            return 0 if join( ',', @$now ) ne join( ',', @$was );
+        }
+        elsif ( $type eq 'num' || $type eq 'int' )
+        {
+            return 0 if $now != $was;
+        }
+        else
+        {
+            return 0 if $now ne $was;
+        }
+    }
+
+    return 1;
+}
+
 sub _coerce
 {
     my ( $effect, $key, $val, $d ) = @_;

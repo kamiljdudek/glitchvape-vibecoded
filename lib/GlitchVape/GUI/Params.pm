@@ -25,7 +25,7 @@ C<--explain>. This module makes it drive the interface too, so an effect added
 to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
 
     num with a range      Gtk3::Scale       drag it
-    seed                  Gtk3::SpinButton  with a button that rerolls it
+    seed                  a label and a button that rerolls it
     num without a range   Gtk3::SpinButton  no sensible track length
     int                   Gtk3::Scale       whole numbers, step 1
     bool                  Gtk3::Switch
@@ -265,13 +265,18 @@ sub _kind
     # otherwise get a spin button and nothing else.
     return 'seed' if $arg->{ name } eq 'seed' && $type eq 'int';
 
-    return 'numeric'   if $type eq 'int' || $type eq 'num';
-    return 'colour'    if _is_colour( $arg );
-    return 'date'      if $arg->{ name } eq 'date';
-    return 'time'      if $arg->{ name } eq 'time';
+    # And before it too: a number that names the values people actually use is
+    # not a continuous quantity to drag through. A drive spins at 5400 or
+    # 7200, not at 6318, and a track between them is a track whose whole
+    # length is wrong answers.
     return 'chosen'    if _offered( $arg->{ spec }, 'choose' );
     return 'suggested' if _offered( $arg->{ spec }, 'suggest' );
-    return 'font'      if $arg->{ name } eq 'font';
+
+    return 'numeric' if $type eq 'int' || $type eq 'num';
+    return 'colour'  if _is_colour( $arg );
+    return 'date'    if $arg->{ name } eq 'date';
+    return 'time'    if $arg->{ name } eq 'time';
+    return 'font'    if $arg->{ name } eq 'font';
     return 'text';
 }
 
@@ -378,18 +383,18 @@ sub _numeric
     return { control => $scale, get => sub { return $scale->get_value } };
 }
 
-=head2 Why a seed gets a button
+=head2 Why a seed is shown and not typed
 
 A seed is the one number in a declaration that nobody wants to choose. It is
-there so a render can be repeated -- type the number back in and the same
-static, the same clicks, the same drive -- and that is worth keeping. But
-almost every time anybody touches it, what they want is not a particular
-number, it is a I<different> one, and a spin button says the opposite: it
-offers 1, 2, 3, as though the numbers near each other were near each other.
+there so that a render is reproducible, and it still is -- the value travels in
+a saved preset and in the copied command line, which is where anybody
+repeating a render is working from.
 
-So the number stays and gets a button beside it. The button is the common
-case, the box is the rare one, and the value is still visible to be written
-down -- which a button on its own would have thrown away.
+What it is not is a quantity. The numbers near each other are not near each
+other, so a box offering 1, 2, 3 offers a walk through a space with no order,
+and nobody has ever wanted a I<particular> seed. So the number is shown,
+because seeing it change is how you know the button did something, and the
+button is the only way to change it.
 
 =cut
 
@@ -397,32 +402,37 @@ sub _seed
 {
     my ( $arg ) = @_;
 
-    my $built =
-        _spin( $arg, 'int', $arg->{ spec }{ min }, $arg->{ spec }{ max } );
+    my $value = $arg->{ value };
+    $value = $arg->{ spec }{ default } unless defined $value;
+    $value = 1 unless defined $value && $value =~ m{\A -? \d+ \z}x;
 
-    my $box = Gtk3::Box->new( 'horizontal', 4 );
-    $box->pack_start( $built->{ control }, 1, 1, 0 );
+    my $box = Gtk3::Box->new( 'horizontal', 8 );
+
+    my $shown = Gtk3::Label->new( $value );
+    $shown->set_xalign( 0 );
+    $shown->set_hexpand( 1 );
 
     my $roll = Gtk3::Button->new;
     $roll->set_image(
         Gtk3::Image->new_from_icon_name( 'view-refresh-symbolic', 'button' ) );
-    $roll->set_tooltip_text(
-        'Pick a different one. The number stays visible, so a version you '
-            . 'like can be written down and typed back in.' );
+    $roll->set_tooltip_text( 'Try a different one' );
 
-    # set_value fires value-changed, which is what tells the caller. Six
-    # figures because that is more than anybody will exhaust and few enough
-    # to read back off the screen.
+    # Six figures because that is more than anybody will exhaust and few
+    # enough to read off the screen.
     $roll->signal_connect(
         clicked => sub {
-            $built->{ control }->set_value( 1 + int rand SEED_RANGE );
+            $value = 1 + int rand SEED_RANGE;
+            $shown->set_text( $value );
+
+            $arg->{ on_change }->( $value ) if $arg->{ on_change };
             return;
         }
     );
 
-    $box->pack_start( $roll, 0, 0, 0 );
+    $box->pack_start( $shown, 1, 1, 0 );
+    $box->pack_start( $roll,  0, 0, 0 );
 
-    return { control => $box, get => $built->{ get } };
+    return { control => $box, get => sub { return $value } };
 }
 
 sub _spin
@@ -622,15 +632,21 @@ sub _is_colour
 {
     my ( $arg ) = @_;
 
-    return 0 unless $COLOUR_PARAM{ $arg->{ name } };
-
-    # curvature.background is a colour; letterbox.color is too. Anything whose
-    # default is a hex triplet or a plain word is safe to offer a picker for,
-    # but a list of colours is not.
     my $default = $arg->{ spec }{ default };
+
+    # A list of colours is not a colour: palette.name is named 'name' anyway,
+    # but the rule has to hold for whatever declares one next.
     return 0 if defined $default && $default =~ /,/;
 
-    return 1;
+    # A parameter whose default is a hex triplet is a colour whatever it is
+    # called, which is how cmyk.paper gets a picker without this module being
+    # told about it -- the same argument the whole file rests on.
+    return 1 if defined $default && $default =~ m{\A [#][0-9a-f]{6} \z}xi;
+
+    # And the named ones, for the colours that do not declare a hex default:
+    # grade.tint and bloom.tint are empty until asked for, and
+    # curvature.background and letterbox.color are the word 'black'.
+    return $COLOUR_PARAM{ $arg->{ name } } ? 1 : 0;
 }
 
 sub _colour

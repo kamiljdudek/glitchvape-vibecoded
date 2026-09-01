@@ -128,10 +128,53 @@ sub show_still
         return 0;
     }
 
-    $self->{ view }->set_pixbuf( $pixbuf, 1 );
+    _keeping_the_view( $self->{ view }, $pixbuf );
+
     $self->{ stack }->set_visible_child_name( 'still' );
 
     return 1;
+}
+
+# Show a new render without throwing away where the viewer was looking.
+#
+# set_pixbuf's second argument is zoom-to-fit, and passing a true one on every
+# render meant Apply snapped back to whole-picture every time -- so zooming in
+# to look at a one-pixel artefact and then adjusting the slider that makes it
+# was two gestures, one of which undid the other.
+#
+# Zoomed in is a deliberate act, so it is kept. Fitted is the default and
+# stays the default. A render that comes back a different size is a different
+# picture to look at -- the preview quality has been changed -- and gets
+# fitted again, because an offset measured against the old size means nothing
+# against the new one.
+sub _keeping_the_view
+{
+    my ( $view, $pixbuf ) = @_;
+
+    my $was = $view->get_pixbuf;
+
+    my $same =
+           $was
+        && $was->get_width == $pixbuf->get_width
+        && $was->get_height == $pixbuf->get_height;
+
+    my $held = $same && !$view->get_zoom_to_fit;
+
+    my ( $zoom, $offset );
+    if ( $held )
+    {
+        $zoom   = $view->get_zoom;
+        $offset = $view->get_offset;
+    }
+
+    $view->set_pixbuf( $pixbuf, $held ? 0 : 1 );
+
+    return unless $held;
+
+    $view->set_zoom( $zoom );
+    $view->set_offset( $offset->{ x }, $offset->{ y } );
+
+    return;
 }
 
 =head2 show_video( $path )

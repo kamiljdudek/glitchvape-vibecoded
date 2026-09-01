@@ -44,7 +44,10 @@ effects:
 
   cmyk:
     pitch: 7
-    angles: '15,75,0,45'
+    cyan: 15
+    magenta: 75
+    yellow: 0
+    black: 45
     paper: '#EFE8D8'
     strength: 1.0
 

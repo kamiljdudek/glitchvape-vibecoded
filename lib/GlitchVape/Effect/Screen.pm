@@ -63,8 +63,14 @@ DOC
             default => 1,
             type    => 'int',
             min     => 1,
-            max     => 32,
-            doc     => 'Rows darkened per line',
+
+            # Capped by the spacing, so the useful top of this is one less
+            # than whatever spacing is set to. Sixteen rather than
+            # thirty-two because a spacing that would use more than sixteen
+            # is a spacing nobody sets.
+            max => 16,
+            doc => 'Rows darkened per line, capped one short of the spacing '
+                . 'so that there is always a lit row between them',
         },
         softness => {
             default => 0,
@@ -98,7 +104,7 @@ sub _scanlines
     my $offset = int( $ctx->travel( $p->{ drift }, $p->{ spacing } ) + 0.5 );
 
     my $tile = GlitchVape::Raster::scanline_tile(
-        $ctx->tmpdir,
+        $ctx->cachedir,
         spacing   => $p->{ spacing },
         thickness => $p->{ thickness },
         opacity   => $p->{ opacity },
@@ -157,7 +163,7 @@ sub _grille
     my ( $w, $h ) = $ctx->dims;
 
     my $tile = GlitchVape::Raster::grille_tile(
-        $ctx->tmpdir,
+        $ctx->cachedir,
         width    => $p->{ width },
         strength => $p->{ strength },
     );
@@ -657,10 +663,22 @@ Fifteen degrees apart is the classical answer, with yellow the odd one out.
 Black at 45 is least visible to the eye and carries the detail; yellow at 0 is
 the weakest ink, so its screen showing through matters least. Two inks less
 than 15 degrees apart beat against each other into a coarse moire, which is
-the failure mode this parameter exists to let you find on purpose.
+the failure mode these four parameters exist to let you find on purpose.
 
-Screens are built once per angle and reused, so an animation pays for them on
-its first frame only.
+C<wobble> is the press drifting. Each plate rocks out and back over the loop,
+a quarter turn apart from the next, so at any instant the four are at
+different points of the same drift -- which is the rosette breathing rather
+than the whole screen turning, and turning as one is only a rotation. It is
+degrees, and a fraction of one is plenty: the screen turns about the middle,
+so a quarter of a degree already moves a corner six hundred pixels out by a
+third of a cell. The pattern swims at the edges and barely moves in the
+centre, which is what a plate out of register does.
+
+Screens are built once per angle and cached for the whole loop rather than for
+one frame, so a fixed set of angles is four builds for an animation of any
+length. A wobble costs more -- the angles are quantised to a quarter of a
+degree precisely so that there are a couple of dozen of them rather than four
+per frame -- and it is the one setting here with a bill attached.
 DOC
     params => {
         pitch => {
@@ -668,16 +686,48 @@ DOC
             type    => 'int',
             min     => 2,
             max     => 40,
+            order   => 1,
             doc     => 'Screen ruling: the width of one dot cell in pixels',
         },
-        angles => {
-            default => '15,75,0,45',
-            type    => 'str',
-            doc     => 'Screen angle per ink, in the order C,M,Y,K',
+        cyan => {
+            default => 15,
+            type    => 'num',
+            min     => 0,
+            max     => 90,
+            order   => 2,
+            doc     => 'Screen angle for the cyan plate',
+        },
+        magenta => {
+            default => 75,
+            type    => 'num',
+            min     => 0,
+            max     => 90,
+            order   => 3,
+            doc     => 'Screen angle for the magenta plate',
+        },
+        yellow => {
+            default => 0,
+            type    => 'num',
+            min     => 0,
+            max     => 90,
+            order   => 4,
+            doc     => 'Screen angle for the yellow plate. The weakest ink, '
+                . 'so the one whose screen showing through matters least',
+        },
+        black => {
+            default => 45,
+            type    => 'num',
+            min     => 0,
+            max     => 90,
+            order   => 5,
+            doc     => 'Screen angle for the black plate. 45 is where the '
+                . 'eye notices a grid least, which is why the plate carrying '
+                . 'the detail sits there',
         },
         paper => {
             default => '#FFFFFF',
             type    => 'str',
+            order   => 6,
             doc     => 'Colour of the unprinted stock',
         },
         strength => {
@@ -685,11 +735,30 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 1,
+            order   => 7,
             doc     => 'Blend back over the original',
+        },
+        wobble => {
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 3,
+            order     => 8,
+            doc       => 'Degrees each plate rocks over the loop, out and '
+                . 'back. A press drifts, and four plates drifting against '
+                . 'each other is the rosette breathing rather than the whole '
+                . 'screen turning',
         },
     },
     apply => \&_cmyk,
 );
+
+# Where in the loop each plate is, as a fraction of a turn. Four quarters, so
+# that at any instant the plates are at different points of the same rock and
+# the rosette breathes instead of the whole screen turning as one -- which is
+# what identical phases would give, and which is just a rotation.
+my @PHASE = ( 0, 0.25, 0.5, 0.75 );
 
 # The four ink planes ImageMagick's CMYK separation hands back, in order.
 use constant _INKS => 4;
@@ -699,14 +768,7 @@ sub _cmyk
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my @angles = grep { length } split m{\s*,\s*}, $p->{ angles } // q{};
-    die "cmyk: angles needs four values, C,M,Y,K -- got '$p->{angles}'\n"
-        unless @angles == _INKS;
-
-    for my $a ( @angles )
-    {
-        die "cmyk: '$a' is not an angle\n" unless $a =~ /^-?[\d.]+$/;
-    }
+    my @angles = _angles( $ctx, $p );
 
     my ( $w, $h ) = $ctx->dims;
 
@@ -717,7 +779,8 @@ sub _cmyk
     }
 
     my @screens =
-        map { _screen_file( $p->{ pitch }, $_, $w, $h, $ctx->tmpdir ) } @angles;
+        map { _screen_file( $p->{ pitch }, $_, $w, $h, $ctx->cachedir ) }
+        @angles;
 
     # -layers composite pairs the images before null: with those after it, so
     # each separated plane meets its own screen in one pass. Compositing them
@@ -774,6 +837,44 @@ sub _paper_args
 # directory. The cache is what makes this affordable in an animation: the
 # screen depends on the pitch, the angle and the frame size, none of which
 # move between frames.
+# The four screen angles for this frame: what was asked for, plus however far
+# the press has drifted by now.
+#
+# Quantised to a quarter of a degree, and that is not cosmetic. A screen is
+# built by tiling a square twice the picture's diagonal and rotating it, which
+# costs a third of a second and a megabyte, and it is cached by its angle --
+# so an angle that is a fresh float every frame is four fresh screens every
+# frame and a temp directory that fills up. At a quarter-degree step a whole
+# loop visits a couple of dozen angles between the four plates, and the cache
+# does its job.
+#
+# A quarter of a degree is not a small change either: the screen turns about
+# the centre, so a corner six hundred pixels out moves two and a half pixels,
+# which at a pitch of eight is a third of a cell. The rosette swims at the
+# edges and barely moves in the middle, which is what a plate out of register
+# actually does.
+sub _angles
+{
+    my ( $ctx, $p ) = @_;
+
+    my @asked = map { $p->{ $_ } } qw(cyan magenta yellow black);
+
+    my $wobble = $p->{ wobble } || 0;
+    return @asked unless $wobble > 0 && $ctx->frames > 1;
+
+    my @moved;
+    for my $n ( 0 .. _INKS - 1 )
+    {
+        my $turn = $ctx->phase + $PHASE[ $n ];
+
+        my $at = $asked[ $n ] + $wobble * sin( 2 * $PI * $turn );
+
+        push @moved, int( $at * 4 + 0.5 ) / 4;
+    }
+
+    return @moved;
+}
+
 sub _screen_file
 {
     my ( $pitch, $angle, $w, $h, $dir ) = @_;

@@ -406,4 +406,55 @@ sub wizard
     $wizard->_finish;
 }
 
+# ---------------------------------------------------------------------------
+# The effect page says which category it is a list of
+
+# The first page is a list of nine categories and the second is a list of
+# effects, and the second used to say nothing about which of the nine it came
+# from -- so arriving there by the keyboard, or coming back after a detour,
+# meant working it out from the contents.
+#
+# The heading and the note under the list say different things and have to
+# keep agreeing: the heading is where you are, the note is what that place is
+# for. A search moves you out of the category, so both have to say so.
+{
+    my ( $wizard ) = wizard();
+
+    for my $stage ( GlitchVape::Registry->stages )
+    {
+        my $info = GlitchVape::Registry->stage_info( $stage );
+
+        $wizard->{ stage } = $stage;
+        $wizard->{ query } = q{};
+        $wizard->_note_scope;
+
+        is $wizard->{ effect_heading }->get_text, $info->{ title },
+            "the heading names $stage by the title the first page used";
+
+        is $wizard->{ effect_scope }->get_text, $info->{ blurb },
+            "and the note under the list still says what $stage is for";
+    }
+
+    # An ampersand in three of those titles, and the heading is markup.
+    $wizard->{ stage } = 'optics';
+    $wizard->{ query } = q{};
+    $wizard->_note_scope;
+
+    like $wizard->{ effect_heading }->get_text, qr/&/,
+        'a title with an ampersand in it survives being set as markup';
+
+    # Searching looks outside the category, so the heading stops claiming one.
+    $wizard->{ query } = 'scan';
+    $wizard->_note_scope;
+
+    isnt $wizard->{ effect_heading }->get_text,
+        GlitchVape::Registry->stage_info( 'optics' )->{ title },
+        'while searching, the heading no longer names one category';
+
+    like $wizard->{ effect_scope }->get_text, qr/Screen & Optics/,
+        'and the note names the one to clear the box to get back to';
+
+    $wizard->{ assistant }->destroy;
+}
+
 done_testing;
