@@ -470,6 +470,15 @@ Copies rectangular regions to the wrong place, imitating what a video decoder
 does when it applies motion vectors to a frame the encoder never sent -- blocks
 of a previous image sliding into the current one. Offsets are quantised to a
 macroblock grid, because a decoder can only ever be wrong in multiples of it.
+
+How big a block gets is C<extent>, in macroblocks, and which way it runs is
+C<shape>. It was a maximum width and a maximum height instead, and between
+them they only ever said those same two things -- the default was eight
+macroblocks by three and the one preset that set them was twelve by four, both
+of them the short side at a third of the long one. Two numbers for one fact is
+two numbers that can disagree, and a decoder's tears do not come in arbitrary
+rectangles: they run along the scanlines, because that is the direction
+vectors and slices run in.
 DOC
     params => {
         reroll => {
@@ -501,23 +510,50 @@ DOC
             max     => 200,
             doc     => 'Maximum displacement in macroblocks',
         },
-        width_blocks => {
+        extent => {
             default => 8,
             type    => 'int',
             min     => 1,
-            max     => 200,
-            doc     => 'Maximum block width, in macroblocks',
+            max     => 64,
+            doc     => 'Longest a block gets, in macroblocks. The short side '
+                . 'follows from the shape',
         },
-        height_blocks => {
-            default => 3,
-            type    => 'int',
-            min     => 1,
-            max     => 200,
-            doc     => 'Maximum block height, in macroblocks',
+        shape => {
+            default => 'wide',
+            type    => 'enum',
+            values  => [ qw(wide square tall) ],
+            doc     => 'Which way a block runs. Wide is what a decoder '
+                . 'actually produces, because vectors and slices run along '
+                . 'the scanlines; the other two are the same fault in a '
+                . 'machine that scanned some other way',
         },
     },
     apply => \&_blockshift,
 );
+
+# How many macroblocks a block may run to, each way.
+#
+# It was two numbers, a maximum width and a maximum height, and they were
+# always saying one thing: how big, and which way round. Both the default and
+# the only preset that set them had the short side at a third of the long one
+# -- eight by three and twelve by four -- so the second number was never
+# carrying information, it was carrying an opportunity to make the two
+# disagree.
+sub _block_shape
+{
+    my ( $p ) = @_;
+
+    my $long = $p->{ extent };
+
+    my $short = int( $long / 3 + 0.5 );
+    $short = 1 if $short < 1;
+
+    my $shape = $p->{ shape } // 'wide';
+
+    return ( $long,  $long ) if $shape eq 'square';
+    return ( $short, $long ) if $shape eq 'tall';
+    return ( $long,  $short );
+}
 
 sub _blockshift
 {
@@ -526,6 +562,8 @@ sub _blockshift
 
     my $rng  = _damage_rng( $ctx, $p, 'blockshift' );
     my $grid = $p->{ size };
+
+    my ( $wide, $tall ) = _block_shape( $p );
 
     GlitchVape::Pixels->edit(
         $ctx,
@@ -539,8 +577,8 @@ sub _blockshift
 
             for ( 1 .. $p->{ blocks } )
             {
-                my $bw = $rng->int_between( 1, $p->{ width_blocks } );
-                my $bh = $rng->int_between( 1, $p->{ height_blocks } );
+                my $bw = $rng->int_between( 1, $wide );
+                my $bh = $rng->int_between( 1, $tall );
                 $bw = $cols if $bw > $cols;
                 $bh = $rows if $bh > $rows;
 

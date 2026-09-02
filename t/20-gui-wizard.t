@@ -21,6 +21,7 @@ BEGIN
 
 use GlitchVape             ();
 use GlitchVape::Registry   ();
+use GlitchVape::GUI        ();
 use GlitchVape::GUI::State ();
 use GlitchVape::GUI::Wizard;
 
@@ -186,7 +187,34 @@ sub wizard
     is $applied->[ 0 ][ 0 ], 'wave',          'apply reports the internal name';
     is $applied->[ 0 ][ 1 ]{ amplitude }, 12, 'apply carries the settings';
 
+    # Adding an effect and spending several seconds rendering are two
+    # decisions, so the second is asked for rather than assumed. It starts
+    # off every time the wizard is opened: a tick that remembered itself
+    # would surprise somebody adding five effects to a large photograph.
+    ok !$applied->[ 0 ][ 2 ], 'and does not ask for a render unless told to';
+    ok !$wizard->{ render_now }->get_active, 'the render-now tick starts clear';
+
+    $wizard->{ render_now }->set_active( 1 );
+    $wizard->_apply;
+
+    ok $applied->[ 1 ][ 2 ], 'ticked, apply asks the caller to render';
+
     $wizard->_finish;
+}
+
+# Opening the wizard again clears the tick rather than carrying it over.
+{
+    my ( $again, $told ) = wizard;
+
+    ok !$again->{ render_now }->get_active,
+        'a second wizard starts with the tick clear again';
+
+    $again->{ effect } = 'wave';
+    $again->_apply;
+
+    ok !$told->[ 0 ][ 2 ], 'so it adds without rendering';
+
+    $again->_finish;
 }
 
 # Nothing the wizard does may reach the caller's state before Apply.
@@ -455,6 +483,82 @@ sub wizard
         'and the note names the one to clear the box to get back to';
 
     $wizard->{ assistant }->destroy;
+}
+
+# ---------------------------------------------------------------------------
+# Ticked, the window it belongs to renders -- from the window, not the wizard
+
+# The tick is a claim about what the main window does after the wizard shuts,
+# so it is asked of the real window and the wizard it really opens rather than
+# of a stand-in. GUI::_apply is replaced for the duration because the state
+# here names a photograph that is not on disk: what is being counted is that
+# the render was asked for, and the asking is the whole claim.
+{
+    my $gui = GlitchVape::GUI->new;
+
+    $gui->{ state } =
+        GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
+
+    my $rendered = 0;
+    my $real     = \&GlitchVape::GUI::_apply;    ## no critic (ProtectPrivateVars)
+
+    {
+        no warnings 'redefine';                  ## no critic (ProhibitNoWarnings)
+        ## no critic (ProhibitNoStrict)
+        no strict 'refs';
+        *{ 'GlitchVape::GUI::_apply' } = sub { $rendered++; return };
+        ## use critic
+    }
+
+    my $ask = sub {
+        my ( $tick ) = @_;
+
+        my $wizard = $gui->_choose_effect;
+
+        $wizard->{ effect } = 'wave';
+        $wizard->{ params } =
+            { %{ GlitchVape::Registry->resolve_params( 'wave', {} ) } };
+        $wizard->{ render_now }->set_active( $tick );
+        $wizard->_apply;
+        $wizard->_finish;
+
+        # The render is deferred to an idle, because this runs inside the
+        # assistant's own apply handler and the assistant is destroyed from
+        # the close that follows it.
+        Gtk3::main_iteration_do( 0 ) while Gtk3::events_pending();
+
+        return;
+    };
+
+    $ask->( 0 );
+
+    is $rendered, 0, 'adding an effect on its own renders nothing';
+    ok scalar( grep { $_ eq 'wave' } $gui->{ state }->effect_names ),
+        'though the effect is added';
+
+    # And revealed, which is selecting it: the per-row disclosure that used
+    # to be opened here went when the settings became a popover, and calling
+    # for it died inside the assistant's own handler -- where a die is a
+    # warning on stderr and a status line nobody ever saw.
+    my $row = $gui->{ effect_list }->get_selected_row;
+
+    ok $row, 'and a row is selected afterwards';
+    is $gui->_selected_effect, 'wave',
+        'namely the one that was just added, which is how it is revealed';
+
+    $ask->( 1 );
+
+    is $rendered, 1, 'and ticked, the window renders once';
+
+    {
+        no warnings 'redefine';    ## no critic (ProhibitNoWarnings)
+        ## no critic (ProhibitNoStrict)
+        no strict 'refs';
+        *{ 'GlitchVape::GUI::_apply' } = $real;
+        ## use critic
+    }
+
+    $gui->{ window }->destroy;
 }
 
 done_testing;

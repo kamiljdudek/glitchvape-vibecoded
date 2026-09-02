@@ -101,8 +101,16 @@ my %COLOUR_PARAM = map { $_ => 1 } qw(tint color shadow background);
 # not change.
 my %SUGGEST_SOURCE = (
     palette => sub { GlitchVape::Palette::names() },
-    duotone => sub { GlitchVape::Palette::duotone_names() },
-    ratio   => sub { qw(16:9 2.35:1 4:3 1:1 9:16) },
+
+    # 'custom' first, because it is the one that is not a name -- it is the
+    # answer for when none of the names is what you meant.
+    duotone =>
+        sub { return ( 'custom', GlitchVape::Palette::duotone_names() ) },
+
+    # 'native' first, because leaving the shape alone is what most renders
+    # want: three of the four presets that letterbox do it for the border
+    # and nothing else.
+    ratio => sub { qw(native 16:9 2.35:1 4:3 1:1 9:16) },
 );
 
 =head2 split( $params )

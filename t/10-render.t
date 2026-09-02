@@ -9,8 +9,12 @@ use lib "$FindBin::Bin/../lib";
 use File::Temp ();
 use Test::More;
 
-use GlitchVape        ();
-use GlitchVape::Tools ();
+use GlitchVape           ();
+use GlitchVape::Context  ();
+use GlitchVape::Pipeline ();
+use GlitchVape::Registry ();
+use GlitchVape::Raster   ();
+use GlitchVape::Tools    ();
 
 plan skip_all => 'ImageMagick is not installed'
     unless GlitchVape::Tools::have( 'magick' );
@@ -295,6 +299,269 @@ SKIP:
     my $probe = GlitchVape::Tools::capture( 'ffprobe', '-v', 'error',
         '-show_entries', 'stream=nb_frames', '-of', 'csv=p=0', $out, );
     like $probe, qr/^4/, 'the encoded file holds every frame';
+}
+
+# Every colour in a band down the left-hand margin of a letterboxed picture,
+# which is border and bar all the way. A band rather than a column: 'dots'
+# puts ink in two of its sixty-four cells, so a single column can miss the
+# pattern entirely and report a flat colour.
+sub margin_colours
+{
+    my ( $img ) = @_;
+
+    my $h = $img->Get( 'height' );
+    my $w = 16;
+
+    my @px = $img->GetPixels(
+        map    => 'RGB',
+        x      => 0,
+        y      => 0,
+        width  => $w,
+        height => $h
+    );
+
+    my %seen;
+    for my $n ( 0 .. $w * $h - 1 )
+    {
+        $seen{
+            join ',', map { int( $_ / 257 + 0.5 ) } @px[ $n * 3 .. $n * 3 + 2 ]
+        }++;
+    }
+
+    return \%seen;
+}
+
+# One colour resolved to its three bytes, as a string a test can read.
+sub colour_of
+{
+    my ( $spec ) = @_;
+
+    return join ',', unpack 'C3',
+        GlitchVape::Raster::colour_bytes( $spec, 9, 9, 9 );
+}
+
+# The two maxima a block's extent and shape work out to.
+sub block_shape
+{
+    my ( $extent, $shape ) = @_;
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    return [
+        GlitchVape::Effect::Glitch::_block_shape(
+            { extent => $extent, shape => $shape }
+        )
+    ];
+    ## use critic
+}
+
+# That one pattern's ground is drawn in exactly the two colours it was given.
+sub ground_is_two_colours
+{
+    my ( $render, $name ) = @_;
+
+    my $seen = margin_colours( $render->( pattern => $name ) );
+
+    my @unexpected =
+        grep { $_ ne '42,27,78' && $_ ne '255,113,206' } sort keys %$seen;
+
+    is_deeply \@unexpected, [], "the $name ground is the two it was given"
+        or diag "and also: @unexpected";
+
+    is scalar keys %$seen, 2,
+        "with both of them down the whole margin, so $name is a pattern";
+
+    return;
+}
+
+# ---------------------------------------------------------------------------
+# The letterbox: a shape from a list, and a ground that can be a pattern
+
+# 'native' is the name a closed list can offer for what an empty ratio has
+# always meant, which is the setting three of the four presets that letterbox
+# actually use: they want the border and nothing else.
+{
+    my $shaped = sub {
+        my ( %how ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new( image => $img, seed => 3 );
+        GlitchVape::Pipeline->new( effects => { letterbox => \%how } )
+            ->run( $ctx );
+
+        return $ctx->image;
+    };
+
+    is join( 'x', $shaped->( ratio => 'native' )->Get( 'width', 'height' ) ),
+        join( 'x', $shaped->( ratio => q{} )->Get( 'width', 'height' ) ),
+        'native leaves the shape alone, which is what an empty ratio did';
+
+    is join( 'x',
+        $shaped->( ratio => 'native', border => 0 )->Get( 'width', 'height' ) ),
+        '480x360', 'and with no border either, the picture it was given';
+
+    # The border is not nought by default, because 'native' with no border is
+    # an effect that does nothing when it is switched on.
+    isnt join( 'x', $shaped->()->Get( 'width', 'height' ) ), '480x360',
+        'switched on with its defaults it draws something';
+
+    isnt join( 'x',
+        $shaped->( ratio => '1:1', border => 0 )->Get( 'width', 'height' ) ),
+        '480x360', 'and a shape from the list crops the frame to it';
+
+    my $spec = GlitchVape::Registry->get( 'letterbox' )->{ params }{ ratio };
+
+    is $spec->{ choose }, 'ratio',
+        'the ratio is a closed list rather than something to type';
+    ok !$spec->{ suggest }, 'with nothing typeable left beside it';
+}
+
+# ---------------------------------------------------------------------------
+# A patterned ground is two colours, and it does not restart at the border
+
+# Built as one background the picture is laid on rather than as two extends,
+# because a pattern has to line up across the join between the bars and the
+# border -- extending twice would start it again at the second one.
+{
+    my $render = sub {
+        my ( %how ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new( image => $img, seed => 3 );
+        GlitchVape::Pipeline->new(
+            effects => {
+                letterbox => {
+                    ratio         => '1:1',
+                    border        => 0.05,
+                    color         => '#2A1B4E',
+                    ink           => '#FF71CE',
+                    pattern_scale => 2,
+                    %how,
+                }
+            }
+        )->run( $ctx );
+
+        return $ctx->image;
+    };
+
+    my $flat = margin_colours( $render->( pattern => 'solid' ) );
+
+    is_deeply [ keys %$flat ], [ '42,27,78' ],
+        'a solid ground is the colour it was given and nothing else';
+
+    ground_is_two_colours( $render, $_ )
+        for GlitchVape::Raster::desktop_names();
+}
+
+# ---------------------------------------------------------------------------
+# A block's shape is one number and a word, not two numbers
+
+# It was a maximum width and a maximum height, and they were always saying one
+# thing between them: how big, and which way round. The default was eight by
+# three and the only preset that set them was twelve by four -- both the short
+# side at a third of the long one -- so the second number was never carrying
+# information, only an opportunity to make the two disagree.
+{
+    my $spec = GlitchVape::Registry->get( 'blockshift' )->{ params };
+
+    ok !$spec->{ width_blocks } && !$spec->{ height_blocks },
+        'the two maxima are gone';
+
+    ok $spec->{ extent }, 'and a block has an extent';
+    is_deeply $spec->{ shape }{ values }, [ qw(wide square tall) ],
+        'and a shape from three';
+
+    # The two settings that existed, reproduced exactly -- which is why no
+    # render moved when the parameters did.
+    is_deeply block_shape( 8, 'wide' ), [ 8, 3 ], 'the old default, exactly';
+    is_deeply block_shape( 12, 'wide' ), [ 12, 4 ],
+        'and the old preset, exactly';
+
+    is_deeply block_shape( 12, 'square' ), [ 12, 12 ], 'square is square';
+    is_deeply block_shape( 12, 'tall' ), [ 4, 12 ], 'and tall is wide, turned';
+
+    # Never nought, however small the extent: a block no macroblocks across
+    # is not a block.
+    is_deeply block_shape( 1, 'wide' ), [ 1, 1 ],
+        'the smallest block is one cell';
+}
+
+# ---------------------------------------------------------------------------
+# A colour is a colour whether it is spelled or numbered
+
+# letterbox.color arrives as the word 'black' in three of the four presets
+# that use it, so a pattern that only understood hex would draw them in
+# whatever its fallback happened to be.
+{
+    is colour_of( '#FF71CE' ), '255,113,206', 'a hex triplet reads as itself';
+    is colour_of( 'black' ),   '0,0,0',       'and so does a name';
+    is colour_of( 'navy' ),    '0,0,128',     'including one worth naming';
+
+    is colour_of( 'nonsense' ), '9,9,9',
+        'a colour nobody can read falls back rather than stopping the render';
+    is colour_of( q{} ), '9,9,9', 'and so does none at all';
+
+    is GlitchVape::Raster::mixed( 'black', 'white', 0 ), '#000000',
+        'mixing at nought is the first colour';
+    is GlitchVape::Raster::mixed( 'black', 'white', 1 ), '#FFFFFF',
+        'and at one the second';
+    is GlitchVape::Raster::mixed( 'black', 'white', 0.5 ), '#808080',
+        'with the halfway point between them';
+}
+
+# ---------------------------------------------------------------------------
+# A duotone ramp is chosen, and 'custom' is what the two pickers are for
+
+# The parameter used to be called 'name' and used to be typeable. A name that
+# does not say what it names, on a list where a typo is a render that stops.
+{
+    my $mapped = sub {
+        my ( %how ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new( image => $img, seed => 3 );
+        GlitchVape::Pipeline->new( effects => { duotone => { %how } } )
+            ->run( $ctx );
+
+        return $ctx->image;
+    };
+
+    my $spec = GlitchVape::Registry->get( 'duotone' )->{ params };
+
+    is $spec->{ ramp }{ choose }, 'duotone',
+        'the ramp is a closed list rather than something to type';
+    ok !$spec->{ ramp }{ suggest }, 'with nothing typeable left beside it';
+    ok !exists $spec->{ name },     q{and it is no longer called 'name'};
+
+    # The two pickers mean nothing until the ramp is custom, so they say so
+    # and the window greys them: a colour that is ignored is worse than one
+    # that is missing, because it looks as though it was taken.
+    is_deeply $spec->{ $_ }{ needs }, { ramp => 'custom' },
+        "$_ means nothing unless the ramp is custom"
+        for qw( shadows highlights );
+
+    my $named  = $mapped->( ramp => 'pinkcyan' );
+    my $custom = $mapped->(
+        ramp       => 'custom',
+        shadows    => '#FF71CE',
+        highlights => '#01CDFE'
+    );
+
+    is $named->Get( 'signature' ), $custom->Get( 'signature' ),
+        'custom with pinkcyan\'s own two colours renders pinkcyan exactly';
+
+    isnt $custom->Get( 'signature' ),
+        $mapped->(
+        ramp       => 'custom',
+        shadows    => '#003300',
+        highlights => '#CCFFCC'
+        )->Get( 'signature' ),
+        'and two other colours are two other colours';
 }
 
 done_testing;

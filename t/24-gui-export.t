@@ -282,8 +282,14 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
     ok scalar @$ordinary,                      'and still has ordinary ones';
     ok !( grep { $_ eq 'drift' } @$ordinary ), 'with the drift not among them';
 
-    my ( undef, $none ) = GlitchVape::GUI::Params::split(
+    my ( undef, $grade ) = GlitchVape::GUI::Params::split(
         GlitchVape::Registry->get( 'grade' )->{ params } );
+
+    is_deeply $grade, [ 'sway', 'sway_by' ],
+        'a grade that wanders keeps the wander and its size together';
+
+    my ( undef, $none ) = GlitchVape::GUI::Params::split(
+        GlitchVape::Registry->get( 'duotone' )->{ params } );
 
     is_deeply $none, [],
         'an effect with nothing loop-only gets no second group';

@@ -247,4 +247,32 @@ use GlitchVape::Registry;
     like $@, qr/needs 'none'/, 'and says which one it could not find';
 }
 
+# ---------------------------------------------------------------------------
+# A need can name several values, meaning any one of them
+
+# An enum whose off position is a word -- 'none' -- cannot be asked about as
+# a truth, because a word is true. Naming the values that are not it says
+# what is meant without inventing a grammar for negation.
+{
+    my $spec = { needs => { sway => [ qw(hue saturation) ] } };
+
+    ok GlitchVape::Registry::needs_met( $spec, { sway => 'hue' } ),
+        'the first of the listed values meets the need';
+    ok GlitchVape::Registry::needs_met( $spec, { sway => 'saturation' } ),
+        'and so does the second';
+    ok !GlitchVape::Registry::needs_met( $spec, { sway => 'none' } ),
+        'a value that is not on the list does not';
+    ok !GlitchVape::Registry::needs_met( $spec, {} ),
+        'and neither does no value at all';
+
+    # The declaration this exists for, so the greying follows the effect
+    # rather than a copy of its values here.
+    my $by = GlitchVape::Registry->get( 'grade' )->{ params }{ sway_by };
+
+    ok !GlitchVape::Registry::needs_met( $by, { sway => 'none' } ),
+        'how far the grade sways means nothing while nothing sways';
+    ok GlitchVape::Registry::needs_met( $by, { sway => 'contrast' } ),
+        'and means something as soon as something does';
+}
+
 done_testing;

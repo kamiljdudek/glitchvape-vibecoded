@@ -2862,19 +2862,33 @@ sub _choose_effect
 
     return unless $self->{ state };
 
-    GlitchVape::GUI::Wizard->run(
+    # Handed back rather than dropped, so a test can drive the wizard the
+    # window actually opened instead of one built to look like it.
+    return GlitchVape::GUI::Wizard->run(
         parent   => $self->{ window },
         state    => $self->{ state },
         render   => $self->{ render },
         on_empty => sub { $self->_report( $_[ 0 ] ); return },
         on_apply => sub {
-            my ( $name, $params ) = @_;
-            $self->_accept_effect( $name, $params );
+            my ( $name, $params, $now ) = @_;
+
+            $self->_accept_effect( $name, $params, $now );
+
+            # Asked for, so the whole pipeline runs -- not the effect on
+            # its own. What the wizard previewed was everything already in
+            # the list plus this one, and rendering less than that
+            # afterwards would be showing a different picture.
+            #
+            # On an idle rather than here: this runs inside the assistant's
+            # own apply handler, and the assistant is destroyed from the
+            # close that follows it. Starting a render underneath a window
+            # that is on its way out is the shape of mistake that cost a
+            # segfault once already.
+            Glib::Idle->add( sub { $self->_apply; return 0 } ) if $now;
+
             return;
         },
     );
-
-    return;
 }
 
 # The wizard hands back a name and the settings dialled in against its
@@ -2882,7 +2896,7 @@ sub _choose_effect
 # no memory of how it was added.
 sub _accept_effect
 {
-    my ( $self, $name, $params ) = @_;
+    my ( $self, $name, $params, $rendering ) = @_;
 
     $self->{ state }->add_effect( $name );
 
@@ -2895,14 +2909,22 @@ sub _accept_effect
     $self->_touch;
 
     # Reveal what was just added, or the button appears to have done nothing
-    # on a pipeline long enough to need scrolling.
+    # on a pipeline long enough to need scrolling. Selecting it is what
+    # reveals a row now: the per-row disclosure it used to open went when the
+    # settings became a popover, and the popover follows the selection.
     if ( my $row = $self->{ rows }{ $name } )
     {
-        $row->{ disclose }->set_active( 1 );
+        $self->{ effect_list }->select_row( $row->{ row } );
     }
 
+    # Telling somebody to press Apply when a render is about to start on its
+    # own is an instruction to undo what they asked for.
     my $title = GlitchVape::Registry->get( $name )->{ title };
-    $self->_status( "Added '$title'. Press Apply to see it." );
+    $self->_status(
+        $rendering
+        ? "Added '$title'."
+        : "Added '$title'. Press Apply to see it."
+    );
 
     return;
 }

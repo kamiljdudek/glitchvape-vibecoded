@@ -29,7 +29,7 @@ effects:
     tint_strength: 0.14
 
   duotone:
-    name: bluepink
+    ramp: bluepink
     strength: 0.35
 
   chroma_shift:

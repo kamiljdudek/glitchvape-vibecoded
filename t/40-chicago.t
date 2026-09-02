@@ -9,13 +9,14 @@ use lib "$FindBin::Bin/../lib";
 
 use Test::More;
 
-use GlitchVape           ();
-use GlitchVape::Chicago  ();
-use GlitchVape::Context  ();
-use GlitchVape::Fonts    ();
-use GlitchVape::Pipeline ();
-use GlitchVape::Registry ();
-use GlitchVape::Tools    ();
+use GlitchVape                  ();
+use GlitchVape::Chicago         ();
+use GlitchVape::Context         ();
+use GlitchVape::Effect::Overlay ();
+use GlitchVape::Fonts           ();
+use GlitchVape::Pipeline        ();
+use GlitchVape::Registry        ();
+use GlitchVape::Tools           ();
 
 plan skip_all => 'ImageMagick is not installed'
     unless GlitchVape::Tools::have( 'magick' );
@@ -185,6 +186,17 @@ sub inks_used
 # interface wants, never above the bar it has to fit, and at the size it gives
 # the stem reaches a whole pixel -- which is the property the whole
 # measurement exists for. Returns whether there was a font to ask at all.
+# How many of the roles fontconfig could find a face for. Nought means the
+# claim above went unexercised rather than that it held.
+sub drawable_roles
+{
+    my $drawn = 0;
+
+    $drawn += drawable( $_ ) for GlitchVape::Fonts::roles();
+
+    return $drawn;
+}
+
 sub drawable
 {
     my ( $role ) = @_;
@@ -411,6 +423,41 @@ sub fits_around
 
     is substr( art( $win, $hx - 1, $hy, 1, 1 )->[ 0 ], 0, 1 ), 'K',
         "with the well drawn right up to its edge ($said)";
+
+    return;
+}
+
+# What zoom 0 works out to for a picture of a given height.
+# One parameter's declared dependence on the scroll bars being there.
+sub needs_scrollbars
+{
+    my ( $effect, $key ) = @_;
+
+    return is_deeply $effect->{ params }{ $key }{ needs }, { scrollbars => 1 },
+        "$key says it depends on there being scroll bars";
+}
+
+sub auto_zoom
+{
+    my ( $height ) = @_;
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    return GlitchVape::Effect::Overlay::_chicago_zoom( $height );
+    ## use critic
+}
+
+# That the parameter says what zoom 0 does, because a control whose top half
+# is the same as its second notch is one somebody reports as broken.
+sub zoom_docs_state_the_rule
+{
+    for my $effect ( @_ )
+    {
+        my $doc =
+            GlitchVape::Registry->get( $effect )->{ params }{ zoom }{ doc };
+
+        like $doc, qr/480/, "$effect.zoom says what it reads the picture as";
+        like $doc, qr/720/, "and where $effect.zoom 0 stops agreeing with 1";
+    }
 
     return;
 }
@@ -738,10 +785,7 @@ sub window
     is GlitchVape::Chicago::smallest_type( undef ), 12,
         'with no font there is nothing to measure and the interface size stands';
 
-    my $roles = 0;
-    $roles += drawable( $_ ) for GlitchVape::Fonts::roles();
-
-    ok $roles, 'there was at least one font to ask';
+    ok drawable_roles(), 'there was at least one font to ask';
 }
 
 # ---------------------------------------------------------------------------
@@ -1221,11 +1265,28 @@ SKIP:
     is $effect->{ stage }, 'overlay',
         'in the stage that draws on top of the picture';
 
-    for my $key ( qw(grip thumb scroll) )
-    {
-        is_deeply $effect->{ params }{ $key }{ needs }, { scrollbars => 1 },
-            "$key says it depends on there being scroll bars";
-    }
+    needs_scrollbars( $effect, $_ ) for qw(grip thumb scroll);
+}
+
+# ---------------------------------------------------------------------------
+# What the automatic zoom works out, and where it agrees with 1
+
+# It reads the picture as a screen 480 pixels tall, so under 720 it says 1 and
+# 0 and 1 draw the same window -- which looks like a setting that does nothing
+# until you know the rule. The rule is in the parameter's own doc for that
+# reason, and pinned here so the doc cannot drift from it.
+{
+    is auto_zoom( 360 ),  1, 'a small picture is drawn at one to one';
+    is auto_zoom( 719 ),  1, 'and so is anything short of 720';
+    is auto_zoom( 720 ),  2, 'which is where it first doubles';
+    is auto_zoom( 1080 ), 2, 'a 1080-line photograph gets 2';
+    is auto_zoom( 2160 ), 5, 'and a 2160-line one gets 5';
+
+    cmp_ok auto_zoom( 1 ), '>=', 1, 'never nought, however small the picture';
+
+    # The doc says all of that, because a control whose top half is the same
+    # as its second notch is one somebody will report as broken otherwise.
+    zoom_docs_state_the_rule( qw(chicago maximised) );
 }
 
 done_testing;

@@ -352,15 +352,40 @@ $R->register(
     doc     => <<'DOC',
 Collapses the image to greyscale, then maps dark-to-light onto a colour ramp.
 The single most recognisable "aesthetic" grade: pink shadows, cyan highlights.
+
+The ramp is one of the named ones or C<custom>, which uses the two colours
+under it. A closed list rather than something to type: every name on it is a
+pair of colours somebody chose, and a mistyped one is a render that stops.
 DOC
     params => {
-        name => {
+        ramp => {
             default => 'pinkcyan',
             type    => 'str',
-            doc     => 'Duotone or palette name, or "#RRGGBB,#RRGGBB"',
-            suggest => 'duotone',
+            order   => 1,
+
+            # Closed, and no longer called 'name'. A parameter called name
+            # says nothing about what it names, and this one is a ramp: the
+            # two colours dark and light are mapped onto.
+            choose => 'duotone',
+            doc    => 'Which two-colour ramp the luminance is mapped onto. '
+                . 'Custom uses the two colours below',
+        },
+        shadows => {
+            default => '#FF71CE',
+            type    => 'str',
+            order   => 2,
+            needs   => { ramp => 'custom' },
+            doc     => 'What black becomes, with a custom ramp',
+        },
+        highlights => {
+            default => '#01CDFE',
+            type    => 'str',
+            order   => 3,
+            needs   => { ramp => 'custom' },
+            doc     => 'What white becomes, with a custom ramp',
         },
         strength => {
+            order   => 4,
             default => 0.85,
             type    => 'num',
             min     => 0,
@@ -372,18 +397,31 @@ DOC
             type    => 'num',
             min     => -100,
             max     =>  100,
+            order   =>  5,
             doc     => 'Contrast applied to the luminance before mapping',
         },
     },
     apply => \&_duotone,
 );
 
+# The two colours to map onto: a named ramp, or the pair below it.
+sub _duotone_stops
+{
+    my ( $p ) = @_;
+
+    my $ramp = $p->{ ramp } // q{};
+
+    return GlitchVape::Palette::duotone( $ramp ) unless lc $ramp eq 'custom';
+
+    return [ $p->{ shadows }, $p->{ highlights } ];
+}
+
 sub _duotone
 {
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my $stops = GlitchVape::Palette::duotone( $p->{ name } );
+    my $stops = _duotone_stops( $p );
     my $clut  = GlitchVape::Palette::gradient_file( $stops, $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
@@ -464,6 +502,17 @@ $R->register(
     doc     => <<'DOC',
 General colour grading. The default lift pushes shadows towards blue-magenta,
 which is what gives cheap tape its characteristic cold, slightly bruised look.
+
+C<sway> is the animation: one of the settings wanders over the loop, out and
+back on a single cosine, so it closes at any amount and a still is graded
+exactly as it says. One at a time and not several, because a grade is a
+decision about the whole picture and two of them moving at once is a colour
+wheel rather than a look that breathes.
+
+C<sway_by> is in the swaying setting's own units. The ranges have nothing to
+do with one another -- hue runs 0 to 200 about a neutral 100, contrast -100 to
+100 about a neutral 0 -- so a swing expressed as a fraction of the slider
+would mean something different on each of them.
 DOC
     params => {
         hue => {
@@ -513,13 +562,67 @@ DOC
             max     => 4,
             doc     => 'Gamma correction',
         },
+        sway => {
+            animation => 1,
+            default   => 'none',
+            type      => 'enum',
+            values    => [ qw(none hue saturation brightness contrast) ],
+            doc       => 'One setting to let wander over the loop, out and '
+                . 'back. A grade is a decision about the whole picture, so '
+                . 'only one of them moves: two would be a colour wheel',
+        },
+        sway_by => {
+            animation => 1,
+
+            # Every value but the off one, since 'none' is a word rather
+            # than a falsehood and there is nothing to ask about its truth.
+            needs   => { sway => [ qw(hue saturation brightness contrast) ] },
+            default => 10,
+            type    => 'num',
+            min     => 0,
+            max     => 50,
+            doc     => 'How far it goes either side, in the same units as '
+                . 'the setting it moves. Unused while nothing is swaying',
+        },
     },
     apply => \&_grade,
 );
 
+# The grade for this frame: whichever setting is swaying, moved.
+#
+# One cosine over the loop through Context::excursion, so it goes out and
+# comes home and closes at any amount -- and it is a still's own settings
+# exactly when there is no loop for it to go round.
+#
+# In the setting's own units rather than as a fraction of its range, because
+# the ranges have nothing to do with each other: hue is 0 to 200 about a
+# neutral 100, contrast is -100 to 100 about a neutral 0, and a swing that
+# meant "a tenth of the slider" would be a different thing on each of them.
+sub _swayed
+{
+    my ( $ctx, $p ) = @_;
+
+    my $what = $p->{ sway } // 'none';
+    return $p if $what eq 'none' || !exists $p->{ $what };
+
+    my $swing = $ctx->excursion( $p->{ sway_by } );
+    return $p unless $swing;
+
+    my $spec = $R->get( 'grade' )->{ params }{ $what };
+
+    my $at = $p->{ $what } + $swing;
+    $at = $spec->{ min } if defined $spec->{ min } && $at < $spec->{ min };
+    $at = $spec->{ max } if defined $spec->{ max } && $at > $spec->{ max };
+
+    return { %$p, $what => $at };
+}
+
 sub _grade
 {
     my ( $ctx, $p ) = @_;
+
+    $p = _swayed( $ctx, $p );
+
     my $img = $ctx->image;
 
     $img->Modulate(

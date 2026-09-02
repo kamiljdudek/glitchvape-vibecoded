@@ -240,7 +240,7 @@ sub search_dirs
     push @dirs, asset_dir(), extra_dir();
 
     my %seen;
-    return grep { -d $_ && !$seen{ $_ }++ } @dirs;
+    return grep { -d && !$seen{ $_ }++ } @dirs;
 }
 
 # The system data directories, XDG_DATA_DIRS unioned with the defaults rather

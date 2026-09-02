@@ -627,7 +627,8 @@ sub _settings_page
     $split->pack_start( $column,              1, 1, 0 );
     $split->pack_start( $self->_preview_pane, 0, 0, 0 );
 
-    $box->pack_start( $split, 1, 1, 0 );
+    $box->pack_start( $split,             1, 1, 0 );
+    $box->pack_start( $self->_render_now, 0, 0, 0 );
 
     $self->{ settings_heading } = $heading;
     $self->{ settings_summary } = $summary;
@@ -646,6 +647,36 @@ sub _settings_page
 # which would put it in a different place for every effect: the settings are
 # a scrolling list, and a button that follows the end of one is a button that
 # moves as the list is browsed.
+# Whether adding the effect should also render.
+#
+# Off by default and stays off: adding an effect is a decision about the
+# pipeline and rendering is a decision about spending several seconds, and a
+# wizard that quietly did the second because you asked for the first would be
+# a wizard people stopped using on large photographs. It says how long the
+# last render took, which is the only honest thing to put beside a tick box
+# whose cost is time.
+#
+# At the foot of the page rather than beside Apply: the assistant's own row is
+# Cancel, Back and Apply, which are decisions about the assistant, and this is
+# a decision about what happens after it closes.
+sub _render_now
+{
+    my ( $self ) = @_;
+
+    my $check =
+        Gtk3::CheckButton->new_with_mnemonic( 'Apply the effect _immediately' );
+
+    $check->set_active( 0 );
+    $check->set_tooltip_text(
+        'Render the whole pipeline as soon as this closes, with everything '
+            . 'already in it. Off, the effect is added and the picture is '
+            . 'redrawn when you press Apply.' );
+
+    $self->{ render_now } = $check;
+
+    return $check;
+}
+
 sub _reset_button
 {
     my ( $self ) = @_;
@@ -1106,8 +1137,11 @@ sub _apply
 
     return unless $self->{ effect };
 
-    $self->{ on_apply }->( $self->{ effect }, { %{ $self->{ params } } } )
-        if $self->{ on_apply };
+    $self->{ on_apply }->(
+        $self->{ effect },
+        { %{ $self->{ params } } },
+        $self->{ render_now } && $self->{ render_now }->get_active ? 1 : 0
+    ) if $self->{ on_apply };
 
     return;
 }

@@ -9,11 +9,13 @@ use lib "$FindBin::Bin/../lib";
 use File::Temp ();
 use Test::More;
 
-use GlitchVape                 ();
-use GlitchVape::Context        ();
-use GlitchVape::Effect::Screen ();
-use GlitchVape::Pipeline       ();
-use GlitchVape::Tools          ();
+use GlitchVape                  ();
+use GlitchVape::Context         ();
+use GlitchVape::Effect::Color   ();
+use GlitchVape::Effect::Overlay ();
+use GlitchVape::Effect::Screen  ();
+use GlitchVape::Pipeline        ();
+use GlitchVape::Tools           ();
 
 plan skip_all => 'ImageMagick is not installed'
     unless GlitchVape::Tools::have( 'magick' );
@@ -239,6 +241,112 @@ for my $effect ( @drifters )
 
     cmp_ok scalar keys %angle, '<', 24 * 4 / 2,
         'and far fewer distinct screens than frames times plates';
+}
+
+# ---------------------------------------------------------------------------
+# The letterbox pattern breathes, and comes home
+
+# Another moving parameter under another name, so outside the sweep above and
+# owing the same two proofs. One cosine over the loop: out once, home once,
+# and slowly -- a pattern that swapped every few frames would be a strobe.
+{
+    my $colours = sub {
+        my ( $frame, $count, $swap ) = @_;
+
+        my $ctx = GlitchVape::Context->new( seed => 1 );
+        $ctx->frames( $count );
+        $ctx->frame( $frame );
+
+        ## no critic (Subroutines::ProtectPrivateSubs)
+        return [
+            GlitchVape::Effect::Overlay::_swapping(
+                $ctx, { color => '#2A1B4E', ink => '#FF71CE', swap => $swap }
+            )
+        ];
+        ## use critic
+    };
+
+    is_deeply $colours->( 12, 12, 1 ), $colours->( 0, 12, 1 ),
+        'the pattern comes back to the colours it started the loop in';
+
+    is_deeply $colours->( 0, 12, 1 ), [ '#2A1B4E', '#FF71CE' ],
+        'which are the ones it was given';
+
+    is_deeply $colours->( 6, 12, 1 ), [ '#FF71CE', '#2A1B4E' ],
+        'and halfway round at a full swap they have changed places';
+
+    is_deeply $colours->( 0, 1, 1 ), [ '#2A1B4E', '#FF71CE' ],
+        'a still is drawn in the colours it was given, whatever the setting';
+
+    # Below a full swap they lean towards each other without crossing, which
+    # is the pattern breathing rather than inverting.
+    my $part = $colours->( 6, 12, 0.4 );
+
+    isnt $part->[ 0 ], '#FF71CE', 'at less than a full swap they do not cross';
+    isnt $part->[ 0 ], '#2A1B4E', 'but they do move';
+}
+
+# ---------------------------------------------------------------------------
+# A grade that wanders comes home
+
+# One setting at a time, out and back on a cosine through excursion, so it
+# closes at any amount and a still is graded exactly as it says.
+{
+    my $graded = sub {
+        my ( $frame, $count, %how ) = @_;
+
+        my $ctx = GlitchVape::Context->new( seed => 1 );
+        $ctx->frames( $count );
+        $ctx->frame( $frame );
+
+        ## no critic (Subroutines::ProtectPrivateSubs)
+        return GlitchVape::Effect::Color::_swayed(
+            $ctx,
+            {
+                hue        => 100,
+                saturation => 130,
+                brightness => 100,
+                contrast   => 0,
+                sway_by    => 25,
+                %how,
+            }
+        );
+        ## use critic
+    };
+
+    is $graded->( 12, 12, sway => 'saturation' )->{ saturation },
+        $graded->( 0, 12, sway => 'saturation' )->{ saturation },
+        'the frame after the last one is graded like the first';
+
+    isnt $graded->( 3, 12, sway => 'saturation' )->{ saturation },
+        $graded->( 0, 12, sway => 'saturation' )->{ saturation },
+        'having moved in between';
+
+    is $graded->( 3, 1, sway => 'saturation' )->{ saturation }, 130,
+        'and a still is graded at exactly what it was set to';
+
+    # Only the one named. A grade is a decision about the whole picture, and
+    # two of them moving at once is a colour wheel.
+    my $moved = $graded->( 3, 12, sway => 'saturation' );
+
+    is $moved->{ hue },        100, 'hue is left where it was';
+    is $moved->{ brightness }, 100, 'and so is brightness';
+
+    is $graded->( 3, 12, sway => 'none' )->{ saturation }, 130,
+        'and with nothing swaying, nothing moves';
+
+    # Clamped to the setting's own range rather than run off the end of it:
+    # a saturation below nought is not a colour, and ImageMagick would take
+    # the negative rather than complain about it.
+    my $far = $graded->(
+        9, 12,
+        sway       => 'saturation',
+        saturation => 10,
+        sway_by    => 50
+    );
+
+    is $far->{ saturation }, 0,
+        'a swing wider than the range stops at the end of it';
 }
 
 done_testing;

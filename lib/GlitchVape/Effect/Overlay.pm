@@ -9,6 +9,7 @@ use Encode ();
 use GlitchVape::Chicago   ();
 use GlitchVape::Magick    ();
 use GlitchVape::Pixels    ();
+use GlitchVape::Raster    ();
 use GlitchVape::Starfield ();
 use GlitchVape::VGA       ();
 use GlitchVape::Registry  ();
@@ -877,41 +878,250 @@ $R->register(
 Crops to a target aspect ratio with bars, or draws a plain inset border. Bars
 sell the "recorded off a broadcast" idea; a border reads more like a photo
 print.
+
+C<ratio> is a closed list, because an aspect ratio is one of a short set of
+shapes film and television were shot in and a typed one is a typo waiting to
+fail the render. C<native> is on it for the case the presets actually use:
+three of the four that letterbox want the border and nothing else.
+
+C<pattern> fills the bars and the border with one of the eight-by-eight
+patterns a desktop of the period offered, in C<color> over C<ink>, instead of
+a flat colour. They are bitmaps rather than drawings, scaled by pixel
+replication -- see L<GlitchVape::Raster/desktop_names() / desktop_tile( $dir,
+%opt )>.
+
+With a pattern the ground is built once and the picture laid on it, rather
+than the canvas being extended twice. That is not tidiness: a pattern has to
+line up across the join between the bars and the border, and extending twice
+restarts it at the second one.
+
+C<swap> is the animation. The two pattern colours cross over the loop and come
+back, on one cosine, so it closes by construction and it is slow: once out and
+once home for the whole loop is a breath rather than a strobe. A full swap
+passes through the moment the two are equal and the pattern is briefly not
+there, which is what a full swap is; below about a half they only lean towards
+each other and it breathes without ever going.
 DOC
     params => {
         ratio => {
-            default => '16:9',
+            default => 'native',
             type    => 'str',
-            suggest => 'ratio',
-            doc     => 'Target aspect, e.g. "16:9" or "4:3"; empty to skip',
+            order   => 1,
+
+            # Closed rather than typeable: an aspect ratio is one of a short
+            # list of shapes film and television were shot in, and a typed
+            # one is a typo waiting to fail the render.
+            choose => 'ratio',
+            doc    => 'Shape to crop the frame to. Native leaves it as it is '
+                . 'and draws only the border',
+        },
+        border => {
+
+            # Not nought any more. The ratio now arrives at 'native', which
+            # is what three of the four presets that letterbox actually want,
+            # and 'native' with no border is an effect that does nothing when
+            # it is switched on.
+            default => 0.03,
+            type    => 'num',
+            min     => 0,
+            max     => 0.5,
+            order   => 2,
+            doc     => 'Uniform border as a fraction of the shorter side',
         },
         color => {
             default => 'black',
             type    => 'str',
-            doc     => 'Bar or border colour',
+            order   => 3,
+            doc     => 'Bar or border colour, and the ground a pattern is '
+                . 'drawn on',
         },
-        border => {
+        pattern => {
+            default => 'solid',
+            type    => 'enum',
+            order   => 4,
+            values  => [ 'solid', GlitchVape::Raster::desktop_names() ],
+            doc     => 'Fill the bars and the border with one of the '
+                . 'eight-by-eight patterns a desktop of the period offered, '
+                . 'instead of a flat colour',
+        },
+        ink => {
+            default => '#FF71CE',
+            type    => 'str',
+            order   => 5,
+            doc     => "The pattern's marks, over the colour above. Unused "
+                . 'while the pattern is solid',
+        },
+        swap => {
+            animation => 1,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            order     => 7,
+            doc       => 'How far the two pattern colours cross over the '
+                . 'loop and back. Once out and once home, so a loop is one '
+                . 'slow breath rather than a flicker',
+        },
+        pattern_scale => {
             default => 0,
-            type    => 'num',
+            type    => 'int',
             min     => 0,
-            max     => 0.5,
-            doc     => 'Uniform border as a fraction of the shorter side',
+            max     => 16,
+            order   => 6,
+            doc     => 'Image pixels per pattern pixel; 0 works it out from '
+                . 'the picture, on the reading that it is a screen 480 '
+                . 'pixels tall',
         },
     },
     apply => \&_letterbox,
 );
 
+# The two numbers in '16:9'.
+sub _ratio_of
+{
+    my ( $ratio ) = @_;
+
+    my ( $rw, $rh ) =
+        $ratio =~ m{^\s*(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)\s*$}
+        or die "letterbox: ratio must look like '16:9', got '$ratio'\n";
+
+    return ( $rw, $rh );
+}
+
+# The tile the bars and the border are filled with, or undef for a flat
+# colour -- which keeps the plain case on the two ImageMagick calls it has
+# always used, and renders identically to before.
+sub _letterbox_tile
+{
+    my ( $ctx, $p ) = @_;
+
+    my $name = $p->{ pattern } // 'solid';
+    return undef if $name eq 'solid';
+
+    my ( undef, $h ) = $ctx->dims;
+
+    # The same reading chicago's zoom takes: the picture is a screen 480
+    # pixels tall, and a pattern pixel is however many image pixels that
+    # makes. An eight-pixel tile at 1:1 on a twelve-megapixel photograph is a
+    # texture nobody can see.
+    my $scale = int( $p->{ pattern_scale } || 0 ) || _chicago_zoom( $h );
+
+    my ( $ground, $ink ) = _swapping( $ctx, $p );
+
+    return GlitchVape::Raster::desktop_tile(
+        $ctx->cachedir,
+        name   => $name,
+        ground => $ground,
+        ink    => $ink,
+        scale  => $scale,
+    );
+}
+
+# The two pattern colours at this point in the loop.
+#
+# One cosine over the whole loop, so it goes out and comes home once and
+# closes by construction -- and slowly, which is the point: a pattern that
+# swapped every few frames would be a strobe, and this is meant to be the
+# thing you notice second.
+#
+# At a swap of 1 the colours cross completely, which means passing through the
+# moment they are equal and the pattern is not there. That is a fade out and
+# back inverted, and it is what a full swap is. Below about a half they only
+# lean towards each other and the pattern breathes without ever going.
+#
+# Not quantised, unlike the cmyk screens: a tile is six milliseconds and a
+# kilobyte, where a screen is a third of a second and a megabyte.
+sub _swapping
+{
+    my ( $ctx, $p ) = @_;
+
+    my ( $ground, $ink ) = ( $p->{ color }, $p->{ ink } );
+
+    my $swap = $p->{ swap } || 0;
+    return ( $ground, $ink ) unless $swap > 0 && $ctx->frames > 1;
+
+    my $mix = $swap * ( 1 - cos( 2 * $PI * $ctx->phase ) ) / 2;
+
+    return (
+        GlitchVape::Raster::mixed( $ground, $ink,    $mix ),
+        GlitchVape::Raster::mixed( $ink,    $ground, $mix ),
+    );
+}
+
+# Bars, border, or both, filled with a tile. Built as one background the
+# picture is laid on rather than as two extends, because a pattern has to line
+# up across the join -- extending twice would restart it at the border.
+sub _letterbox_tiled
+{
+    my ( $ctx, $p, $ratio, $tile ) = @_;
+    require Image::Magick;
+
+    my ( $w, $h ) = $ctx->dims;
+
+    my ( $nw, $nh ) = ( $w, $h );
+
+    if ( length $ratio )
+    {
+        my ( $rw, $rh ) = _ratio_of( $ratio );
+
+        my $target = $rw / $rh;
+
+        ( $nw, $nh ) =
+            $w / $h > $target
+            ? ( $w, int( $w / $target ) )
+            : ( int( $h * $target ), $h );
+    }
+
+    # From the shorter side of what the bars left, which is what the flat
+    # path does too: a panorama should not get an absurd frame on its short
+    # edge.
+    my $border = int( ( $nw < $nh ? $nw : $nh ) * $p->{ border } );
+
+    $nw += 2 * $border;
+    $nh += 2 * $border;
+
+    return if $nw <= $w && $nh <= $h;
+
+    my $ground = GlitchVape::Raster::tiled( $ctx, $tile, $nw, $nh );
+
+    my $out = Image::Magick->new;
+    GlitchVape::Magick::check( $out->Read( $ground ),
+        'letterbox: could not lay the pattern down' );
+
+    GlitchVape::Magick::check(
+        $out->Composite(
+            image   => $ctx->image->[ 0 ],
+            compose => 'Over',
+            x       => int( ( $nw - $w ) / 2 ),
+            y       => int( ( $nh - $h ) / 2 ),
+        ),
+        'letterbox: could not place the picture on it'
+    );
+
+    $ctx->image( $out );
+
+    return;
+}
+
 sub _letterbox
 {
     my ( $ctx, $p ) = @_;
 
-    if ( length $p->{ ratio } )
+    # 'native' is the name the list offers for what an empty string has always
+    # meant, because a closed list cannot offer nothing.
+    my $ratio = $p->{ ratio } // q{};
+    $ratio = q{} if lc $ratio eq 'native';
+
+    my $tile = _letterbox_tile( $ctx, $p );
+
+    if ( $tile )
     {
-        my ( $rw, $rh ) =
-            $p->{ ratio } =~
-            m{^\s*(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)\s*$}
-            or die
-            "letterbox: ratio must look like '16:9', got '$p->{ratio}'\n";
+        return _letterbox_tiled( $ctx, $p, $ratio, $tile );
+    }
+
+    if ( length $ratio )
+    {
+        my ( $rw, $rh ) = _ratio_of( $ratio );
 
         my ( $w, $h ) = $ctx->dims;
         my $target = $rw / $rh;
@@ -1315,8 +1525,9 @@ DOC
             min     => 0,
             max     => 12,
             order   => 6,
-            doc     => 'Image pixels per window pixel; 0 works it out from '
-                . 'the picture',
+            doc => 'Image pixels per window pixel. 0 reads the picture as a '
+                . 'screen 480 tall and rounds, so anything under 720 gets 1 '
+                . 'and 0 and 1 are the same there; 1080 gets 2, 2160 gets 5',
         },
         theme => {
             default => 'default',
@@ -1814,6 +2025,12 @@ one thing on a caption that says which of the two a window is. And the sizing
 grip goes, because a maximised window cannot be resized and offering a handle
 for doing it would be a lie about what the picture is.
 
+C<zoom> is how many image pixels one of the window's own pixels becomes, and
+it is a whole number because the alternative is interpolation. Left at 0 it is
+worked out from the picture, on the reading that the picture is a screen 480
+pixels tall -- so a photograph under 720 pixels tall gets 1, and 0 and 1 draw
+the same window there. A 1080-pixel one gets 2 and a 2160-pixel one gets 5.
+
 The chrome is a whole number of window pixels across, so the client area is
 too, and the picture is centred in it. What is left over is fewer pixels than
 C<zoom> and shows as the application's own canvas -- which is what an image
@@ -1826,8 +2043,9 @@ DOC
             min     => 0,
             max     => 12,
             order   => 1,
-            doc     => 'Image pixels per window pixel; 0 works it out from '
-                . 'the picture',
+            doc     => 'Image pixels per window pixel. 0 reads the picture as '
+                . 'a screen 480 tall and rounds, so anything under 720 gets '
+                . '1 and 0 and 1 are the same there; 1080 gets 2, 2160 gets 5',
         },
         theme => {
             default => 'default',

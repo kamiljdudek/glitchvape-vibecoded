@@ -507,7 +507,7 @@ A few worth knowing about:
 Build a look from nothing:
 
 ```bash
-glitchvape -e duotone -e scanlines -e grain --set duotone.name=hotline photo.heic
+glitchvape -e duotone -e scanlines -e grain --set duotone.ramp=hotline photo.heic
 ```
 
 ### Palettes

@@ -135,6 +135,12 @@ it change is how you know the button did something, and because that number is
 what travels in a saved preset and in the copied command line, which is where
 anybody repeating a render is working from.
 
+A **closed list** is for a parameter whose values are the only sensible ones:
+`letterbox.ratio` offers `native`, `16:9`, `2.35:1`, `4:3`, `1:1` and `9:16`
+and nothing to type into, because an aspect ratio is one of a short set of
+shapes film and television were shot in and a typed one is a typo waiting to
+fail the render.
+
 A **number that names the values people use** gets that list rather than a
 slider, typeable so the ones it does not name are still reachable. A drive's
 spindle spins at 4200, 5400, 7200, 10000 or 15000; a track between them is a
@@ -360,6 +366,17 @@ at once. It sits beside *Clear all effects* because it is the same kind of act
 — throwing away work on the pipeline — and the difference is which work:
 Clear throws away which effects are in it, this throws away what they were set
 to and keeps them.
+
+**Apply the effect immediately**, the tick below it, decides what happens
+after the wizard closes: with it set, the picture is redrawn as soon as the
+window goes — the whole pipeline, everything already in the list plus the one
+just added, which is exactly what the preview above was showing. Without it
+the effect is added and the picture waits for Apply.
+
+It starts clear every time the wizard opens and never remembers being set.
+Adding an effect and spending several seconds on a render are two decisions,
+and somebody adding five effects to a large photograph should not be paying
+for four renders they did not ask for.
 
 Nothing reaches the pipeline until Apply. The wizard previews against a
 detached copy of the state, so cancelling — at any point, however many

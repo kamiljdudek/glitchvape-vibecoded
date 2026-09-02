@@ -71,6 +71,161 @@ sub pattern_png
     return $png;
 }
 
+=head2 desktop_names() / desktop_tile( $dir, %opt )
+
+The eight-by-eight patterns a background can be filled with, and one of them
+as a PNG tile.
+
+    name   => which, from desktop_names()
+    ground => the colour behind it
+    ink    => the colour of its marks
+    scale  => image pixels per pattern pixel
+
+Windows shipped a list of these under Desktop, all eight pixels square and all
+two colours, and that is the shape they are kept in here for the reason
+L<GlitchVape::VGA>'s font is: a pattern is a picture of hard pixels, and a
+rasteriser that could smooth it would.
+
+They are scaled by pixel replication, so a tile at scale four is four-pixel
+blocks rather than a blurred eight-pixel one.
+
+=cut
+
+my %DESKTOP = (
+    checker => [
+        '#.#.#.#.', '.#.#.#.#', '#.#.#.#.', '.#.#.#.#',
+        '#.#.#.#.', '.#.#.#.#', '#.#.#.#.', '.#.#.#.#',
+    ],
+    grid => [
+        '########', '#.......', '#.......', '#.......',
+        '#.......', '#.......', '#.......', '#.......',
+    ],
+    stripes => [
+        '########', '........', '........', '........',
+        '########', '........', '........', '........',
+    ],
+    diamonds => [
+        '...#....', '..#.#...', '.#...#..', '#.....#.',
+        '.#...#..', '..#.#...', '...#....', '........',
+    ],
+    dots => [
+        '#.......', '........', '........', '........',
+        '....#...', '........', '........', '........',
+    ],
+    thatch => [
+        '###.###.', '#...#...', '###.###.', '....#...',
+        '###.###.', '#...#...', '###.###.', '....#...',
+    ],
+);
+
+sub desktop_names
+{
+    my @names = sort keys %DESKTOP;
+    return @names;
+}
+
+sub desktop_tile
+{
+    my ( $dir, %opt ) = @_;
+
+    my $art = $DESKTOP{ $opt{ name } // q{} } or return undef;
+
+    my $scale = int( $opt{ scale } || 1 );
+    $scale = 1 if $scale < 1;
+
+    my $ink    = colour_bytes( $opt{ ink },    255, 255, 255 );
+    my $ground = colour_bytes( $opt{ ground }, 0,   0,   0 );
+
+    my $side = 8 * $scale;
+
+    my $bytes = q{};
+    for my $row ( @$art )
+    {
+        my $line = q{};
+        $line .= ( $_ eq '#' ? $ink : $ground ) x $scale for split //, $row;
+
+        $bytes .= $line x $scale;
+    }
+
+    my $key = join '_', 'desk', $opt{ name }, $scale,
+        unpack( 'H6', $ink ), unpack( 'H6', $ground );
+
+    return pattern_png( $dir, $key, $side, $side, $bytes );
+}
+
+=head2 colour_bytes( $spec, @fallback )
+
+Three bytes of RGB for a hex triplet or for any colour ImageMagick can name.
+
+Named as well as hex, because the parameters that reach here accept both --
+C<letterbox.color> arrives as the word C<black> in three of the four presets
+that use it, and a pattern drawn in a colour it could not read would come out
+in whatever the fallback happened to be.
+
+Not fatal on a colour nobody can read: a typo in a preset should draw a
+pattern, not stop the render.
+
+=cut
+
+my %COLOUR;
+
+sub colour_bytes
+{
+    my ( $spec, @fallback ) = @_;
+
+    @fallback = ( 0, 0, 0 ) unless @fallback == 3;
+
+    my $want = $spec // q{};
+
+    my @rgb =
+        $want =~ m{ \A [#]? ([0-9a-f]{2}) ([0-9a-f]{2}) ([0-9a-f]{2}) \z }xi;
+
+    return pack 'C3', map { hex } @rgb if @rgb == 3;
+
+    return $COLOUR{ $want } if exists $COLOUR{ $want };
+
+    return $COLOUR{ $want } = pack 'C3', @fallback unless length $want;
+
+    require Image::Magick;
+
+    my $swatch  = Image::Magick->new( size => '1x1' );
+    my $trouble = $swatch->Read( "xc:$want" );
+
+    return $COLOUR{ $want } = pack 'C3', @fallback
+        if "$trouble" && "$trouble" =~ /\A Exception \s+ [45]/x;
+
+    my @px = $swatch->GetPixels( map => 'RGB', width => 1, height => 1 );
+
+    # A name ImageMagick does not know reads back as nothing rather than as
+    # an exception, so the length is the test and not the return code.
+    return $COLOUR{ $want } = pack 'C3', @fallback unless @px >= 3;
+
+    return $COLOUR{ $want } = pack 'C3',
+        map { int( $_ / 257 + 0.5 ) } @px[ 0 .. 2 ];
+}
+
+=head2 mixed( $from, $to, $amount )
+
+Two colours blended, as C<#RRGGBB>. C<$amount> 0 is the first, 1 the second.
+
+Hex out rather than three bytes, so that what comes back is a colour like any
+other and every caller keeps taking colours. Bytes would have to be told apart
+from a colour somehow, and C<red> is three characters long.
+
+=cut
+
+sub mixed
+{
+    my ( $from, $to, $amount ) = @_;
+
+    my @a = unpack 'C3', colour_bytes( $from );
+    my @b = unpack 'C3', colour_bytes( $to );
+
+    return sprintf '#%02X%02X%02X',
+        map { int( $a[ $_ ] + ( $b[ $_ ] - $a[ $_ ] ) * $amount + 0.5 ) }
+        0 .. 2;
+}
+
 =head2 scanline_tile( $dir, %opt )
 
 A vertically-repeating scanline pattern, one pixel wide.

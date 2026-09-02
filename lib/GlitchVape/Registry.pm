@@ -189,7 +189,10 @@ C<needs> is a hash of C<< parameter => wanted >>, and all of it must hold:
 
 A wanted 0 or 1 asks about truth -- a switch that is on, a string that is not
 empty. Anything else is compared as a string, so C<< { mode => 'frame' } >>
-reads as it looks. A parameter whose C<needs> are not met is still passed to
+reads as it looks. An arrayref is any one of them, which is how an enum whose
+off position is a word rather than a falsehood is asked about:
+
+    needs => { sway => [ qw(hue saturation brightness contrast) ] } A parameter whose C<needs> are not met is still passed to
 the effect and still validated; what changes is that the interface greys its
 control, because a value that cannot matter yet should say so rather than
 inviting somebody to set it and wonder why nothing moved.
@@ -414,6 +417,9 @@ sub sorted_params
 Whether one parameter's declared C<needs> hold, given the effect's current
 values. True for a parameter that declares none.
 
+A wanted value is one to match, C<0> or C<1> to ask about truth, or an
+arrayref of any of those meaning any one of them.
+
 Pure logic, and here rather than in the interface for the usual reason: the
 question "does this setting mean anything yet" is a fact about the
 declaration, not about Gtk.
@@ -432,21 +438,32 @@ sub needs_met
         my $want = $needs->{ $key };
         my $have = $values->{ $key };
 
-        # A wanted 0 or 1 is a question about truth, which is what makes one
-        # spelling serve both a bool that is off and a string that is empty.
-        if ( $want eq '0' || $want eq '1' )
-        {
-            my $got = ( defined $have && length $have && $have ne '0' ) ? 1 : 0;
-            return 0 if $got != $want;
-        }
-        else
-        {
-            return 0 unless defined $have;
-            return 0 unless lc "$have" eq lc $want;
-        }
+        # A list is any one of them. An enum whose off position is a word
+        # rather than a falsehood -- 'none' -- cannot be asked about as a
+        # truth, and naming the four values that are not it says what is
+        # meant where "not none" would need a grammar.
+        my @want = ref $want eq 'ARRAY' ? @$want : ( $want );
+
+        return 0 unless any { _wanted( $_, $have ) } @want;
     }
 
     return 1;
+}
+
+sub _wanted
+{
+    my ( $want, $have ) = @_;
+
+    # A wanted 0 or 1 is a question about truth, which is what makes one
+    # spelling serve both a bool that is off and a string that is empty.
+    if ( $want eq '0' || $want eq '1' )
+    {
+        my $got = ( defined $have && length $have && $have ne '0' ) ? 1 : 0;
+        return $got == $want ? 1 : 0;
+    }
+
+    return 0 unless defined $have;
+    return lc "$have" eq lc $want ? 1 : 0;
 }
 
 =head2 resolve_params( $name, $given )

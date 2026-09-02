@@ -28,8 +28,8 @@ effects:
     blocks: 26
     size: 16
     spread: 9
-    width_blocks: 12
-    height_blocks: 4
+    extent: 12
+    shape: wide
 
   slice:
     slices: 30
