@@ -471,9 +471,24 @@ $R->register(
 Sparse bright and dark specks scattered over the picture, as distinct from
 C<grain>'s continuous noise floor. This is the look of an aerial picking up a
 weak signal.
+
+The specks are redrawn every frame of a loop from the frame's own stream, which
+is what snow does and needs no setting. C<surge> is the setting: how far the
+snow rises over the loop and falls back, so the signal comes and goes instead
+of sitting at one strength. It is measured towards a picture that is nothing
+but snow, so 1 means the aerial loses it completely half way round and has it
+back by the end.
+
+C<spread> is how far a speck may fall short of black or white. Snow is not
+two-valued -- an aerial's noise is a level that varies, and a picture built
+from only the two extremes reads as salt and pepper laid over the frame rather
+than as a signal underneath it. At 0 every speck is at its pole, which is what
+this did before the setting existed; at 1 they are scattered evenly from the
+pole to mid grey.
 DOC
     params => {
         density => {
+            order   => 1,
             default => 0.02,
             type    => 'num',
             min     => 0,
@@ -481,29 +496,90 @@ DOC
             doc     => 'Fraction of pixels affected',
         },
         intensity => {
+            order   => 2,
             default => 0.8,
             type    => 'num',
             min     => 0,
             max     => 1,
-            doc     => 'How far affected pixels go towards black or white',
+            doc     => 'How far affected pixels go towards their level',
+        },
+        spread => {
+            order   => 3,
+            default => 0.35,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'How far a speck may fall back from black or white '
+                . 'towards grey; 0 is two-valued snow',
         },
         streak => {
+            order   => 4,
             default => 3,
             type    => 'int',
             min     => 1,
             max     => 200,
             doc     => 'Maximum horizontal run length of a speck',
         },
+        surge => {
+            animation => 1,
+
+            # Snow that rises from none is still none: the effect is off at
+            # density 0 and says so, rather than leaving a live control that
+            # does nothing.
+            needs   => { density => 1 },
+            order   => 5,
+            default => 0,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'How far the snow rises over the loop and falls '
+                . 'back, towards a picture that is nothing else. Nothing '
+                . 'on a still',
+        },
     },
     apply => \&_static,
 );
+
+# How much of the picture is snow on this frame.
+#
+# Measured towards 1 rather than as a multiple of what was asked for, so the
+# setting has an end: at a whole surge the frame half way round the loop is
+# nothing but snow, and no value of it can ask for a density that does not
+# exist. It rides swell rather than excursion because there is no such thing
+# as less snow than none, and because a signal that fails belongs at the
+# middle of the loop, furthest from the seam.
+sub _static_density
+{
+    my ( $ctx, $p ) = @_;
+
+    my $surge = $ctx->swell( $p->{ surge } );
+    return $p->{ density } unless $surge;
+
+    return $p->{ density } + ( 1 - $p->{ density } ) * $surge;
+}
+
+# Where one speck lands. Half go towards white and half towards black; how
+# close either gets is uniform across the band spread allows, because the
+# height of a noise peak is not a property the peak inherits from its sign.
+sub _speck_level
+{
+    my ( $rng, $spread ) = @_;
+
+    my $pole = $rng->chance( 0.5 ) ? 255 : 0;
+    return $pole unless $spread;
+
+    my $back = $rng->rand( $spread ) * 127.5;
+
+    return $pole ? $pole - $back : $pole + $back;
+}
 
 sub _static
 {
     my ( $ctx, $p ) = @_;
     return if $p->{ density } <= 0;
 
-    my $rng = $ctx->rng_for( 'static' );
+    my $density = _static_density( $ctx, $p );
+    my $rng     = $ctx->rng_for( 'static' );
 
     GlitchVape::Pixels->edit(
         $ctx,
@@ -514,7 +590,7 @@ sub _static
             # Each speck averages streak/2 pixels wide, so scale the draw count
             # to hit the requested density regardless of streak length.
             my $mean_len = ( $p->{ streak } + 1 ) / 2;
-            my $draws    = int( $w * $h * $p->{ density } / $mean_len );
+            my $draws    = int( $w * $h * $density / $mean_len );
             return unless $draws > 0;
 
             # Group by row first: touching each affected row once beats
@@ -524,13 +600,7 @@ sub _static
             {
                 my $y = $rng->int_between( 0, $h - 1 );
 
-                # Each speck goes fully white or fully black; snow is not
-                # grey.
-                my $target = 0;
-                if ( $rng->chance( 0.5 ) )
-                {
-                    $target = 255;
-                }
+                my $target = _speck_level( $rng, $p->{ spread } );
 
                 push @{ $rows{ $y } },
                     [

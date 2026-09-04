@@ -12,8 +12,11 @@ use Test::More;
 use GlitchVape                  ();
 use GlitchVape::Context         ();
 use GlitchVape::Effect::Color   ();
+use GlitchVape::Palette         ();
 use GlitchVape::Effect::Overlay ();
 use GlitchVape::Effect::Screen  ();
+use GlitchVape::Effect::Texture ();
+use GlitchVape::Random          ();
 use GlitchVape::Pipeline        ();
 use GlitchVape::Tools           ();
 
@@ -347,6 +350,268 @@ for my $effect ( @drifters )
 
     is $far->{ saturation }, 0,
         'a swing wider than the range stops at the end of it';
+}
+
+# ---------------------------------------------------------------------------
+# The one-sided rock, for quantities that have no other direction
+
+# Context::excursion spends half the loop negative, which is right for a band
+# that sweeps one way and then the other and wrong for anything that is a
+# fraction of something. Swell is the same rock folded onto one side, with the
+# extreme in the middle of the loop rather than twice at the quarters.
+{
+    my $at = sub {
+        my ( $frame, $count ) = @_;
+
+        my $ctx = GlitchVape::Context->new( seed => 1 );
+        $ctx->frames( $count );
+        $ctx->frame( $frame );
+
+        return $ctx->swell( 1 );
+    };
+
+    is $at->( 0,  12 ), 0,              'the loop opens at nought';
+    is $at->( 12, 12 ), $at->( 0, 12 ), 'and the frame after the last one too';
+    is $at->( 6,  12 ), 1,              'with the whole amount half way round';
+
+    is sprintf( '%.6f', $at->( 3, 12 ) ), sprintf( '%.6f', $at->( 9, 12 ) ),
+        'a quarter in and a quarter from the end are the same distance out';
+
+    my @negative = grep { $at->( $_, 12 ) < 0 } 0 .. 11;
+
+    is_deeply \@negative, [], 'and no frame of the loop is on the far side'
+        or diag "negative at: @negative";
+
+    is $at->( 3, 1 ), 0, 'a still has not gone anywhere';
+
+    my $ctx = GlitchVape::Context->new( seed => 1 );
+    $ctx->frames( 12 );
+    $ctx->frame( 6 );
+
+    is $ctx->swell( 0 ), 0, 'and nought amount goes nowhere either';
+}
+
+# ---------------------------------------------------------------------------
+# A duotone that swaps comes back the ramp it started as
+
+# The swap is one-sided -- a swap of minus a third is not a thing -- so it
+# rides Context::swell rather than excursion, which puts the extreme in the
+# middle of the loop and nought at both ends.
+{
+    my $stops = sub {
+        my ( $frame, $count, $level ) = @_;
+
+        my $ctx = GlitchVape::Context->new( seed => 1 );
+        $ctx->frames( $count );
+        $ctx->frame( $frame );
+
+        ## no critic (Subroutines::ProtectPrivateSubs)
+        return GlitchVape::Effect::Color::_duotone_stops( $ctx,
+            { ramp => 'pinkcyan', swap => $level } );
+        ## use critic
+    };
+
+    is_deeply $stops->( 12, 12, 1 ), $stops->( 0, 12, 1 ),
+        'the frame after the last one maps through the ramp it opened with';
+
+    is_deeply $stops->( 6, 12, 1 ), [ '#01CDFE', '#FF71CE' ],
+        'and half way round the ramp is exactly that ramp reversed';
+
+    is_deeply $stops->( 3, 12, 1 ), $stops->( 9, 12, 1 ),
+        'a quarter in and a quarter from the end are the same place';
+
+    isnt $stops->( 3, 12, 1 )->[ 0 ], $stops->( 0, 12, 1 )->[ 0 ],
+        'which is not where it started';
+
+    is_deeply $stops->( 6, 1, 1 ), [ '#FF71CE', '#01CDFE' ],
+        'and a still is mapped through the ramp exactly as it is set';
+
+    is_deeply $stops->( 6, 12, 0 ), [ '#FF71CE', '#01CDFE' ],
+        'as is every frame of a loop with the swap off';
+
+    # Below one it leans without arriving, which is what makes the setting a
+    # level rather than a switch.
+    my $half = $stops->( 6, 12, 0.5 );
+
+    isnt $half->[ 0 ], '#FF71CE', 'half a swap has moved';
+    isnt $half->[ 0 ], '#01CDFE', 'without getting there';
+}
+
+# ---------------------------------------------------------------------------
+# The gradient map turns end for end and comes back
+
+# The same setting as the duotone's, under the same name and doing the same
+# thing to more colours -- which is the point of it being one function in
+# Palette rather than two in the effects.
+{
+    my $ramp  = \&swapped_vapor;
+    my $vapor = GlitchVape::Palette::colors( 'vapor' );
+
+    is_deeply $ramp->( 0,  12, 1 ), $vapor, 'the loop opens on the palette';
+    is_deeply $ramp->( 12, 12, 1 ), $vapor, 'and the frame after the last one';
+    is_deeply $ramp->( 6,  12, 1 ), [ reverse @$vapor ],
+        'with the palette exactly reversed half way round';
+
+    is_deeply $ramp->( 6, 1, 1 ), $vapor,
+        'and a still maps through the palette as it is written';
+
+    is_deeply $ramp->( 6, 12, 0 ), $vapor,
+        'as does every frame of a loop with the swap off';
+}
+
+# ---------------------------------------------------------------------------
+# Snow that comes and goes, and specks that are not only two colours
+
+# The specks themselves are redrawn every frame from the frame's own stream
+# and are avowedly not periodic -- that is what snow is, and rng_for says so.
+# What has to close is the *amount*: the loop opens and ends at the density
+# it was set to, whatever it did in between.
+{
+    my $amount = \&snow_at;
+
+    is $amount->( 0,  12 ), 0.04, 'the loop opens at the density it was set to';
+    is $amount->( 12, 12 ), $amount->( 0, 12 ), 'and ends where it opened';
+    is $amount->( 6,  12 ), 1,
+        'with a whole surge losing the picture entirely half way round';
+
+    cmp_ok $amount->( 3, 12 ), '>', 0.04, 'a quarter in there is more snow';
+    cmp_ok $amount->( 3, 12 ), '<', 1,    'though not yet all of it';
+
+    is $amount->( 6, 1 ), 0.04, 'and a still is snowed exactly as it says';
+
+    is $amount->( 6, 12, surge => 0 ), 0.04,
+        'as is every frame of a loop with the surge off';
+
+    # Measured towards 1 rather than as a multiple, so no setting can ask for
+    # a density there is no room for.
+    is_deeply overfull_frames(), [],
+        'and nothing anywhere asks for more than all of it';
+}
+
+# Snow is a level that varies, not two values. The old behaviour is spread 0
+# and is still reachable, which is also what keeps it drawing the same stream
+# it always drew.
+{
+    my $levels = \&speck_levels;
+
+    is_deeply [ sort { $a <=> $b } keys %{ $levels->( 0 ) } ], [ 0, 255 ],
+        'with no spread a speck is black or white and nothing else';
+
+    my $some = $levels->( 0.35 );
+
+    cmp_ok scalar keys %$some, '>', 2, 'given some, they take many levels';
+
+    my @outside = strayed_from_a_pole( $some, 0.35 );
+
+    is_deeply \@outside, [], 'none of them further from its pole than allowed'
+        or diag "strayed: @outside";
+
+    # Both ends fall back, not just one. A speck that is sometimes off-white
+    # and always dead black is a different look and not the one asked for.
+    my ( $light, $dark ) = levels_each_side( $some );
+
+    cmp_ok $light, '>', 1, 'the light ones take several levels';
+    cmp_ok $dark,  '>', 1, 'and so do the dark ones';
+
+    # One draw at spread 0 and two above it, so an existing render moves only
+    # because the default moved and not because the stream did.
+    is two_valued_snow_draws(), one_coin_toss_each(),
+        'and two-valued snow draws exactly the one number it always drew';
+}
+
+# The vapor palette part of the way through turning end for end.
+sub swapped_vapor
+{
+    my ( $frame, $count, $level ) = @_;
+
+    my $ctx = GlitchVape::Context->new( seed => 1 );
+    $ctx->frames( $count );
+    $ctx->frame( $frame );
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    return GlitchVape::Effect::Color::_swap_at( $ctx,
+        GlitchVape::Palette::colors( 'vapor' ), $level );
+    ## use critic
+}
+
+# How much of the picture is snow on one frame of a loop.
+sub snow_at
+{
+    my ( $frame, $count, %how ) = @_;
+
+    my $ctx = GlitchVape::Context->new( seed => 1 );
+    $ctx->frames( $count );
+    $ctx->frame( $frame );
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    return GlitchVape::Effect::Texture::_static_density( $ctx,
+        { density => 0.04, surge => 1, %how } );
+    ## use critic
+}
+
+# Any frame of a heavily snowed loop asking for more picture than there is.
+sub overfull_frames
+{
+    return [ grep { snow_at( $_, 12, density => 0.9 ) > 1 } 0 .. 12 ];
+}
+
+# The distinct levels a few thousand specks land on at one spread.
+sub speck_levels
+{
+    my ( $spread ) = @_;
+
+    my $rng = GlitchVape::Random->new( seed => 'snow' );
+    my %seen;
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    $seen{ GlitchVape::Effect::Texture::_speck_level( $rng, $spread ) }++
+        for 1 .. 4000;
+    ## use critic
+
+    return \%seen;
+}
+
+# Levels further from black or white than the spread allows.
+sub strayed_from_a_pole
+{
+    my ( $seen, $spread ) = @_;
+
+    my $reach = $spread * 127.5;
+
+    return grep { $_ > $reach && $_ < 255 - $reach } keys %$seen;
+}
+
+# How many distinct levels each pole was approached through.
+sub levels_each_side
+{
+    my ( $seen ) = @_;
+
+    return (
+        scalar( grep { $_ > 127.5 } keys %$seen ),
+        scalar( grep { $_ <= 127.5 } keys %$seen )
+    );
+}
+
+# The next number left in the stream after fifty two-valued specks...
+sub two_valued_snow_draws
+{
+    my $rng = GlitchVape::Random->new( seed => 'snow' );
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    GlitchVape::Effect::Texture::_speck_level( $rng, 0 ) for 1 .. 50;
+    ## use critic
+
+    return $rng->rand;
+}
+
+# ...and after fifty of the coin tosses the old code drew instead.
+sub one_coin_toss_each
+{
+    my $rng = GlitchVape::Random->new( seed => 'snow' );
+
+    $rng->chance( 0.5 ) for 1 .. 50;
+
+    return $rng->rand;
 }
 
 done_testing;

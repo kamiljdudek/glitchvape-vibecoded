@@ -288,8 +288,15 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
     is_deeply $grade, [ 'sway', 'sway_by' ],
         'a grade that wanders keeps the wander and its size together';
 
-    my ( undef, $none ) = GlitchVape::GUI::Params::split(
+    my ( $plain, $swap ) = GlitchVape::GUI::Params::split(
         GlitchVape::Registry->get( 'duotone' )->{ params } );
+
+    is_deeply $swap, [ 'swap' ], 'and a duotone keeps its swap apart';
+    ok scalar( grep { $_ eq 'ramp' } @$plain ),
+        'with the ramp it swaps still among the ordinary settings';
+
+    my ( undef, $none ) = GlitchVape::GUI::Params::split(
+        GlitchVape::Registry->get( 'posterize' )->{ params } );
 
     is_deeply $none, [],
         'an effect with nothing loop-only gets no second group';

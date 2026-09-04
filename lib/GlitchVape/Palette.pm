@@ -3,6 +3,8 @@ package GlitchVape::Palette;
 use strict;
 use warnings;
 
+use List::Util qw(max min);
+
 our $VERSION = '0.01';
 
 =head1 NAME
@@ -386,6 +388,160 @@ sub gradient_file
         or die "GlitchVape::Palette: failed to build CLUT at $path\n";
     unlink $ppm;
     return $path;
+}
+
+=head2 swapped( $stops, $amount )
+
+A palette part of the way through turning end for end, as an arrayref of the
+same shape. C<$amount> is the fraction of a whole swap: 0 hands back what it
+was given, 1 hands it back reversed.
+
+Every stop is heading for the place its opposite number started from, so with
+two colours the ends trade and with five the outer pair trades, the inner pair
+trades, and the middle one is already where it is going. Which is the same
+operation at any length, and is why C<duotone> and C<gradient_map> take the
+same setting under the same name rather than one being a special case of the
+other.
+
+Each pair goes the opposite ways round the hue circle rather than straight
+through each other. Mixed channel by channel, both would arrive at the same
+colour half way -- so a swap dragged half on is a frame of one flat colour,
+and the middle of the slider is the worst-looking place on it, which is not a
+control anybody can use. Winding one of the pair clockwise and the other
+anticlockwise gets to the same swap having stayed two colours the whole way:
+they pass rather than meet, and what the picture does is turn through the
+wheel instead of washing out.
+
+Lightness and saturation are interpolated straight, because those genuinely do
+have to cross -- the stop that was dark ends up light -- and there is no way
+round the wheel that avoids it.
+
+=cut
+
+sub swapped
+{
+    my ( $stops, $amount ) = @_;
+
+    return $stops unless $amount && @{ $stops || [] } >= 2;
+
+    my @hsl = map { [ _rgb_to_hsl( _hex_to_rgb( $_ ) ) ] } @$stops;
+    my $end = $#hsl;
+
+    my @out;
+    for my $i ( 0 .. $end )
+    {
+        my $j = $end - $i;
+
+        # The nearer half of each pair takes the short way round and the
+        # further half is made to take the long way, so that a pair is never
+        # at one hue between the ends of the swap. An odd palette's middle
+        # stop is its own opposite number and does not move at all.
+        my $arc =
+              $i < $j ? _arc( $hsl[ $i ][ 0 ], $hsl[ $j ][ 0 ] )
+            : $i > $j
+            ? _the_long_way( _arc( $hsl[ $j ][ 0 ], $hsl[ $i ][ 0 ] ) )
+            : 0;
+
+        push @out,
+            _hsl_to_hex( $hsl[ $i ][ 0 ] + $arc * $amount,
+            @{ _between( $hsl[ $i ], $hsl[ $j ], $amount ) } );
+    }
+
+    return \@out;
+}
+
+# Round the other side: the arc that ends where a short one does, having gone
+# the whole way about instead.
+sub _the_long_way
+{
+    my ( $short ) = @_;
+
+    return $short > 0 ? 1 - $short : -1 - $short;
+}
+
+# Saturation and lightness part of the way from one colour to the other. Hue
+# is left to the caller, which is the only part with two ways to travel.
+sub _between
+{
+    my ( $from, $to, $amount ) = @_;
+
+    return [
+        map { $from->[ $_ ] + ( $to->[ $_ ] - $from->[ $_ ] ) * $amount } 1, 2
+    ];
+}
+
+# The signed distance from one hue to another the short way round, in turns.
+sub _arc
+{
+    my ( $from, $to ) = @_;
+
+    my $gap = $to - $from;
+
+    $gap += 1 while $gap < -0.5;
+    $gap -= 1 while $gap > 0.5;
+
+    return $gap;
+}
+
+sub _rgb_to_hsl
+{
+    my ( $r, $g, $b ) = map { $_ / 255 } @_;
+
+    my $max = max( $r, $g, $b );
+    my $min = min( $r, $g, $b );
+    my $l   = ( $max + $min ) / 2;
+    my $d   = $max - $min;
+
+    return ( 0, 0, $l ) unless $d;
+
+    my $s = $l > 0.5 ? $d / ( 2 - $max - $min ) : $d / ( $max + $min );
+
+    my $h =
+          $max == $r ? ( $g - $b ) / $d + ( $g < $b ? 6 : 0 )
+        : $max == $g ? ( $b - $r ) / $d + 2
+        :              ( $r - $g ) / $d + 4;
+
+    return ( $h / 6, $s, $l );
+}
+
+sub _hsl_to_hex
+{
+    my ( $h, $s, $l ) = @_;
+
+    $h -= int $h;
+    $h += 1 if $h < 0;
+
+    # Rounded rather than left to sprintf, which truncates -- and a channel
+    # a whole step light of where it started is a swap that does not quite
+    # arrive at the colour it was supposed to be swapping with.
+    return _rgb_to_hex( map { int( $_ * 255 + 0.5 ) }
+            _hsl_to_rgb( $h, $s, $l ) )
+        if $s > 0;
+
+    return _rgb_to_hex( map { int( $l * 255 + 0.5 ) } 1 .. 3 );
+}
+
+sub _hsl_to_rgb
+{
+    my ( $h, $s, $l ) = @_;
+
+    my $q = $l < 0.5 ? $l * ( 1 + $s ) : $l + $s - $l * $s;
+    my $p = 2 * $l - $q;
+
+    return map { _hue_channel( $p, $q, $h + $_ ) } 1 / 3, 0, -1 / 3;
+}
+
+sub _hue_channel
+{
+    my ( $p, $q, $t ) = @_;
+
+    $t -= int $t;
+    $t += 1 if $t < 0;
+
+    return $p + ( $q - $p ) * 6 * $t             if $t < 1 / 6;
+    return $q                                    if $t < 1 / 2;
+    return $p + ( $q - $p ) * ( 2 / 3 - $t ) * 6 if $t < 2 / 3;
+    return $p;
 }
 
 sub _normalise_hex

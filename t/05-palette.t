@@ -98,4 +98,76 @@ use GlitchVape::Palette;
     is $stops->[ 1 ],  '#808080', 'two-stop ramp interpolates the midpoint';
 }
 
+# ---------------------------------------------------------------------------
+# Two colours trading places go round each other, not through
+
+# Mixed channel by channel they would both arrive at the same colour half way,
+# which makes a half-on swap the flattest thing on the slider and the middle
+# of a control the worst place on it. Going opposite ways round the hue circle
+# reaches the same swap having stayed two colours throughout.
+{
+    my $pair = [ '#FF71CE', '#01CDFE' ];
+
+    is_deeply GlitchVape::Palette::swapped( $pair, 0 ), $pair,
+        'nought hands back the ramp it was given';
+
+    is_deeply GlitchVape::Palette::swapped( $pair, 1 ),
+        [ '#01CDFE', '#FF71CE' ],
+        'and a whole swap hands back exactly that ramp reversed';
+
+    # The claim the hue path exists for, asked at every step rather than only
+    # at the half way point, since a mix through the middle is equal there
+    # and merely close either side of it.
+    my @met;
+    for my $step ( 1 .. 19 )
+    {
+        my $at = GlitchVape::Palette::swapped( $pair, $step / 20 );
+
+        push @met, $step / 20 if uc $at->[ 0 ] eq uc $at->[ 1 ];
+    }
+
+    is_deeply \@met, [], 'and nowhere in between are the two ends one colour'
+        or diag "flat at: @met";
+
+    # Greys have no hue to go round, and asking one to travel would invent a
+    # colour that neither end of the ramp had.
+    my $grey = [ '#404040', '#404040' ];
+
+    is_deeply GlitchVape::Palette::swapped( $grey, 0.5 ), $grey,
+        'two greys have nowhere to go and stay where they are';
+
+    is_deeply GlitchVape::Palette::swapped( undef, 1 ), undef,
+        'and nothing at all is handed straight back';
+
+    # More than two, which is what gradient_map maps through. The same
+    # operation at any length: every stop is heading for the place its
+    # opposite number started from.
+    my $many = GlitchVape::Palette::colors( 'vapor' );
+
+    is_deeply GlitchVape::Palette::swapped( $many, 1 ),
+        [ reverse @$many ],
+        'a five-stop palette swaps to exactly itself reversed';
+
+    my $middle = GlitchVape::Palette::swapped( $many, 0.4 );
+
+    is $middle->[ 2 ], $many->[ 2 ],
+        'the odd one in the middle is its own opposite and does not move';
+
+    isnt $middle->[ 0 ], $many->[ 0 ], 'while the pairs either side do';
+
+    # No frame of it collapses, which is the property the hue path buys and
+    # the one a longer palette gives more chances to break.
+    my @flat;
+    for my $step ( 1 .. 19 )
+    {
+        my $at  = GlitchVape::Palette::swapped( $many, $step / 20 );
+        my %ink = map { uc $_ => 1 } @$at;
+
+        push @flat, $step / 20 if keys %ink < @$many;
+    }
+
+    is_deeply \@flat, [], 'and nowhere along the way do two stops become one'
+        or diag "collided at: @flat";
+}
+
 done_testing;

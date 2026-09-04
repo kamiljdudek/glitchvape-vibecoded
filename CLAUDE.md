@@ -482,6 +482,35 @@ is invisible either way — one more jump among all the others — but the windo
 is recognisable frame to frame, so coming back to a *different* position would
 be a jolt somebody could point at, which is not true of grain.
 
+Three shapes of motion sit beside those, and an effect picks by what the thing
+being moved actually does:
+
+| | |
+|---|---|
+| `travel` | a repeating pattern scrolling; the distance snaps to whole repeats |
+| `excursion` | a one-off feature swept out and back, half the loop each way |
+| `swell` | the same rock folded onto one side, for a quantity with no other direction |
+
+`swell` is what `duotone`'s and `gradient_map`'s `swap` rides, and `static`'s
+`surge`: a swap of minus a third is not a thing, so the negative half of an
+excursion would have to be thrown away, and the extreme belongs in the middle
+of the loop rather than twice at the quarters.
+
+`swap` is one function — `Palette::swapped` — under one name on both effects,
+because turning a palette end for end is the same operation whether it has two
+stops or five: every stop heads for the place its opposite number started
+from, and an odd middle stop is already there. What it moves is the *list of
+colours* rather than the ramp's name, so it works on the named palettes and on
+an inline one alike. Each pair goes opposite ways round the hue circle rather
+than mixing through each other, because mixed channel by channel they meet in
+the middle and the frame collapses to one colour. Half a slider being the
+worst-looking place on it is not a control anybody can use.
+
+`static`'s `surge` is measured towards a picture that is nothing but snow, so
+no setting can ask for a density there is no room for. The specks themselves
+are redrawn every frame and are avowedly not periodic — that is what snow is —
+so what closes is the amount, and that is what `t/31-drift.t` asks about.
+
 `t/31-drift.t` is driven off the registry and so covers every effect declaring
 a `drift` the day it is declared. A moving parameter under any other name is
 outside that sweep and owes the same two proofs — the loop closes, and a still

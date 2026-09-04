@@ -356,6 +356,14 @@ The single most recognisable "aesthetic" grade: pink shadows, cyan highlights.
 The ramp is one of the named ones or C<custom>, which uses the two colours
 under it. A closed list rather than something to type: every name on it is a
 pair of colours somebody chose, and a mistyped one is a render that stops.
+
+C<swap> is the animation: the two ends of the ramp trade places over the loop
+and come back, so it closes at any level and a still is mapped through the
+ramp exactly as set. At 1 the swap is complete half way round -- what was dark
+is light and what was light is dark, the same two colours the other way up --
+and below that they lean towards each other without ever getting there. It
+works on the named ramps as well as on a custom one, because what it moves is
+the pair of colours rather than the name.
 DOC
     params => {
         ramp => {
@@ -384,8 +392,19 @@ DOC
             needs   => { ramp => 'custom' },
             doc     => 'What white becomes, with a custom ramp',
         },
+        swap => {
+            animation => 1,
+            order     => 4,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            doc       => 'How far the two ends of the ramp trade places over '
+                . 'the loop, and back again. 1 is a complete swap half way '
+                . 'round; less and they only lean towards each other',
+        },
         strength => {
-            order   => 4,
+            order   => 5,
             default => 0.85,
             type    => 'num',
             min     => 0,
@@ -397,7 +416,7 @@ DOC
             type    => 'num',
             min     => -100,
             max     =>  100,
-            order   =>  5,
+            order   =>  6,
             doc     => 'Contrast applied to the luminance before mapping',
         },
     },
@@ -407,13 +426,26 @@ DOC
 # The two colours to map onto: a named ramp, or the pair below it.
 sub _duotone_stops
 {
-    my ( $p ) = @_;
+    my ( $ctx, $p ) = @_;
 
     my $ramp = $p->{ ramp } // q{};
 
-    return GlitchVape::Palette::duotone( $ramp ) unless lc $ramp eq 'custom';
+    my $stops =
+        lc $ramp eq 'custom'
+        ? [ $p->{ shadows }, $p->{ highlights } ]
+        : GlitchVape::Palette::duotone( $ramp );
 
-    return [ $p->{ shadows }, $p->{ highlights } ];
+    return _swap_at( $ctx, $stops, $p->{ swap } );
+}
+
+# How far round the swap this frame is. One-sided, because a swap of minus a
+# third is not a thing, and the extreme belongs in the middle of the loop
+# rather than at the quarters where excursion would put it.
+sub _swap_at
+{
+    my ( $ctx, $stops, $level ) = @_;
+
+    return GlitchVape::Palette::swapped( $stops, $ctx->swell( $level ) );
 }
 
 sub _duotone
@@ -421,7 +453,7 @@ sub _duotone
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my $stops = _duotone_stops( $p );
+    my $stops = _duotone_stops( $ctx, $p );
     my $clut  = GlitchVape::Palette::gradient_file( $stops, $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
@@ -452,15 +484,35 @@ $R->register(
     doc     => <<'DOC',
 Like duotone but using every colour in a palette as a stop, giving a richer
 graded look: deep purple shadows through magenta midtones to mint highlights.
+
+C<swap> is the same setting duotone has, doing the same thing to more colours:
+every stop heads for the place its opposite number started from, so at 1 the
+palette is exactly itself reversed half way round the loop and back by the
+end. With an odd number of stops the middle one is already where it is going
+and stays; the pairs either side of it cross the wheel in opposite directions
+rather than through each other, so no frame collapses to one colour.
 DOC
     params => {
         name => {
+            order   => 1,
             default => 'vapor',
             type    => 'str',
             doc     => 'Palette name or inline colour list',
             suggest => 'palette',
         },
+        swap => {
+            animation => 1,
+            order     => 2,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            doc       => 'How far the palette turns end for end over the '
+                . 'loop, and back again. 1 is the palette exactly reversed '
+                . 'half way round',
+        },
         strength => {
+            order   => 3,
             default => 0.7,
             type    => 'num',
             min     => 0,
@@ -476,8 +528,16 @@ sub _gradient_map
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my $clut =
-        GlitchVape::Palette::gradient_file( $p->{ name }, $ctx->cachedir );
+    # Resolved to its colours before the swap, because what turns end for end
+    # is the list and not the name -- which is what lets an inline palette
+    # animate exactly as a registered one does.
+    my $stops = _swap_at(
+        $ctx,
+        GlitchVape::Palette::colors( $p->{ name } ),
+        $p->{ swap }
+    );
+
+    my $clut = GlitchVape::Palette::gradient_file( $stops, $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
     # image, so a copy has to be kept before anything modifies it.

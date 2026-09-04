@@ -171,6 +171,31 @@ sub excursion
     return $amount * sin( 2 * PI() * $self->phase );
 }
 
+=head2 swell( $amount )
+
+The same rocking motion as C<excursion>, but one-sided: nought at the start of
+the loop, C<$amount> half way round, nought again at the end. Returns 0 for a
+still.
+
+For a quantity that has no other direction to go in. How far two colours have
+traded places is a fraction of a swap, and a swap of minus a third is not a
+thing -- so what C<excursion> does after half way round, which is to do the
+same again the other way, would have to be thrown away. It is a raised cosine
+rather than the sine's absolute value because the extreme belongs in the
+middle of the loop, where it is furthest from the seam, rather than twice at
+the quarters.
+
+=cut
+
+sub swell
+{
+    my ( $self, $amount ) = @_;
+
+    return 0 unless $amount && $self->{ frames } > 1;
+
+    return $amount * ( 1 - cos( 2 * PI() * $self->phase ) ) / 2;
+}
+
 =head2 rng_for( $effect_name )
 
 A dedicated RNG stream for one effect, derived from the master seed. Effects
