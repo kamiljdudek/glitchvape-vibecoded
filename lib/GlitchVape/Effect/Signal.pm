@@ -162,6 +162,15 @@ holding steady while a ragged strip of it slides off to one side.
 
 Band positions come from this effect's own RNG stream, so changing the seed
 moves them without disturbing any other effect.
+
+With C<crawl> at nought the bands are redrawn every frame of a loop, which is
+tracking noise: the tape is being read badly and where it goes wrong is a
+different place each time. Above nought they instead keep their places and
+their displacement and creep up the picture, wrapping at the top -- the other
+half of the artefact, and the one a mistracked tape shows while it is playing
+steadily. A band that moves has to be the same band, so its place and shift
+come from the fixed stream in that case; the noise inside it goes on
+re-rolling either way, because that is the medium and not the fault.
 DOC
     params => {
         bands => {
@@ -170,6 +179,19 @@ DOC
             min     => 0,
             max     => 60,
             doc     => 'How many damaged bands to create',
+        },
+        crawl => {
+            animation => 1,
+
+            # A crawl needs something to crawl: with no bands there is
+            # nothing on the picture to move.
+            needs   => { bands => 1 },
+            default => 0,
+            type    => 'int',
+            min     => 0,
+            max     => 4,
+            doc     => 'Times the bands creep the height of the picture over '
+                . 'the loop. 0 redraws them somewhere new each frame instead',
         },
         height => {
             default => 18,
@@ -209,6 +231,38 @@ DOC
     apply => \&_tracking,
 );
 
+# One run of scanlines, which may start near the bottom and finish at the top.
+#
+# A crawling band has to leave the picture somewhere, and a band that is
+# simply clipped there is one that shrinks and vanishes instead of passing.
+# Two substrs where it straddles the edge, one everywhere else.
+sub _band_of
+{
+    my ( $px, $y, $rows ) = @_;
+
+    my $h = $px->height;
+    return $px->band( $y, $rows ) if $y + $rows <= $h;
+
+    my $first = $h - $y;
+    return $px->band( $y, $first ) . $px->band( 0, $rows - $first );
+}
+
+sub _set_band_of
+{
+    my ( $px, $y, $rows, $bytes ) = @_;
+
+    my $h = $px->height;
+    return $px->set_band( $y, $rows, $bytes ) if $y + $rows <= $h;
+
+    my $first = $h - $y;
+    my $split = $first * $px->width * 3;
+
+    $px->set_band( $y, $first, substr $bytes, 0, $split );
+    $px->set_band( 0, $rows - $first, substr $bytes, $split );
+
+    return;
+}
+
 sub _tracking
 {
     my ( $ctx, $p ) = @_;
@@ -217,33 +271,46 @@ sub _tracking
     my $rng  = $ctx->rng_for( 'tracking' );
     my $wrap = $p->{ edge } eq 'wrap';
 
+    # Where a band is and how far it is pushed come from the fixed stream
+    # once it has somewhere to crawl to, so that it is recognisably the same
+    # band a frame later. Without a crawl it is the rolling stream, which is
+    # also what keeps a still and an uncrawled loop rendering as they did.
+    my $place = $p->{ crawl } ? $ctx->rng_fixed( 'tracking' ) : $rng;
+
     GlitchVape::Pixels->edit(
         $ctx,
         sub {
             my ( $px ) = @_;
             my ( $w, $h ) = ( $px->width, $px->height );
 
+            # Whole pictures per loop, so the wrap lands on the frame that
+            # closes it: a band is back where it started rather than a little
+            # past it.
+            my $creep = int $ctx->travel( $p->{ crawl } * $h, $h );
+
             for ( 1 .. $p->{ bands } )
             {
-                my $bh = $rng->int_between( 1, $p->{ height } * 2 );
+                my $bh = $place->int_between( 1, $p->{ height } * 2 );
                 $bh = $h if $bh > $h;
-                my $by = $rng->int_between( 0, $h - $bh );
+                my $by = $place->int_between( 0, $h - $bh );
 
                 # Squaring a uniform draw biases displacement small: most
                 # tracking errors are minor, with the occasional large one.
-                my $mag = $rng->rand**2;
+                my $mag = $place->rand**2;
 
                 # Bands drift either way; the sign is an independent coin
                 # flip from the magnitude.
                 my $direction = -1;
-                if ( $rng->chance( 0.5 ) )
+                if ( $place->chance( 0.5 ) )
                 {
                     $direction = 1;
                 }
 
                 my $shift = int( $mag * $p->{ displacement } * $direction );
 
-                my $bytes = $px->band( $by, $bh );
+                $by = ( $by + $creep ) % $h if $creep;
+
+                my $bytes = _band_of( $px, $by, $bh );
                 $bytes =
                     GlitchVape::Pixels::shift_band( $bytes, $w, $bh, $shift,
                     $wrap )
@@ -264,7 +331,7 @@ sub _tracking
                     $bytes = pack 'C*', @v;
                 }
 
-                $px->set_band( $by, $bh, $bytes );
+                _set_band_of( $px, $by, $bh, $bytes );
             }
         }
     );
@@ -576,13 +643,22 @@ instants. On anything moving, the two fields disagree -- which is why a paused
 tape shows a comb pattern along every edge. Offsetting alternate lines
 horizontally reproduces that.
 
-C<drift> travels the field pattern down the picture over a loop, snapped to
-whole pairs of rows. That is the interlace crawl -- the slow upward creep of
-the comb that a mistimed field rate gives -- and not the fifty-hertz field
-alternation, which at any frame rate this program writes would land as
-flicker rather than as anything anyone would recognise. Two rows per loop swaps
-the field once and swaps it back; set it to the frame count to alternate every
-frame and see why that is not the default.
+C<drift> is the interlace crawl: the slow swap of which field is displaced
+that a mistimed field rate gives. Two rows is the whole pattern, so a crawl
+has exactly two states however far it is said to travel -- which is why this
+counts swaps rather than rows. 1 is one swap and one swap back over the whole
+loop, 2 is twice, and it closes at any of them.
+
+It used to be measured in rows per loop over a range of 481 values, which was
+a lie about a pattern with two states: every value did one of the same two
+things, and any multiple of twice the frame count did neither, because the
+crawl then stepped a whole number of field pairs between frames and the comb
+never moved at all. Nothing said so.
+
+It is held to a quarter of the frame count, so each field is on screen for at
+least two frames. A comb that changes every frame is not the fifty-hertz field
+alternation it looks like it should be; at any frame rate this program writes
+it lands as flicker rather than as anything anyone would recognise.
 DOC
     params => {
         offset => {
@@ -608,14 +684,37 @@ DOC
         drift => {
             animation => 1,
             default   => 0,
-            type      => 'num',
-            min       => -240,
-            max       =>  240,
-            doc => 'Rows the field pattern crawls per loop, snapped to two',
+            type      => 'int',
+            min       => 0,
+            max       => 12,
+            doc       => 'Times the field pattern swaps and swaps back over '
+                . 'the loop; held to a quarter of the frame count',
         },
     },
     apply => \&_interlace,
 );
+
+# How many times the field pattern has swapped by this frame.
+#
+# Counted rather than travelled: two rows is the whole pattern, so the only
+# thing a crawl can do is swap which field is displaced, and asking travel for
+# a distance in rows means most distances land on a whole number of field
+# pairs and nothing moves. Held to a quarter of the frame count so that each
+# field is up for two frames at least -- one frame each is a flicker, not a
+# comb.
+sub _crawled
+{
+    my ( $ctx, $swaps ) = @_;
+
+    my $frames = $ctx->frames;
+    return 0 unless $swaps && $frames > 1;
+
+    my $most = int( $frames / 4 ) || 1;
+    $swaps = $most if $swaps > $most;
+
+    # Twice, because one swap out and one home is what closes the loop.
+    return int( 2 * $swaps * $ctx->phase );
+}
 
 sub _interlace
 {
@@ -629,10 +728,7 @@ sub _interlace
         $want = 1;
     }
 
-    # Two rows is the whole pattern, so travelling any even number returns it
-    # to itself and the only thing a crawl can do between frames is swap which
-    # field is displaced.
-    $want = ( $want + int $ctx->travel( $p->{ drift }, 2 ) ) % 2;
+    $want = ( $want + _crawled( $ctx, $p->{ drift } ) ) % 2;
 
     my $scale = 1 - $p->{ dim };
 

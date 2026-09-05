@@ -88,9 +88,9 @@ TEXT
 
 {
     my $dir = font_tree(
-        'Merged-1.0/Merged-Regular.otf'          => 'x',
-        'Merged-1.0/OFL.txt'                     => $OFL,
-        'Merged-1.0/LICENSES/upstream-a/OFL.txt' => $OFL,
+        'Merged-1.0/Merged-Regular.otf'              => 'x',
+        'Merged-1.0/OFL.txt'                         => $OFL,
+        'Merged-1.0/LICENSES/upstream-a/OFL.txt'     => $OFL,
         'Merged-1.0/LICENSES/upstream-b/LICENSE.txt' => $OFL,
     );
 
@@ -140,7 +140,7 @@ TEXT
     like $notice, qr/Nobody In Particular/,
         'containing the bundled licence as written';
     like $notice, qr/\QQuoted-1.0\E/, 'under a heading naming what it covers';
-    like $notice, qr/\Q$dir\E/, 'and the file it was read from';
+    like $notice, qr/\Q$dir\E/,       'and the file it was read from';
 
     # The program's own licence leads, so that the first thing in the about
     # window's licence page is the licence of the thing in the window.
@@ -155,7 +155,7 @@ TEXT
 {
     my $file = GlitchVape::Licenses::program_file();
 
-    ok $file, 'the program licence is found from a checkout';
+    ok $file,    'the program licence is found from a checkout';
     ok -f $file, 'and it is a file';
 
     like GlitchVape::Licenses::read_file( $file ), qr/MIT License/,
@@ -171,8 +171,10 @@ TEXT
     my $data = File::Spec->catdir( "$tmp", 'share', 'glitchvape' );
     my $lib  = File::Spec->catdir( "$tmp", 'vendor_perl' );
 
-    File::Path::make_path( File::Spec->catdir( $data, 'assets', 'fonts' ),
-        File::Spec->catdir( $lib, 'GlitchVape' ) );
+    File::Path::make_path(
+        File::Spec->catdir( $data, 'assets', 'fonts' ),
+        File::Spec->catdir( $lib,  'GlitchVape' )
+    );
 
     for my $mod ( qw(Paths Assets Fonts Tools Licenses) )
     {
@@ -196,7 +198,8 @@ TEXT
     print { $fh } "MIT License\n\nthe installed copy\n";
     close $fh;
 
-    my $release = File::Spec->catdir( $data, 'assets', 'fonts', 'Packaged-1.0' );
+    my $release =
+        File::Spec->catdir( $data, 'assets', 'fonts', 'Packaged-1.0' );
     File::Path::make_path( $release );
 
     open $fh, '>', File::Spec->catfile( $release, 'LICENSE' ) or die $!;
@@ -221,7 +224,8 @@ PROBE
     my %got = map { /^(\w+)=(.*)$/ ? ( $1 => $2 ) : () } split /\n/, $out;
 
     is $got{ program }, File::Spec->catfile( $data, 'LICENSE' ),
-        'installed, the licence is found beside the data' or diag $out;
+        'installed, the licence is found beside the data'
+        or diag $out;
     like $got{ bundled }, qr/Packaged-1[.]0/,
         'and so is the licence of a font installed with it';
     cmp_ok $got{ notice }, '>', 0, 'and there is a notice to print';

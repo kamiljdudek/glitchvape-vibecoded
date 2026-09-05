@@ -575,4 +575,79 @@ sub _slurp
         'removing something the preset never had says nothing about it';
 }
 
+# ---------------------------------------------------------------------------
+# An effect held still is still in the pipeline
+
+# The camera on the row, from underneath. The point of it is that it is not
+# the tick: the effect runs, looks as it is set, and does not move -- and the
+# values it was given are still there when it is let go again.
+{
+    my $state = GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
+
+    $state->add_effect( 'static' );
+    $state->param( 'static', 'surge',   0.8 );
+    $state->param( 'static', 'density', 0.09 );
+
+    ok $state->animated( 'static' ), 'an effect arrives with its motion on';
+
+    $state->animated( 'static', 0 );
+
+    ok !$state->animated( 'static' ), 'and can be held still';
+    ok $state->enabled( 'static' ),   'without leaving the pipeline';
+
+    my $held = $state->effect_params( 'static' );
+
+    is $held->{ surge }, 0, 'what renders is the declared value for the motion';
+    is $held->{ density }, 0.09, 'and the settings it was given for the rest';
+
+    is $state->param( 'static', 'surge' ), 0.8,
+        'while the value itself is still held, not zeroed';
+
+    $state->animated( 'static', 1 );
+
+    is $state->effect_params( 'static' )->{ surge }, 0.8,
+        'so letting it go again gives back exactly the motion it had';
+
+    # The picture, the cache key, an exported file, a saved preset and the
+    # copied command line all read the same accessor, which is what stops the
+    # window showing one thing and printing another.
+    $state->animated( 'static', 0 );
+
+    my $config = $state->pipeline_config;
+
+    is $config->{ effects }{ static }{ surge }, 0,
+        'the preview is built from the held-still values';
+
+    my %args = $state->render_args;
+
+    ok scalar( grep { $_ eq 'static.surge=0' } @{ $args{ set } } ),
+        'and so is an export';
+
+    like $state->to_preset_yaml( name => 'held' ), qr/surge:\s*0/,
+        'a preset saves the look as it renders rather than as it is held';
+}
+
+# Holding an effect still is a change to the configuration, so it steps.
+{
+    my $state = GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
+
+    $state->add_effect( 'static' );
+    $state->param( 'static', 'surge', 0.8 );
+    $state->commit;
+
+    my $before = $state->cache_key( size => 320 );
+
+    $state->animated( 'static', 0 );
+
+    isnt $state->cache_key( size => 320 ), $before,
+        'the preview cache can tell a held effect from a moving one';
+
+    ok $state->commit, 'and the history takes it as a step';
+
+    $state->undo;
+
+    ok $state->animated( 'static' ),
+        'which undo puts back, because a snapshot carries the camera too';
+}
+
 done_testing;

@@ -361,6 +361,35 @@ popover has the same button at the same place, because it is the same page
 reached later: an effect fifteen sliders deep is a thing people get lost in,
 and the way back should not be fifteen gestures.
 
+### The camera on a row
+
+Every effect that declares a setting which only bites in a loop carries a
+camera on its row, between the name and the remove button. A movie camera
+means the effect moves through an animation; a stills camera means it is being
+held still. Pressing it swaps the two.
+
+It is not the tick beside it and is not meant to be. The tick decides whether
+the effect is in the pipeline at all; the camera decides whether the settings
+under *Only in an animation* are the ones you gave it or the ones it was
+declared with. Holding an effect still keeps its look and loses its movement —
+which on a fifteen-effect pipeline is how you find the one that will not sit
+still, without opening fifteen popovers.
+
+It holds the values rather than zeroing them, so letting an effect go again
+gives back exactly the motion it had. Two cameras rather than one button
+pressed in, because a movie camera against a stills camera *is* the
+distinction, where a toggle's shading is a convention about shading — and
+because most effects move, so a list where most rows show a pressed button is
+a list with a pressed button in it.
+
+The popover greys the loop-only settings of an effect that is being held
+still: a heading saying *Only in an animation* above four live controls the
+effect is not reading would be saying something untrue. Everything that turns
+the settings into a picture reads the same accessor — the preview, an export,
+the preview cache, a saved preset and the copied command line — so a held-still
+effect prints the command line that reproduces what is on screen, and a preset
+saved from it records the look as it renders.
+
 **Reset all effects to defaults** in the menu does it for the whole pipeline
 at once. It sits beside *Clear all effects* because it is the same kind of act
 — throwing away work on the pipeline — and the difference is which work:

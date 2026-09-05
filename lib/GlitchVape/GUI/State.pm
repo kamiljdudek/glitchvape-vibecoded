@@ -166,6 +166,59 @@ sub enabled
     return $entry->{ enabled };
 }
 
+=head2 animated( $name, $value )
+
+Read or set whether one effect's animation settings are in force. On by
+default, and only meaningful for an effect that declares any.
+
+Off, the effect still runs and still looks as it is set: what goes is the
+motion, because C<effect_params> hands the pipeline the declared value for
+every animation parameter instead of the held one. The held values stay where
+they are, so switching it back on restores the motion exactly -- which is the
+whole difference between this and dragging four sliders to nought.
+
+=cut
+
+sub animated
+{
+    my ( $self, $name, $value ) = @_;
+
+    my $entry = $self->{ current }{ effects }{ $name } or return 0;
+
+    if ( @_ > 2 )
+    {
+        $entry->{ animated } = $value ? 1 : 0;
+    }
+
+    return $entry->{ animated } // 1;
+}
+
+=head2 effect_params( $name )
+
+One effect's values as they will actually render -- which is what it holds,
+unless its animation has been switched off, in which case every parameter that
+only means anything in a loop comes back at its declared value.
+
+Everything that turns the state into a render goes through here: the preview,
+the export, the cache key, a saved preset and the copied command line. One
+accessor rather than the flag being consulted in six places, because a picture
+that differed from the command line printed beside it would be the one thing
+the interface promises cannot happen.
+
+=cut
+
+sub effect_params
+{
+    my ( $self, $name ) = @_;
+
+    my $entry  = $self->{ current }{ effects }{ $name } or return {};
+    my $params = $entry->{ params } || {};
+
+    return { %$params } if $entry->{ animated } // 1;
+
+    return GlitchVape::Registry->without_animation( $name, $params );
+}
+
 =head2 param( $effect, $key, $value )
 
 Read or set one parameter. Setting runs the value through the registry's
@@ -448,7 +501,7 @@ sub render_args
 
         push @enable, $name;
 
-        my $params = $effects->{ $name }{ params };
+        my $params = $self->effect_params( $name );
         for my $key ( sort keys %$params )
         {
             push @overrides, "$name.$key=" . _flatten( $params->{ $key } );
@@ -520,7 +573,7 @@ sub pipeline_config
             push @disable, $name;
             next;
         }
-        $out{ $name } = { %{ $effects->{ $name }{ params } } };
+        $out{ $name } = $self->effect_params( $name );
     }
 
     return { effects => \%out, order => undef, disable => \@disable };
@@ -580,7 +633,7 @@ sub cache_key
         next unless $effects->{ $name }{ enabled };
         push @parts, $name;
 
-        my $params = $effects->{ $name }{ params };
+        my $params = $self->effect_params( $name );
         for my $key ( sort keys %$params )
         {
             push @parts, $key, _flatten( $params->{ $key } );
@@ -644,7 +697,10 @@ sub to_preset_yaml
             next;
         }
 
-        my $params = $effects->{ $ename }{ params };
+        # What it would render, not what it holds: a preset is a look, and
+        # an effect whose motion is switched off looks like one that was
+        # never given any.
+        my $params = $self->effect_params( $ename );
         for my $key ( sort keys %$params )
         {
             push @lines,
@@ -720,8 +776,9 @@ sub _clone
         }
 
         $effects{ $name } = {
-            enabled => $entry->{ enabled },
-            params  => \%params,
+            enabled  => $entry->{ enabled },
+            animated => $entry->{ animated } // 1,
+            params   => \%params,
         };
     }
 
@@ -745,7 +802,7 @@ sub _digest
     for my $name ( sort keys %{ $state->{ effects } } )
     {
         my $entry = $state->{ effects }{ $name };
-        push @parts, $name, $entry->{ enabled };
+        push @parts, $name, $entry->{ enabled }, $entry->{ animated } // 1;
 
         for my $key ( sort keys %{ $entry->{ params } } )
         {

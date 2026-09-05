@@ -953,12 +953,18 @@ DOC
         },
         swap => {
             animation => 1,
-            default   => 0,
-            type      => 'num',
-            min       => 0,
-            max       => 1,
-            order     => 7,
-            doc       => 'How far the two pattern colours cross over the '
+
+            # Two colours to cross is what a pattern is; a solid bar has one
+            # and the setting would be a live control over nothing.
+            needs => {
+                pattern => [ qw(checker diamonds dots grid stripes thatch) ]
+            },
+            default => 0,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            order   => 7,
+            doc     => 'How far the two pattern colours cross over the '
                 . 'loop and back. Once out and once home, so a loop is one '
                 . 'slow breath rather than a flicker',
         },
@@ -1229,13 +1235,18 @@ DOC
         },
         direction => {
             animation => 1,
-            default   => 'east',
-            type      => 'enum',
-            values    => [
+
+            # Which way it goes is a question about something going: with no
+            # drift the compass is a control that cannot be wrong.
+            needs   => { drift => 1 },
+            default => 'east',
+            type    => 'enum',
+            values  => [
                 qw(north northeast east southeast
                     south southwest west northwest)
             ],
-            doc => 'Compass direction the pattern slides, on the screen',
+            doc => 'Compass direction the pattern slides, on the screen. '
+                . 'Unused while it is not sliding',
         },
     },
     apply => \&_watermark,

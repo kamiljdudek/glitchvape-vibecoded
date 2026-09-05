@@ -412,6 +412,51 @@ sub sorted_params
     return @names;
 }
 
+=head2 without_animation( $name, $params )
+
+A copy of one effect's values with every parameter it declares as C<animation>
+put back to what the effect declares. What is left is the same look holding
+still: nothing about the effect is switched off, and a render of one frame is
+unaffected, because a still was already what those parameters do nothing to.
+
+Here rather than in the interface because which parameters those are is a fact
+about the declaration, and because the pipeline has to be handed the same
+values the command line would print.
+
+=cut
+
+sub without_animation
+{
+    my ( $class, $name, $params ) = @_;
+
+    my $spec = $class->get( $name ) or return { %{ $params || {} } };
+
+    my %held = %{ $params || {} };
+
+    for my $key ( sort keys %{ $spec->{ params } } )
+    {
+        next unless $spec->{ params }{ $key }{ animation };
+        $held{ $key } = $spec->{ params }{ $key }{ default };
+    }
+
+    return \%held;
+}
+
+=head2 animated( $name )
+
+Whether an effect declares anything that only means something in a loop.
+
+=cut
+
+sub animated
+{
+    my ( $class, $name ) = @_;
+
+    my $spec = $class->get( $name ) or return 0;
+
+    return any { $_->{ animation } } values %{ $spec->{ params } };
+}
+
 =head2 needs_met( $spec, $values )
 
 Whether one parameter's declared C<needs> hold, given the effect's current

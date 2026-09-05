@@ -63,7 +63,11 @@ effects:
     strength: 0.22
     angle: -25
     width: 0.5
-    drift: 0.3
+
+    # 0.6 rather than 0.3: the drift is measured from the middle of the glass
+    # to its edge now, not across a whole diagonal, so the same sweep is twice
+    # the number. Doubled here rather than left to read differently.
+    drift: 0.6
 
   vignette:
     strength: 0.25

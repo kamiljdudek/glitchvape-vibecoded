@@ -506,15 +506,51 @@ than mixing through each other, because mixed channel by channel they meet in
 the middle and the frame collapses to one colour. Half a slider being the
 worst-looking place on it is not a control anybody can use.
 
+Thirteen effects have no animation and are meant not to: `downsample`,
+`curvature`, `grille`, `vignette` and `maximised` describe how the picture is
+made rather than what is happening to it, and `palette`, `posterize`,
+`quantize` and `deepfry` would have to animate the *number* of levels or
+generations, which reads as strobing rather than as motion. `grain`,
+`dropout`, `head_switch` and `stars` need no setting because they already
+re-roll or step every frame. Not forcing one on those is a decision, not an
+omission.
+
 `static`'s `surge` is measured towards a picture that is nothing but snow, so
 no setting can ask for a density there is no room for. The specks themselves
 are redrawn every frame and are avowedly not periodic — that is what snow is —
 so what closes is the amount, and that is what `t/31-drift.t` asks about.
 
+`t/42-animation.t` is the sweep that asks the weakest possible question of
+every parameter declaring `animation`: does *any* frame of a loop differ from
+the first one. It is weak on purpose — what each setting does is pinned in its
+own file — and it exists because four settings had quietly stopped doing
+anything at all, in three different ways:
+
+- **A rate above what the frame count can sample.** `flicker.rate` ran to 60
+  cycles per loop; at exactly the frame count every frame lands on the same
+  point of the sine and the picture does not flicker, and above half of it the
+  ripple that appears is a slower one nobody asked for. Clamped now, because
+  aliasing here looks like a broken slider.
+- **A travel that lands on a whole number of periods.** `interlace.drift` was
+  rows per loop over a range of 481 values, for a pattern two rows high: every
+  value did one of two things and any multiple of twice the frame count did
+  neither. It counts swaps now.
+- **A sweep that leaves the picture.** `glare.drift` drove the band a whole
+  diagonal either way, so past a quarter of the slider it spent the middle of
+  the loop off the crop and every setting above that rendered alike.
+- **A control whose dependency was not declared.** `watermark.direction` and
+  `letterbox.swap` mean nothing without a drift and a pattern respectively;
+  they say so in `needs` now and the window greys them.
+
+The lesson each of those has in common: **a slider that has stopped working
+looks exactly like a slider set to a value that does nothing**, and no still
+and no single frame can tell them apart.
+
 `t/31-drift.t` is driven off the registry and so covers every effect declaring
 a `drift` the day it is declared. A moving parameter under any other name is
 outside that sweep and owes the same two proofs — the loop closes, and a still
-is untouched — in its own file.
+is untouched — in its own file, which for `tracking.crawl`, `halftone.drift`
+and `interlace.drift` is `t/42-animation.t` beside the sweep itself.
 
 `t/38-reroll.t` walks the registry and proves both halves for every effect
 that declares one, so an effect growing a `reroll` is covered the day it is

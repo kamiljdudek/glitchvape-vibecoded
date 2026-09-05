@@ -150,6 +150,13 @@ palette. That is the right way round -- the blocks have to exist before
 anything shapes them, and a bloom or a scanline blending two neighbouring
 entries is what a screen showing an 8-bit image did anyway -- but it does mean
 the palette is a look here rather than a guarantee.
+
+C<reroll> moves the matrix to a different cell on every frame of a loop, which
+is what an indexed-colour display did with a picture it could not hold: the
+dither pattern crawls and the eye reads the shades between the palette
+entries. It is off by default, because a shimmer nobody asked for would change
+what every preset using this already renders, and because at a large C<factor>
+the cells are big enough that the crawl is the loudest thing in the frame.
 DOC
     params => {
         factor => {
@@ -184,6 +191,17 @@ DOC
             values  => [ qw(none o2x2 o4x4 o8x8) ],
             doc     => 'Bayer matrix the dither offset comes from',
         },
+        reroll => {
+            animation => 1,
+
+            # Nothing to move the picture under with no matrix, and nothing
+            # for the matrix to do at nought amount.
+            needs   => { matrix => [ qw(o2x2 o4x4 o8x8) ], amount => 1 },
+            default => 0,
+            type    => 'bool',
+            doc     => 'Meet the matrix at a different cell on every frame, '
+                . 'so the dither pattern crawls as an indexed display did',
+        },
         amount => {
             default => 0.25,
             type    => 'num',
@@ -200,6 +218,21 @@ DOC
     },
     apply => \&_bitmap,
 );
+
+# How far the picture is rolled under the Bayer tile on this frame.
+#
+# Shares its argument, and its table of periods, with the dither below: both
+# lay a repeating matrix over the picture, and rolling by a whole period would
+# be no roll at all. Rolled at the small size, because that is where the tile
+# is and one cell there is one chunky pixel.
+sub _bitmap_offset
+{
+    my ( $ctx, $p ) = @_;
+
+    return ( 0, 0 ) unless $p->{ reroll } && $p->{ matrix } ne 'none';
+
+    return _dither_offset( $ctx, { reroll => 1, map => $p->{ matrix } } );
+}
 
 sub _bitmap
 {
@@ -218,6 +251,9 @@ sub _bitmap
     if ( $p->{ matrix } ne 'none' && $p->{ amount } > 0 )
     {
         my $tile = _bayer_file( $p->{ matrix }, $ctx->cachedir );
+        my ( $dx, $dy ) = _bitmap_offset( $ctx, $p );
+
+        push @args, '-roll', sprintf '%+d%+d', $dx, $dy if $dx || $dy;
 
         # result = amount*tile + image - amount/2, so the matrix is centred on
         # zero and shifts a pixel either way rather than only brightening it.
@@ -230,6 +266,8 @@ sub _bitmap
             -$p->{ amount } / 2
             ),
             '-composite';
+
+        push @args, '-roll', sprintf '%+d%+d', -$dx, -$dy if $dx || $dy;
     }
 
     # -dither before -remap: it is a setting that the remap reads, not an

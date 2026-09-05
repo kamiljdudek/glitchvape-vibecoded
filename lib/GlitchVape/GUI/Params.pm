@@ -164,13 +164,20 @@ back the date that was already typed.
 
 sub apply_needs
 {
-    my ( $params, $built, $values ) = @_;
+    my ( $params, $built, $values, $moving ) = @_;
+
+    $moving = 1 unless defined $moving;
 
     for my $key ( keys %{ $built || {} } )
     {
         my $spec = $params->{ $key } or next;
 
         my $on = GlitchVape::Registry::needs_met( $spec, $values ) ? 1 : 0;
+
+        # Two reasons a control can be inert and one answer, because a widget
+        # has one sensitivity: an effect held still is not reading any of its
+        # loop-only settings, whatever those settings depend on.
+        $on = 0 if $spec->{ animation } && !$moving;
 
         $built->{ $key }{ label }->set_sensitive( $on );
         $built->{ $key }{ control }->set_sensitive( $on );

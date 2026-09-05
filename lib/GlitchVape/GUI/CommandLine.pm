@@ -167,9 +167,14 @@ sub _effect_args
             $from = GlitchVape::Registry->resolve_params( $name, {} );
         }
 
-        for my $key ( sort keys %{ $entry->{ params } } )
+        # What it will render rather than what it holds, so that an effect
+        # whose animation is switched off prints the command line that
+        # reproduces the picture on screen.
+        my $params = $state->effect_params( $name );
+
+        for my $key ( sort keys %$params )
         {
-            my $now = _flatten( $entry->{ params }{ $key } );
+            my $now = _flatten( $params->{ $key } );
             my $was = _flatten( $from->{ $key } );
 
             next if $now eq $was;

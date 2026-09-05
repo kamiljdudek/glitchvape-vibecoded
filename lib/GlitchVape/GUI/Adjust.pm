@@ -247,6 +247,26 @@ sub set_enabled
     return;
 }
 
+=head2 set_animated( $on )
+
+Told from the effect's row that its camera has been pressed. The loop-only
+settings grey with it: the alternative is a heading that says C<Only in an
+animation> above four live controls that this effect is no longer reading.
+
+=cut
+
+sub set_animated
+{
+    my ( $self ) = @_;
+
+    # The answer is read back off the state rather than taken as an argument:
+    # the row has already written it there, and a second copy here is a
+    # second thing to keep right.
+    $self->_sync_needs;
+
+    return;
+}
+
 # Header and body together: the header names an effect, so it is rebuilt with
 # the body rather than updated in place.
 sub _build
@@ -507,8 +527,13 @@ sub _sync_needs
         map { $_ => $self->{ state }->param( $name, $_ ) }
         keys %{ $spec->{ params } };
 
-    GlitchVape::GUI::Params::apply_needs( $spec->{ params },
-        $self->{ controls }, \%values );
+    my $moving = $self->{ state }->animated( $name );
+
+    GlitchVape::GUI::Params::apply_needs(
+        $spec->{ params },
+        $self->{ controls },
+        \%values, $moving
+    );
 
     return;
 }

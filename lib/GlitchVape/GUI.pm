@@ -1624,6 +1624,8 @@ sub _effect_row
         $stage->{ title }
     );
 
+    my $motion = $self->_motion_button( $name, $spec );
+
     my $remove = _icon_button( 'list-remove-symbolic',
         "Remove $spec->{title} from this pipeline" );
     $remove->set_relief( 'none' );
@@ -1642,13 +1644,95 @@ sub _effect_row
 
     $box->pack_start( $check,  0, 0, 0 );
     $box->pack_start( $label,  1, 1, 0 );
+    $box->pack_start( $motion, 0, 0, 0 ) if $motion;
     $box->pack_start( $remove, 0, 0, 0 );
 
     $row->add( $box );
 
     $self->{ rows }{ $name } = { row => $row, check => $check };
+    $self->{ rows }{ $name }{ motion } = $motion if $motion;
 
     return $row;
+}
+
+# The camera on an effect's row: whether its motion is in force.
+#
+# Not the same question as the tick beside it, which is why it is not the same
+# control. The tick decides whether the effect is in the pipeline at all; this
+# decides whether the settings that only bite in a loop are the ones it was
+# given or the ones it was declared with. Switching it off is how you keep a
+# look and lose the movement in it -- and on a fifteen-effect pipeline,
+# finding which of them will not sit still otherwise means opening fifteen
+# popovers and reading four headings in each.
+#
+# It holds the values rather than zeroing them, so switching it back on is
+# switching it back on and not four sliders to be found again.
+#
+# Two cameras rather than one camera pressed in: a movie camera for an effect
+# that moves and a stills camera for one that does not is the distinction
+# itself, where a toggle's shading is a convention about the shading. It is
+# also quieter -- most effects move, and a list where most rows show a pressed
+# button is a list with a pressed button in it rather than an interface.
+#
+# Nothing at all for an effect with no animation to hold. A camera that could
+# never be pressed is worse than no camera, because it invites the question.
+sub _motion_button
+{
+    my ( $self, $name, $spec ) = @_;
+
+    return undef unless GlitchVape::Registry->animated( $name );
+
+    my $button = Gtk3::Button->new;
+    $button->add(
+        Gtk3::Image->new_from_icon_name( 'camera-video-symbolic', 'button' ) );
+    $button->set_relief( 'none' );
+    $button->set_valign( 'center' );
+
+    _show_motion( $button, $spec, $self->{ state }->animated( $name ) );
+
+    $button->signal_connect(
+        clicked => sub {
+            return if $self->{ loading };
+
+            my $on = $self->{ state }->animated( $name ) ? 0 : 1;
+            $self->{ state }->animated( $name, $on );
+            _show_motion( $button, $spec, $on );
+
+            # The popover greys the loop-only settings to say why they are
+            # not biting, so it has to hear about this the way the enabled
+            # tick tells it.
+            my $adjust = $self->{ adjust };
+            if ( $adjust && ( $adjust->effect // q{} ) eq $name )
+            {
+                $adjust->set_animated;
+            }
+
+            $self->_touch;
+            return;
+        }
+    );
+
+    return $button;
+}
+
+sub _show_motion
+{
+    my ( $button, $spec, $on ) = @_;
+
+    my ( $icon ) = $button->get_children;
+
+    $icon->set_from_icon_name(
+        $on ? 'camera-video-symbolic' : 'camera-photo-symbolic', 'button' );
+
+    $button->set_tooltip_text(
+        $on
+        ? "$spec->{title} moves through an animation. "
+            . 'Press to hold it still without taking it out of the pipeline'
+        : "$spec->{title} is held still. "
+            . 'Press to let its animation settings move it again'
+    );
+
+    return;
 }
 
 # ---------------------------------------------------------------------------

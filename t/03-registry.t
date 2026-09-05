@@ -275,4 +275,38 @@ use GlitchVape::Registry;
         'and means something as soon as something does';
 }
 
+# ---------------------------------------------------------------------------
+# An effect's values with the motion taken out of them
+
+# What the camera on an effect's row does, expressed where the answer lives:
+# which parameters only bite in a loop is a fact about the declaration.
+{
+    my $held = GlitchVape::Registry->without_animation( 'static',
+        { density => 0.5, spread => 0.9, surge => 1 } );
+
+    is $held->{ surge }, 0,
+        'a loop-only setting comes back at what the effect declares';
+    is $held->{ density }, 0.5, 'and everything else is left exactly as it was';
+    is $held->{ spread },  0.9, 'including the settings next to it';
+
+    # A copy, or switching the motion off for a preview would switch it off
+    # for good.
+    my $given = { surge => 1 };
+    GlitchVape::Registry->without_animation( 'static', $given );
+
+    is $given->{ surge }, 1, 'and the values it was given are not touched';
+
+    # Nothing to take out of an effect that declares no motion, which is also
+    # how the interface knows not to draw a camera on its row.
+    ok( GlitchVape::Registry->animated( 'static' ),
+        'static says it has something that only happens in a loop' );
+    ok( !GlitchVape::Registry->animated( 'vignette' ),
+        'and a vignette says it has not' );
+
+    my $flat = { size => 1.8 };
+
+    is_deeply( GlitchVape::Registry->without_animation( 'vignette', $flat ),
+        $flat, 'so its values come back untouched' );
+}
+
 done_testing;

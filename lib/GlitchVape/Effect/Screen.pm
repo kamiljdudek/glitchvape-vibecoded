@@ -415,6 +415,13 @@ $R->register(
 Ordered dithering with a fixed threshold map, giving the regular dot texture of
 cheap colour printing. Applied per channel it produces the CMYK-ish rosette
 look of a scanned magazine page.
+
+C<drift> creeps the screen across the page over a loop, in whole cells so that
+it closes. It is the registration wandering, which is the same argument
+C<cmyk>'s wobble is made from and the only motion a print screen has: a dot
+screen belongs to the paper, so it travels with the paper or not at all. It is
+deliberately not a shimmer -- a screen redrawn every frame is a page that
+cannot hold still, which is a fault of the display and not of the printing.
 DOC
     params => {
         map => {
@@ -438,9 +445,37 @@ DOC
             max     => 1,
             doc     => 'Blend back over the original',
         },
+        drift => {
+            animation => 1,
+            default   => 0,
+            type      => 'int',
+            min       => 0,
+            max       => 8,
+            doc       => 'Cells the screen creeps across the page over the '
+                . 'loop; whole cells, so the loop closes',
+        },
     },
     apply => \&_halftone,
 );
+
+# How far the picture is rolled under the threshold map on this frame.
+#
+# The map has no offset of its own, so the picture moves under it and moves
+# back afterwards -- the same trick, and for the same reason, as the reroll in
+# GlitchVape::Effect::Texture's dither. Diagonal rather than straight across,
+# because a screen creeping along one axis reads as the rows of dots sliding
+# past each other and a screen creeping along both reads as the sheet moving.
+sub _halftone_creep
+{
+    my ( $ctx, $p ) = @_;
+
+    return 0 unless $p->{ drift } && $ctx->frames > 1;
+
+    my ( $period ) = $p->{ map } =~ /(\d+)x/;
+    return 0 unless $period && $period > 1;
+
+    return int $ctx->travel( $p->{ drift } * $period, $period );
+}
 
 sub _halftone
 {
@@ -455,7 +490,11 @@ sub _halftone
         $orig = $ctx->clone;
     }
 
+    my $creep = _halftone_creep( $ctx, $p );
+
+    $ctx->magick( '-roll', sprintf '%+d%+d', $creep, $creep ) if $creep;
     $ctx->magick( '-ordered-dither', "$p->{map},$p->{levels}" );
+    $ctx->magick( '-roll', sprintf '%+d%+d', -$creep, -$creep ) if $creep;
 
     if ( $orig )
     {
@@ -491,6 +530,14 @@ C<rate> is the only motion in this program faster than one cycle per loop.
 Everything else drifts or rocks once from end to end; a tube flickers several
 times a second, and at one cycle per loop it would read as a slow fade rather
 than as a fault.
+
+It is held below half the frame count, because a loop of N frames cannot show
+a ripple faster than that: at exactly N cycles every frame is sampled at the
+same point of the ripple and the picture does not flicker at all, and above
+half of N what appears is a slower ripple that was not asked for. Nothing
+warns about it, which is what makes it worth clamping -- a rate slider that
+silently stops doing anything past its middle is indistinguishable from a
+broken one.
 DOC
     params => {
         amount => {
@@ -507,7 +554,8 @@ DOC
             min       => 1,
             max       => 60,
             animation => 1,
-            doc       => 'Cycles per loop; whole numbers, so the loop closes',
+            doc       => 'Cycles per loop; whole numbers, so the loop '
+                . 'closes, and never more than the frame count can show',
         },
     },
     apply => sub {
@@ -519,7 +567,7 @@ DOC
         # kept, for the reason spelled out beside the wave in
         # GlitchVape::Effect::Signal: 2*pi*7 is not seven times 2*pi to the
         # last bit, and the error lands on the frame that closes the loop.
-        my $turns = $ctx->travel( $p->{ rate }, 1 );
+        my $turns = $ctx->travel( _flicker_rate( $ctx, $p->{ rate } ), 1 );
         $turns -= int $turns;
 
         my $swing = $p->{ amount } * sin( 2 * $PI * $turns );
@@ -534,6 +582,25 @@ DOC
     },
 );
 
+# The fastest ripple this many frames can actually show.
+#
+# Sampling a sine at N points a loop resolves nothing at or above N/2 cycles:
+# at N/2 the samples land on alternate zero crossings and every frame comes
+# out at the same brightness, and past it the picture shows a slower ripple
+# than the one that was asked for. Clamped rather than left to alias, because
+# what aliasing looks like here is a setting that stopped working.
+sub _flicker_rate
+{
+    my ( $ctx, $rate ) = @_;
+
+    my $frames = $ctx->frames;
+    return $rate if $frames <= 1;
+
+    my $most = int( ( $frames - 1 ) / 2 ) || 1;
+
+    return $rate < $most ? $rate : $most;
+}
+
 # ---------------------------------------------------------------------------
 
 $R->register(
@@ -546,11 +613,14 @@ A soft diagonal band of light, as if a window were reflecting off the screen.
 Cheap but very effective at making a flat render feel like a photograph of a
 physical object.
 
-C<drift> sweeps the band back and forth across the glass over a loop, as a
-fraction of the frame. Back and forth rather than across and round, for the
-same reason the echo in C<ghost> wanders: there is one band, so it has nothing
-to hide a jump behind. It is also the honest motion -- the reflection moves
-because whoever is holding the camera does.
+C<drift> sweeps the band back and forth across the glass over a loop. 1 takes
+its centre from the middle of the glass out to the edge and home again, which
+is the whole sweep; there is deliberately no more, because a band driven
+further spends the middle of the loop off the picture entirely and every
+setting past that point looks the same. Back and forth rather than across and
+round, for the same reason the echo in C<ghost> wanders: there is one band, so
+it has nothing to hide a jump behind. It is also the honest motion -- the
+reflection moves because whoever is holding the camera does.
 DOC
     params => {
         strength => {
@@ -578,9 +648,10 @@ DOC
             animation => 1,
             default   => 0,
             type      => 'num',
-            min       => -2,
-            max       =>  2,
-            doc       => 'Frame-widths the band sweeps either way over a loop',
+            min       => -1,
+            max       =>  1,
+            doc       => 'How far the band sweeps either way over a loop; '
+                . '1 is out to the edge of the glass and back',
         },
     },
     apply => \&_glare,
@@ -624,7 +695,12 @@ sub _glare
         image   => $full->[ 0 ],
         compose => 'Over',
         gravity => 'Center',
-        y       => int $ctx->excursion( $p->{ drift } * $diag ),
+
+        # Half the diagonal, so a whole drift takes the band's centre from
+        # the middle of the glass to its edge and back rather than a whole
+        # diagonal off it: past about a half the band spends most of the loop
+        # outside the crop and the top of the slider is one long nothing.
+        y => int $ctx->excursion( $p->{ drift } * $diag / 2 ),
     );
     $sheen->Rotate( degrees => $p->{ angle }, background => 'black' );
     $sheen->Set( gravity => 'Center' );

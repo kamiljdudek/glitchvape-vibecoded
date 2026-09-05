@@ -517,4 +517,53 @@ sub declared
         'after which there is nothing left to reset';
 }
 
+# ---------------------------------------------------------------------------
+# The camera on a row, and what the popover does about it
+
+# Two questions, two controls: the tick decides whether the effect is in the
+# pipeline, the camera decides whether the settings that only bite in a loop
+# are the ones it was given. Nothing about pressing one is meant to do the
+# other's job.
+{
+    $gui->{ state }->add_effect( 'static' );
+    $gui->{ state }->param( 'static', 'surge', 0.7 );
+    $gui->_rebuild_effects;
+
+    my $row = $gui->{ rows }{ static };
+
+    ok $row->{ motion }, 'an effect that declares an animation gets a camera';
+    ok !$gui->{ rows }{ vignette }{ motion },
+        'and one that declares none does not';
+
+    $row->{ motion }->clicked;
+
+    ok !$gui->{ state }->animated( 'static' ),
+        'pressing it holds the effect still';
+    ok $gui->{ state }->enabled( 'static' ),
+        'which is not the same as taking it out of the pipeline';
+    ok $row->{ check }->get_active, 'and leaves its tick alone';
+
+    is $gui->{ state }->param( 'static', 'surge' ), 0.7,
+        'the motion it was given is held rather than zeroed';
+
+    # The popover has a heading saying which settings are loop-only. With the
+    # effect held still they are not being read at all, and a live control
+    # under that heading would be saying otherwise.
+    open_on( 'static' );
+
+    my $surge = $gui->{ adjust }{ controls }{ surge };
+
+    ok $surge, 'the popover builds a control for the loop-only setting';
+    ok !$surge->{ control }->get_sensitive,
+        'and greys it while the effect is held still';
+
+    $row->{ motion }->clicked;
+
+    ok $gui->{ state }->animated( 'static' ), 'pressing again lets it move';
+    ok $surge->{ control }->get_sensitive,    'and the control comes back';
+
+    is $gui->{ state }->effect_params( 'static' )->{ surge }, 0.7,
+        'with the value that was there before, not a new default';
+}
+
 done_testing;
