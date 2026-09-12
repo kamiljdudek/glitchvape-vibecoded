@@ -40,18 +40,76 @@ seeks a few tens of milliseconds apart, and the run length is geometric, so
 most bursts are short and the occasional one goes on and on. That alternation
 is the whole sound.
 
+=head2 The rattle is the platter, not a hand
+
+The gaps inside a burst are whole revolutions of the spindle, plus the part of
+one it takes for the sector wanted to arrive under the head. Nothing can be
+read sooner: the data is going past at a fixed rate whatever the software
+wants, so a drive working hard rattles at a period set by its own spindle.
+
+Scattering those gaps uniformly instead -- which is what this did -- gives the
+irregular rhythm of somebody typing, and that is exactly what it sounded like.
+It is the one place where C<rpm> reaches the timing rather than only the
+pitch, and it is why a fifteen-thousand drive clatters where a five-four
+chatters.
+
 =head2 A seek's pitch is how far the head went
 
-The other half. A drive's head is a mass on a voice coil: driven hard, moved,
-and stopped. A short hop is a tick; a long sweep across the platter is a lower,
-longer C<brrp>. Both are the same mechanism ringing, so both are a swept
-resonance -- it is the sweep that makes it a chirp rather than a click.
+A drive's head is a mass on a voice coil: driven hard, moved, and stopped. A
+short hop is a tick; a long sweep across the platter is a lower, longer
+C<brrp>. Both are the same mechanism ringing, so both are a swept resonance --
+it is the sweep that makes it a chirp rather than a click.
 
 Seek time goes as roughly the square root of the distance, because the
 actuator spends the move accelerating and then decelerating rather than
 travelling at a speed. That is modelled, and it is why a drive reading one
 file sounds different from one being defragmented: the same drive, a different
 distribution of distances.
+
+=head2 A seek is two blows and the scrape between them
+
+What makes it a machine rather than a keystroke, and the part that was wrong
+for longest. A seek was one noise-driven resonance at around two and a half
+kilohertz, decaying inside the move that made it: eighty-six per cent of its
+energy between one and four kilohertz and four per cent below five hundred.
+That is the spectrum of a small hard plastic thing being struck -- a key, a
+pen, a mouse button -- and it read as one however good the pattern around it
+was.
+
+Three things were missing, and all three are mechanical facts rather than
+taste:
+
+=over 4
+
+=item The casting
+
+What reaches the room is not the arm, it is the box the arm is bolted into.
+There is a second resonator an octave and a half below the first, excited by
+the momentum changes rather than by the travel, and it is what gives a seek a
+body instead of a click.
+
+=item The stop
+
+An actuator is driven hard, travels, and is I<stopped>, so there are two blows
+a few milliseconds apart with the head rattling across tracks between them.
+One blow is a keystroke; two with a scrape between them is a drive. At a
+track-to-track hop the two merge, which is why a hop is still a tick.
+
+=item The ring
+
+Both parts ring on after the head has arrived, and the old one did not: its
+pole radius was chosen and the decay taken as whatever it came to, which was a
+millisecond and a quarter -- under a fifth of the move it was supposed to
+outlast. The radius comes from a decay time now, and the decay time goes with
+the distance, because a full stroke has far more momentum to give up than a
+hop and because that is also what keeps a long seek audibly longer rather than
+merely lower.
+
+=back
+
+None of it is a sample and none of it is a filter over one. The sweep is
+deliberately not smooth either: a head crossing tracks rattles over the slide,
+and a resonance sliding cleanly from one pitch to another is a slide whistle.
 
 =head2 The bed is not just noise
 
@@ -76,18 +134,64 @@ use constant FAN_SHARE => 0.42;
 use constant SEEK_MIN_S  => 0.0015;
 use constant SEEK_SPAN_S => 0.019;
 
-# The resonance the actuator rings at, swept down over the move. A short hop
-# starts near the top of this and a full stroke near the bottom.
-use constant RING_HI => 2800;
-use constant RING_LO => 950;
+# The arm's own resonance, swept down over the move. A short hop starts near
+# the top of this and a full stroke near the bottom.
+use constant RING_HI => 1600;
+use constant RING_LO => 400;
 
 # Where the sweep ends, as a fraction of where it started.
-use constant SWEEP_TO => 0.45;
+use constant SWEEP_TO => 0.55;
 
-# Gaps within a burst, and how long a burst tends to run.
-use constant BURST_GAP_S  => 0.012;
-use constant BURST_SPAN_S => 0.055;
-use constant BURST_STAY   => 0.82;
+# The casting the arm is bolted into, which is the part that reaches the room.
+# Lower for a long seek for the reason the arm is: a slam puts its energy into
+# bigger modes than a hop does.
+use constant BODY_HI => 380;
+use constant BODY_LO => 140;
+
+# The rasp of a head crossing tracks: broad, so it is a noise and not a note.
+use constant GRIT_HZ => 2200;
+use constant GRIT_R  => 0.93;
+
+# How long each rings on once the head has stopped, in seconds: the floor for
+# a hop, and what a full stroke adds. See L</A seek is two blows and the
+# scrape between them>.
+use constant ARM_RING_MIN_S   => 0.006;
+use constant ARM_RING_SPAN_S  => 0.014;
+use constant BODY_RING_MIN_S  => 0.010;
+use constant BODY_RING_SPAN_S => 0.022;
+
+# Where the sample is taken to have decayed to nothing. Five time constants is
+# a hundred and fifty to one, which is below what survives the sixteen-bit
+# floor under a fan.
+use constant RING_OUT => 5;
+
+# How often the swept resonance is repointed, in samples. A cosine per sample
+# is most of what one seek costs, and the pole does not have to move that
+# often: eight samples is a fifth of a millisecond, which over the shortest
+# move there is still leaves eight steps. It is also a factor of the interval
+# the sweep wobbles on, so the two stay on one grid.
+use constant SWEEP_STEP => 8;
+
+# The shape of the drive force across one move, in fractions of it: how fast
+# the initial blow falls away, where the actuator reverses, and how fast the
+# blow that stops it falls away in turn.
+use constant STRIKE_FALL => 0.07;
+use constant BRAKE_AT    => 0.5;
+use constant BRAKE_FALL  => 0.09;
+
+# How the three parts are mixed, and how loud the result is. The proportions
+# are what puts a third of a seek's energy under 500 Hz, half of it in the
+# chirp above that and the rest in the rasp -- a seek that was 86% between one
+# and four kilohertz was a keystroke. The scale is what leaves room for the
+# dozen seeks that overlap when a drive is thrashing: one on its own peaks
+# around a quarter of full scale, and a 15,000 rpm drive at every setting's
+# maximum still comes in under four fifths of it.
+use constant ARM_MIX  => 0.56;
+use constant BODY_MIX => 0.22;
+use constant GRIT_MIX => 0.255;
+
+# How likely a burst is to run on for one more seek.
+use constant BURST_STAY => 0.82;
 
 my $PI = 3.14159265358979;
 
@@ -241,6 +345,10 @@ sub seeks
 
     return [] unless $activity > 0;
 
+    # One revolution, which is what a gap inside a burst is made of. See
+    # L</The rattle is the platter, not a hand>.
+    my $turn = 60 / _clamp( $spec->{ rpm }, 1800, 15_000, 5400 );
+
     # The mean quiet between bursts, in seconds. Five seconds of nothing at
     # the bottom of the slider and a tenth of a second at the top.
     my $idle = 5 * ( 0.02 / 5 )**$activity;
@@ -266,7 +374,10 @@ sub seeks
 
             last unless $rng->chance( BURST_STAY );
 
-            $now += BURST_GAP_S + $rng->rand( BURST_SPAN_S );
+            # Whole revolutions, plus the part of one it takes for the sector
+            # to arrive under the head.
+            $now += $turn * ( 1 + int $rng->rand( 3 ) ) +
+                $rng->rand( 0.35 * $turn );
         }
     }
 
@@ -382,9 +493,10 @@ sub _lay_bed
     return;
 }
 
-# One seek, added in place. A two-pole resonator driven by noise, with its
-# resonance swept downward across the move -- which is what turns a click into
-# a chirp, and the sweep is the sound of the actuator settling.
+# One seek, added in place. Three resonators in parallel -- the arm, the
+# casting it is bolted into, and the rasp of the head crossing tracks -- driven
+# by the blow that starts the move, the scrape across it and the blow that
+# stops it. See L</A seek is two blows and the scrape between them>.
 sub _chirp
 {
     my ( $sample, $at, $distance, $rng ) = @_;
@@ -397,49 +509,120 @@ sub _chirp
     # Square root, because the actuator accelerates and then decelerates
     # rather than travelling at a speed: four times the distance is twice the
     # time, not four times.
-    my $span   = SEEK_MIN_S + SEEK_SPAN_S * sqrt( $distance );
-    my $length = int( RATE * $span );
-    return unless $length > 1;
+    my $span = SEEK_MIN_S + SEEK_SPAN_S * sqrt( $distance );
+    my $move = int( RATE * $span );
+    return unless $move > 1;
+
+    # How long each part rings on once the head has stopped. This goes with
+    # the distance because a full stroke arrives with far more momentum to
+    # give up than a hop does -- and because it is what keeps a long seek
+    # audibly longer rather than merely lower.
+    my $arm_tau  = ARM_RING_MIN_S + ARM_RING_SPAN_S * $distance;
+    my $body_tau = BODY_RING_MIN_S + BODY_RING_SPAN_S * $distance;
+
+    my $length = $move + int( RATE * RING_OUT * $body_tau );
+
+    # A pole radius from a decay time, rather than a radius chosen and the
+    # decay taken as whatever it came to. That is the whole of the fix: the
+    # old one held for a millisecond and a quarter, which is under a fifth of
+    # the move it was supposed to outlast, so every seek ended as an abrupt
+    # tick rather than ringing on the way a struck box does.
+    my $arm_r  = exp( -1 / ( RATE * $arm_tau ) );
+    my $body_r = exp( -1 / ( RATE * $body_tau ) );
 
     my $start = RING_HI + ( RING_LO - RING_HI ) * $distance;
     my $end   = $start * SWEEP_TO;
 
-    # How ringy: a long move rattles the whole assembly and rings longer.
-    my $r = 0.982 + 0.012 * $distance;
+    # Varied a little per seek, because two seeks of the same length never hit
+    # the same part of the casting.
+    my $body_hz =
+        ( BODY_HI + ( BODY_LO - BODY_HI ) * $distance ) *
+        ( 0.92 + $rng->rand( 0.16 ) );
+
+    my $body_c = 2 * $body_r * cos( 2 * $PI * $body_hz / RATE );
+
+    my $grit_hz = GRIT_HZ * ( 0.85 + $rng->rand( 0.3 ) );
+    my $grit_c  = 2 * GRIT_R * cos( 2 * $PI * $grit_hz / RATE );
 
     my $level = 0.55 + $rng->rand( 0.35 );
 
-    my ( $y1, $y2 ) = ( 0, 0 );
+    my ( $a1, $a2, $b1, $b2, $g1, $g2 ) = ( 0 ) x 6;
+
+    # Hoisted, so the per-sample arithmetic has no transcendental function in
+    # it at all: the two exponentials only run while the head is moving, and
+    # the cosine only when the sweep is repointed.
+    my $arm_rr  = $arm_r * $arm_r;
+    my $body_rr = $body_r * $body_r;
+    my $grit_rr = GRIT_R * GRIT_R;
+
+    # The sweep is not smooth. A head crossing tracks rattles over the slide,
+    # and a resonance that slid cleanly from one pitch to another is a slide
+    # whistle rather than a machine. Stepped rather than redrawn per sample,
+    # so what it adds is grain and not hiss.
+    my $wobble = 0;
+    my $arm_c  = 0;
 
     for my $n ( 0 .. $length - 1 )
     {
         my $i = $at + $n;
         last if $i >= @$sample;
 
-        my $through = $n / $length;
+        my $moving  = $n < $move;
+        my $through = $moving ? $n / $move : 1;
 
-        my $hz = $start + ( $end - $start ) * $through;
-        my $w  = 2 * $PI * $hz / RATE;
+        my ( $push, $thump, $rasp ) = ( 0, 0, 0 );
 
-        # Fast in, slow out: the coil is driven hard at the start of the move
-        # and everything after that is the mechanism settling.
-        my $envelope =
-              $through < 0.06
-            ? $through / 0.06
-            : exp( -4.2 * ( $through - 0.06 ) );
+        if ( $moving )
+        {
+            my $strike = exp( -$through / STRIKE_FALL );
 
+            my $brake =
+                $through < BRAKE_AT
+                ? 0
+                : exp( -( $through - BRAKE_AT ) / BRAKE_FALL );
+
+            my $scrape = sin( $PI * $through );
+
+            $push  = $strike + 1.25 * $brake + 0.6 * $scrape;
+            $thump = $strike + 1.5 * $brake;
+            $rasp  = $scrape;
+        }
+
+        unless ( $n % SWEEP_STEP )
+        {
+            $wobble = $rng->gauss( 0, 0.045 ) unless $n % 48;
+
+            my $hz =
+                ( $start + ( $end - $start ) * $through ) * ( 1 + $wobble );
+
+            $arm_c = 2 * $arm_r * cos( 2 * $PI * $hz / RATE );
+        }
+
+        # One draw for all three, because it is one blow reaching three parts
+        # of the same casting -- and none at all once the head has landed,
+        # where every envelope is zero and the resonators are only ringing
+        # out what they were already given.
+        #
         # Normalised by (1 - r squared), because a two-pole resonator's gain
         # at its own frequency goes as 1/(1-r) -- at the ringiest end of the
-        # range that is a factor of eighty, and an unnormalised one does not
-        # come out loud, it comes out clipped. Which it did.
-        my $drive = ( $rng->rand( 2 ) - 1 ) * $envelope * ( 1 - $r * $r );
+        # range that is a factor of a thousand now, and an unnormalised one
+        # does not come out loud, it comes out clipped. Which it did.
+        my $noise = $moving ? $rng->rand( 2 ) - 1 : 0;
 
-        my $y = $drive + 2 * $r * cos( $w ) * $y1 - $r * $r * $y2;
+        my $arm =
+            $noise * $push * ( 1 - $arm_rr ) + $arm_c * $a1 - $arm_rr * $a2;
+        ( $a2, $a1 ) = ( $a1, $arm );
 
-        $y2 = $y1;
-        $y1 = $y;
+        my $body =
+            $noise * $thump * ( 1 - $body_rr ) + $body_c * $b1 - $body_rr * $b2;
+        ( $b2, $b1 ) = ( $b1, $body );
 
-        $sample->[ $i ] += $y * $level * 1.1;
+        my $grit =
+            $noise * $rasp * ( 1 - $grit_rr ) + $grit_c * $g1 - $grit_rr * $g2;
+        ( $g2, $g1 ) = ( $g1, $grit );
+
+        $sample->[ $i ] +=
+            $level * ( ARM_MIX * $arm + BODY_MIX * $body + GRIT_MIX * $grit );
     }
 
     return;

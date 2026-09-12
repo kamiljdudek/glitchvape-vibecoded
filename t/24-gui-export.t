@@ -435,9 +435,12 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 # ---------------------------------------------------------------------------
 # Clicking a name picks it; it does not leave the page
 
-# GtkListBox activates a row on a single click by default, which on these two
-# pages meant that touching a name was indistinguishable from choosing it and
-# pressing Continue -- so nobody could look down the list.
+# Two GtkListBoxes used to be the chooser, and GtkListBox activates a row on a
+# single click by default -- so touching a name was indistinguishable from
+# choosing it and pressing Continue, and nobody could look down the list. A
+# GtkTreeView already tells the two gestures apart. What has to keep holding
+# is the claim those settings were making: selecting describes, and only
+# Continue moves.
 {
     my $state = GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
 
@@ -445,13 +448,18 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 
     ok $wizard, 'the assistant opened';
 
-    for my $page ( qw(category_list effect_list) )
-    {
-        my $list = $wizard->{ $page };
+    ok $wizard->_select_effect( 'wave' ), 'an effect can be selected';
+    is $wizard->{ effect }, 'wave', 'and selecting it is what records it';
 
-        ok !$list->get_activate_on_single_click,
-            "the $page does not activate a row on a single click";
-    }
+    is $wizard->{ assistant }->get_current_page,
+        GlitchVape::GUI::Wizard::PAGE_EFFECT(),
+        'selecting a name does not leave the page it is on';
+
+    # Gtk's own type-ahead would put a second, floating search box over a page
+    # that already has one, and the two would disagree about what was being
+    # looked for.
+    ok !$wizard->{ tree }->get_enable_search,
+        'and the tree leaves searching to the box above it';
 
     $wizard->_finish;
 }

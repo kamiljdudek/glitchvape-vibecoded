@@ -94,7 +94,7 @@ The nine stages, in execution order:
 `format` → `colour` → `channels` → `damage` → `signal` → `grain` → `optics` →
 `overlay` → `framing`
 
-The stages double as the browsing categories in the Add Effect wizard, which
+The stages double as the branches of the tree in the Add Effect wizard, which
 is deliberate: where an effect runs and what it is for are the same fact, so
 there is no second taxonomy to keep in sync. They also band the effect list in
 the window, since a pipeline nobody can reorder is owed an explanation of the
@@ -361,6 +361,23 @@ says what it does and this says what else was tried.
   a real Cancel and only commits on Add, so the argument that turned the
   effect settings into a popover does not transfer to it.
 
+- **Choosing a category and choosing an effect were a page each.** That made
+  the category a decision in its own right: you committed to one of nine
+  before seeing anything in it, and comparing two effects in different
+  categories meant walking back and forth. The second page's search box looked
+  past the chosen category, which worked but left the heading and the list
+  disagreeing about where you were — two sentences of explanation covering one
+  control doing something the page did not otherwise admit to. It is one tree
+  now, over one search box: the category is a heading rather than a step,
+  nothing is committed to by opening one, and a search prunes the tree instead
+  of changing what the page means. Which leaves two cards, `Effect` and
+  `Adjust`. Whatever is clicked on — a category or an effect, since both are
+  rows — is described beside the tree, by pretty name, internal name and
+  summary. Both kinds, because a pane that described effects but not
+  categories teaches people not to click on categories; and the internal name,
+  because the tree shows pretty names and that is the only place the window
+  and `--set` share a vocabulary.
+
 - **There was a preset combo above the effect list.** A preset is now one of
   the two things Add offers, because a preset is a set of effects and belongs
   beside "one effect" rather than in a control of its own. It still *replaces*
@@ -427,9 +444,26 @@ worth protecting:
   of gaps gives an even scatter of ticks, which is the failure `geiger` avoids
   by going the other way. Turning `activity` up lengthens the quiet and leaves
   the bursts alone, since how fast a drive seeks while working is a property of
-  the drive. Its chirps are a swept resonance whose pitch and length come from
-  how far the head went, seek time going as the square root of distance —
-  which is why one file being read and a defragment sound different.
+  the drive. The gaps *inside* a burst are not a distribution at all: they are
+  whole revolutions of the spindle plus the part of one it takes for the
+  sector to come round, because the data goes past the head at a fixed rate
+  whatever the software wants. That is the one place `rpm` reaches the timing
+  rather than only the pitch, and getting it wrong is what made this sound
+  like typing — irregular gaps of 12 to 67ms are the rhythm of a hand.
+
+  Its chirps are a swept resonance whose pitch and length come from how far
+  the head went, seek time going as the square root of distance — which is
+  why one file being read and a defragment sound different. One resonance is
+  not enough: the arm has the casting it is bolted into under it, an octave
+  and a half below and excited by the momentum changes rather than by the
+  travel, and both ring on after the head lands rather than stopping with it.
+  A seek is also two blows and a scrape — driven, travelled, *stopped* —
+  because one blow is a keystroke. Without all of that a seek put 86% of its
+  energy between 1 and 4kHz and 4% below 500Hz, which is the spectrum of a
+  small hard plastic thing being struck, and no amount of getting the pattern
+  right survives it. A pole radius is derived from a decay time now rather
+  than picked, because picked it came to a millisecond and a quarter —
+  under a fifth of the move it was meant to outlast.
 
 Those tests read the click schedule by replacing `Geiger::_click`, because
 once the rate is high enough for dead time to bind the clicks overlap and no

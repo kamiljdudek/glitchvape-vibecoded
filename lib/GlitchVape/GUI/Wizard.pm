@@ -18,33 +18,47 @@ our $VERSION = '0.01';
 
 =head1 NAME
 
-GlitchVape::GUI::Wizard - the three-page Add Effect assistant
+GlitchVape::GUI::Wizard - the two-page Add Effect assistant
 
 =head1 DESCRIPTION
 
-Forty-five effects are too many for one list. The assistant asks three
-questions in the order a person actually has them:
+Forty-five effects are too many for one flat list, so they are shown as a
+tree: nine categories, each holding the effects that run at that point in the
+chain. The assistant asks two questions.
 
 =over 4
 
-=item 1. What kind of thing am I after?
+=item 1. Which effect?
 
-The nine pipeline stages, under their presentable titles. A stage is where an
-effect runs I<and> what it is for, which is why it can be browsed as a
-category rather than needing a second taxonomy alongside it.
+The tree, by pretty name, over a search box that looks through every category
+at once. Whatever is clicked on -- a category or an effect, since both are
+rows -- is described beside it: the English name, the internal name, and what
+it is for. See L</THE DESCRIPTION IS OF WHATEVER IS SELECTED>.
 
-=item 2. Which one?
-
-Everything free in that stage, by title and summary, with a search box. The
-search matches the title, the summary and the internal name, so someone who
-knows the picture they want and someone who knows the preset key both find it.
-
-=item 3. How strong?
+=item 2. How strong?
 
 The declared parameters, built by L<GlitchVape::GUI::Params> -- the same
 controls the effect gets once it is in the pipeline -- against a live preview.
 
 =back
+
+=head1 A TREE RATHER THAN TWO PAGES
+
+Choosing the category and choosing the effect used to be a page each, which
+made the category a decision in its own right: you committed to one of nine
+before seeing anything in it, and comparing two effects in different
+categories meant walking back and forth. A search box on the second page
+looked past the category, which worked, but left the page heading and the list
+disagreeing about where you were -- two sentences of explanation to cover one
+control doing something the page did not otherwise admit to.
+
+A tree makes the category a heading instead of a step. Nothing is committed to
+by opening one, everything is reachable from one screen, and searching simply
+prunes the tree rather than changing what the page means.
+
+The categories are still the nine pipeline stages, because where an effect
+runs and what it is for are the same fact -- so there is no second taxonomy to
+keep in sync.
 
 =head1 THE PREVIEW IS A REAL RENDER
 
@@ -83,9 +97,8 @@ use constant SETTLE_MS => 350;
 
 # Page indices, in the order they are appended.
 use constant {
-    PAGE_CATEGORY => 0,
-    PAGE_EFFECT   => 1,
-    PAGE_SETTINGS => 2,
+    PAGE_EFFECT   => 0,
+    PAGE_SETTINGS => 1,
 };
 
 =head2 run( %arg )
@@ -127,11 +140,18 @@ sub run
     }
 
     $self->_build;
+
+    # Before the window is shown rather than from the prepare handler, which
+    # for the first page fires from the map. Filling it here is what lets a
+    # caller -- a test, or the window reopening the assistant -- ask what is
+    # in the tree without having run the main loop first.
+    $self->_fill_tree;
+
     $self->{ assistant }->show_all;
 
     # After show_all, because the navigation buttons have no settled state
     # until the window is realised. There is no forward function here: the
-    # three pages are always walked in order.
+    # two pages are always walked in order.
     GlitchVape::GUI::Assistant::navigate( $self->{ assistant } );
 
     return $self;
@@ -172,8 +192,7 @@ sub _build
 
     $self->{ assistant } = $assistant;
 
-    $self->_add_page( $self->_category_page, 'content', 'Category' );
-    $self->_add_page( $self->_effect_page,   'content', 'Effect' );
+    $self->_add_page( $self->_tree_page,     'content', 'Effect' );
     $self->_add_page( $self->_settings_page, 'confirm', 'Adjust' );
 
     $assistant->signal_connect(
@@ -231,9 +250,23 @@ sub _finish
 }
 
 # ---------------------------------------------------------------------------
-# Page 1: category
+# Page 1: the effect tree
 
-sub _category_page
+# The store's columns. COL_VISIBLE is what the filter reads -- a plain boolean
+# the search writes, rather than a visible_func -- because a category has to
+# stay on screen whenever any of its effects match, and a callback answering
+# for one row at a time cannot know that without walking its children on every
+# keystroke.
+use constant {
+    COL_MARKUP  => 0,    # what the row shows: the pretty name
+    COL_NAME    => 1,    # the internal name -- a stage key or an effect name
+    COL_EFFECT  => 2,    # true for an effect, false for a category
+    COL_STAGE   => 3,    # the category the row is, or is in
+    COL_VISIBLE => 4,    # what the search has decided
+    COL_SEARCH  => 5,    # the lowercased haystack
+};
+
+sub _tree_page
 {
     my ( $self ) = @_;
 
@@ -241,192 +274,35 @@ sub _category_page
     $box->set_border_width( 12 );
 
     my $lead = Gtk3::Label->new;
-
-    # The example that used to be here -- scanlines shrunk away by a
-    # downsample -- has moved into the stages themselves, where it belongs to
-    # the one stage it is about. Saying it twice made the lead longer than the
-    # first row it introduces.
     $lead->set_markup(
-              'Effects are grouped by where they run in the chain, '
-            . 'which is also what they are for. The chain always runs in '
-            . 'the same order, and each part below says why it runs where '
-            . 'it does. So choose the part of the chain you want to change, '
-            . 'then the effect.' );
+              'Effects are grouped by where they run in the chain, which is '
+            . 'also what they are for. Open a category to see what is in it, '
+            . 'or search — the box looks through every category at once. '
+            . 'Whatever you click on is described beside the tree.' );
     $lead->set_xalign( 0 );
     $lead->set_line_wrap( 1 );
 
-    # Wrapped, but a wrapped label still asks for its whole natural width
-    # unless it is told otherwise, and this one is now long enough that
-    # letting it do so would widen the assistant. Bounded to the same measure
-    # the stage blurbs use, so the two columns of prose agree.
-    $lead->set_max_width_chars( 60 );
+    # A wrapped label still asks for its whole natural width unless it is told
+    # otherwise, and this one is long enough that letting it do so would widen
+    # the assistant.
+    $lead->set_max_width_chars( 72 );
     $lead->get_style_context->add_class( 'dim-label' );
     $box->pack_start( $lead, 0, 0, 0 );
 
-    my $scroll = Gtk3::ScrolledWindow->new;
-    $scroll->set_policy( 'never', 'automatic' );
-    $scroll->set_vexpand( 1 );
-
-    my $list = Gtk3::ListBox->new;
-    $list->set_selection_mode( 'single' );
-
-    for my $stage ( GlitchVape::Registry->stages )
-    {
-        my $free = $self->{ available }{ $stage } or next;
-        my $info = GlitchVape::Registry->stage_info( $stage );
-
-        my $row = Gtk3::ListBoxRow->new;
-        $row->add( _category_row( $info, scalar @$free ) );
-        $row->{ stage } = $stage;
-        $list->add( $row );
-    }
-
-    $list->signal_connect(
-        'row-selected' => sub {
-            my ( undef, $row ) = @_;
-            return unless $row;
-            $self->{ stage } = $row->{ stage };
-            $self->{ assistant }->set_page_complete( $box, 1 );
-            return;
-        }
-    );
-
-    # Double-click or Enter should go straight on rather than making the user
-    # find Continue. A single click must not: it is how the row gets selected
-    # in the first place, and a page that leaves as soon as it is touched
-    # gives nobody a chance to look at what else is on it. GtkListBox
-    # activates on single click by default, so this has to be said.
-    $list->set_activate_on_single_click( 0 );
-    $list->signal_connect( 'row-activated' => sub { $self->_next; return } );
-
-    # GtkListBox selects its first row as soon as it takes focus, so the page
-    # is complete from the moment it is shown and Continue always does
-    # something. That is only safe because the choice is visible: the
-    # highlighted row is the one Continue will act on.
-
-    $scroll->add( $list );
-    $box->pack_start( $scroll, 1, 1, 0 );
-
-    $self->{ category_list } = $list;
-    $self->{ category_page } = $box;
-
-    return $box;
-}
-
-sub _category_row
-{
-    my ( $info, $count ) = @_;
-
-    my $box = Gtk3::Box->new( 'vertical', 2 );
-    $box->set_border_width( 8 );
-
-    my $head = Gtk3::Box->new( 'horizontal', 8 );
-
-    my $title = Gtk3::Label->new;
-    $title->set_markup( '<b>' . _escape( $info->{ title } ) . '</b>' );
-    $title->set_xalign( 0 );
-    $title->set_hexpand( 1 );
-
-    my $tally = Gtk3::Label->new;
-    $tally->set_markup( sprintf "<span alpha='55%%'>%d available</span>",
-        $count );
-    $tally->set_xalign( 1 );
-
-    $head->pack_start( $title, 1, 1, 0 );
-    $head->pack_start( $tally, 0, 0, 0 );
-
-    my $blurb = Gtk3::Label->new( $info->{ blurb } );
-    $blurb->set_xalign( 0 );
-    $blurb->set_line_wrap( 1 );
-    $blurb->set_max_width_chars( 60 );
-    $blurb->get_style_context->add_class( 'dim-label' );
-
-    # Why this stage runs where it does, said here as well as in the list's
-    # headings. This is the page where somebody is deciding *which part of
-    # the chain* to change, so it is the page where the chain having an order
-    # is the thing they are actually reasoning about -- and unlike a heading
-    # in a narrow pane, there is room for the sentence itself rather than a
-    # tooltip carrying it.
-    my $because = Gtk3::Label->new;
-    $because->set_markup( sprintf q{<span alpha='55%%'><i>%s</i></span>},
-        _escape( $info->{ because } ) );
-    $because->set_xalign( 0 );
-    $because->set_line_wrap( 1 );
-    $because->set_max_width_chars( 60 );
-
-    $box->pack_start( $head,    0, 0, 0 );
-    $box->pack_start( $blurb,   0, 0, 0 );
-    $box->pack_start( $because, 0, 0, 0 );
-
-    return $box;
-}
-
-# ---------------------------------------------------------------------------
-# Page 2: effect
-
-sub _effect_page
-{
-    my ( $self ) = @_;
-
-    my $box = Gtk3::Box->new( 'vertical', 8 );
-    $box->set_border_width( 12 );
-
-    # Which category this is a list of, above the box that can take you out
-    # of it. The first page is a list of nine and the second is a list of
-    # effects, and without this the second page does not say which of the nine
-    # it came from -- so coming back to it after a detour, or arriving at it
-    # by the keyboard, meant guessing from the contents.
-    my $heading = Gtk3::Label->new;
-    $heading->set_xalign( 0 );
-    $box->pack_start( $heading, 0, 0, 0 );
-
     my $search = Gtk3::SearchEntry->new;
-    $search->set_placeholder_text( 'Search effects…' );
-    $box->pack_start( $search, 0, 0, 0 );
-
-    my $scroll = Gtk3::ScrolledWindow->new;
-    $scroll->set_policy( 'never', 'automatic' );
-    $scroll->set_vexpand( 1 );
-
-    my $list = Gtk3::ListBox->new;
-    $list->set_selection_mode( 'single' );
-
-    # Searching looks outside the chosen category, because someone who types
-    # 'scanline' while standing in Colour meant the effect, not the category.
-    # The scope note under the box is what keeps that from being a surprise.
-    $list->set_filter_func(
-        sub {
-            my ( $row ) = @_;
-            return $self->_matches( $row );
-        }
-    );
-
+    $search->set_placeholder_text( 'Search every effect…' );
     $search->signal_connect(
         'search-changed' => sub {
-            $self->{ query } = lc $search->get_text;
-            $list->invalidate_filter;
-            $self->_resync_selection;
-            $self->_note_scope;
+            $self->_search( $search->get_text );
             return;
         }
     );
+    $box->pack_start( $search, 0, 0, 0 );
 
-    $list->signal_connect(
-        'row-selected' => sub {
-            my ( undef, $row ) = @_;
-            $self->{ effect } = $row ? $row->{ effect } : undef;
-            $self->{ assistant }->set_page_complete( $box, $row ? 1 : 0 );
-            return;
-        }
-    );
-
-    # As on the first page: clicking a name picks it, and only a double click
-    # or Enter moves on.
-    $list->set_activate_on_single_click( 0 );
-    $list->signal_connect( 'row-activated' => sub { $self->_next; return } );
-
-    $scroll->add( $list );
-    $box->pack_start( $scroll, 1, 1, 0 );
+    my $split = Gtk3::Box->new( 'horizontal', 12 );
+    $split->pack_start( $self->_tree_pane,   1, 1, 0 );
+    $split->pack_start( $self->_detail_pane, 0, 0, 0 );
+    $box->pack_start( $split, 1, 1, 0 );
 
     my $scope = Gtk3::Label->new;
     $scope->set_xalign( 0 );
@@ -434,156 +310,461 @@ sub _effect_page
     $scope->get_style_context->add_class( 'dim-label' );
     $box->pack_start( $scope, 0, 0, 0 );
 
-    $self->{ effect_heading } = $heading;
-    $self->{ effect_search }  = $search;
-    $self->{ effect_list }    = $list;
-    $self->{ effect_scope }   = $scope;
-    $self->{ effect_page }    = $box;
+    $self->{ effect_search } = $search;
+    $self->{ effect_scope }  = $scope;
+    $self->{ effect_page }   = $box;
 
     return $box;
 }
 
-# Rows for every free effect anywhere are built once; the filter decides which
-# are on screen. Rebuilding the list per category would throw away the
-# selection state Gtk keeps and makes cross-category search impossible.
-sub _fill_effects
+sub _tree_pane
+{
+    my ( $self ) = @_;
+
+    my $store = Gtk3::TreeStore->new(
+        qw(Glib::String Glib::String Glib::Boolean
+            Glib::String Glib::Boolean Glib::String)
+    );
+
+    my $filter = Gtk3::TreeModelFilter->new( $store, undef );
+    $filter->set_visible_column( COL_VISIBLE );
+
+    my $tree = Gtk3::TreeView->new( $filter );
+    $tree->set_headers_visible( 0 );
+
+    # Gtk's own type-ahead would open a second, floating search box over a
+    # page that already has one, and the two would disagree about what was
+    # being looked for.
+    $tree->set_enable_search( 0 );
+
+    my $cell = Gtk3::CellRendererText->new;
+    $cell->set( ypad => 3 );
+
+    # Markup rather than text, so a category can be bold without a second
+    # column or a cell data function. Everything put in that column goes
+    # through _escape on the way, since three of the stage titles contain an
+    # ampersand.
+    $tree->append_column(
+        Gtk3::TreeViewColumn->new_with_attributes(
+            q{}, $cell, markup => COL_MARKUP
+        )
+    );
+
+    $tree->get_selection->set_mode( 'single' );
+    $tree->get_selection->signal_connect(
+        changed => sub { $self->_on_tree_selection; return } );
+
+    # A category has children and opens on a double click, which is Gtk's own
+    # behaviour for a row with an expander and not worth taking over. An
+    # effect has nothing to open, so there the same gesture means "and
+    # continue" -- the shortcut both lists had before this was a tree.
+    $tree->signal_connect(
+        'row-activated' => sub {
+            my ( undef, $path ) = @_;
+            my ( $iter ) = $filter->get_iter( $path );
+            return unless $iter;
+            $self->_next if $filter->get_value( $iter, COL_EFFECT );
+            return;
+        }
+    );
+
+    my $scroll = Gtk3::ScrolledWindow->new;
+    $scroll->set_policy( 'never', 'automatic' );
+    $scroll->set_vexpand( 1 );
+    $scroll->set_hexpand( 1 );
+    $scroll->add( $tree );
+
+    $self->{ store }  = $store;
+    $self->{ filter } = $filter;
+    $self->{ tree }   = $tree;
+
+    return $scroll;
+}
+
+=head2 THE DESCRIPTION IS OF WHATEVER IS SELECTED
+
+Categories and effects are both rows in one tree, so both are things a person
+can click on, and a pane that described one but not the other would teach
+people not to click on categories. Both answer the same three questions: what
+it is called in English, what it is called in a preset, and what it is for.
+
+The internal name is the reason the pane exists at all. It is what C<--set>,
+the preset files and the copied command line use, and the tree shows pretty
+names -- so without it the window and the manual page would be two
+vocabularies for one set of things.
+
+=cut
+
+sub _detail_pane
+{
+    my ( $self ) = @_;
+
+    my $box = Gtk3::Box->new( 'vertical', 6 );
+    $box->set_valign( 'start' );
+
+    # Wide enough for a sentence of prose and no wider: the tree beside it
+    # holds the long titles and is the half that should grow with the window.
+    $box->set_size_request( 300, -1 );
+
+    my $heading = Gtk3::Label->new;
+    $heading->set_xalign( 0 );
+    $heading->set_line_wrap( 1 );
+    $heading->set_max_width_chars( 34 );
+
+    my $key = Gtk3::Label->new;
+    $key->set_xalign( 0 );
+
+    # Selectable, because this is the string that gets typed after --set or
+    # pasted into a preset, and retyping it from a screenshot is how a
+    # spelling goes wrong.
+    $key->set_selectable( 1 );
+
+    my $body = Gtk3::Label->new;
+    $body->set_xalign( 0 );
+    $body->set_line_wrap( 1 );
+    $body->set_max_width_chars( 34 );
+    $body->get_style_context->add_class( 'dim-label' );
+
+    my $foot = Gtk3::Label->new;
+    $foot->set_xalign( 0 );
+    $foot->set_line_wrap( 1 );
+    $foot->set_max_width_chars( 34 );
+
+    $box->pack_start( $heading, 0, 0, 0 );
+    $box->pack_start( $key,     0, 0, 0 );
+    $box->pack_start( $body,    0, 0, 0 );
+    $box->pack_start( $foot,    0, 0, 0 );
+
+    $self->{ detail_heading } = $heading;
+    $self->{ detail_key }     = $key;
+    $self->{ detail_body }    = $body;
+    $self->{ detail_foot }    = $foot;
+
+    return $box;
+}
+
+# The tree is built once. Rebuilding it per search would throw away the
+# expansion state and the selection, which are the two things a search should
+# move rather than lose.
+sub _fill_tree
 {
     my ( $self ) = @_;
 
     return if $self->{ filled };
     $self->{ filled } = 1;
 
-    my $all  = GlitchVape::Registry->all;
-    my $list = $self->{ effect_list };
+    my $store = $self->{ store };
+    my $all   = GlitchVape::Registry->all;
+
+    # Path strings rather than iters: an iter into a TreeStore is only good
+    # until the store changes, and this list outlives every search. The row's
+    # own facts are recorded beside the path so that answering a search is a
+    # walk over plain Perl rather than over the model.
+    my @rows;
 
     for my $stage ( GlitchVape::Registry->stages )
     {
         my $free = $self->{ available }{ $stage } or next;
+        my $info = GlitchVape::Registry->stage_info( $stage );
+
+        my $hay = lc join q{ }, $stage, $info->{ title };
+
+        my $parent = $store->append( undef );
+        $store->set(
+            $parent,                                      COL_MARKUP,
+            '<b>' . _escape( $info->{ title } ) . '</b>', COL_NAME,
+            $stage,                                       COL_EFFECT,
+            0,                                            COL_STAGE,
+            $stage,                                       COL_VISIBLE,
+            1,                                            COL_SEARCH,
+            $hay,
+        );
+
+        push @rows,
+            {
+            path    => $store->get_string_from_iter( $parent ),
+            name    => $stage,
+            stage   => $stage,
+            effect  => 0,
+            search  => $hay,
+            visible => 1,
+            };
 
         for my $name ( @$free )
         {
             my $spec = $all->{ $name };
 
-            my $row = Gtk3::ListBoxRow->new;
-            $row->add( _effect_row( $spec ) );
-            $row->{ effect } = $name;
-            $row->{ stage }  = $stage;
-
-            # Pre-lowercased: the filter runs over every row on every
+            # Pre-lowercased: the search runs over every row on every
             # keystroke, and lc-ing three strings each time is work with a
-            # known answer.
-            $row->{ haystack } = lc join q{ }, $name, $spec->{ title },
+            # known answer. Matching the summary as well as the title and the
+            # key is what lets somebody who knows the picture they want and
+            # somebody who knows the preset key both find it.
+            my $straw = lc join q{ }, $name, $spec->{ title },
                 $spec->{ summary };
 
-            $list->add( $row );
+            my $child = $store->append( $parent );
+            $store->set(
+                $child,                      COL_MARKUP,
+                _escape( $spec->{ title } ), COL_NAME,
+                $name,                       COL_EFFECT,
+                1,                           COL_STAGE,
+                $stage,                      COL_VISIBLE,
+                1,                           COL_SEARCH,
+                $straw,
+            );
+
+            push @rows,
+                {
+                path    => $store->get_string_from_iter( $child ),
+                name    => $name,
+                stage   => $stage,
+                effect  => 1,
+                search  => $straw,
+                visible => 1,
+                };
         }
     }
 
-    $list->show_all;
+    $self->{ rows }  = \@rows;
+    $self->{ total } = scalar grep { $_->{ effect } } @rows;
+
+    # Opened on the first effect of the first category, so Continue does
+    # something from the moment the page is shown. That is only honest
+    # because the choice is visible: the highlighted row is the one Continue
+    # will act on, and the pane beside it says what that row is.
+    $self->_select_first;
+    $self->_note_scope( $self->{ total } );
+
     return;
 }
 
-sub _effect_row
-{
-    my ( $spec ) = @_;
-
-    my $box = Gtk3::Box->new( 'vertical', 2 );
-    $box->set_border_width( 8 );
-
-    my $head = Gtk3::Box->new( 'horizontal', 8 );
-
-    my $title = Gtk3::Label->new;
-    $title->set_markup( '<b>' . _escape( $spec->{ title } ) . '</b>' );
-    $title->set_xalign( 0 );
-    $title->set_hexpand( 1 );
-
-    # The internal name rides along because it is what presets, --set and the
-    # copied command line all use. Someone reading the README needs to be able
-    # to connect the two.
-    my $key = Gtk3::Label->new;
-    $key->set_markup( "<span alpha='45%'><tt>"
-            . _escape( $spec->{ name } )
-            . '</tt></span>' );
-    $key->set_xalign( 1 );
-
-    $head->pack_start( $title, 1, 1, 0 );
-    $head->pack_start( $key,   0, 0, 0 );
-
-    my $summary = Gtk3::Label->new( $spec->{ summary } );
-    $summary->set_xalign( 0 );
-    $summary->set_line_wrap( 1 );
-    $summary->set_max_width_chars( 60 );
-    $summary->get_style_context->add_class( 'dim-label' );
-
-    $box->pack_start( $head,    0, 0, 0 );
-    $box->pack_start( $summary, 0, 0, 0 );
-
-    return $box;
-}
-
-# A row that the filter has just hidden can keep its selection, which would
-# leave Continue pointing at an effect that is no longer on screen. Dropping
-# it lets the list select the first surviving row instead.
-sub _resync_selection
+# Which rows the search leaves on screen. A category survives if any of its
+# effects do, which is what keeps a match from turning up under no heading.
+sub _apply_query
 {
     my ( $self ) = @_;
 
-    my $list = $self->{ effect_list };
-    my $row  = $list->get_selected_row or return;
+    my $query = $self->{ query };
+    my $store = $self->{ store };
+    my $rows  = $self->{ rows } || [];
 
-    return if $self->_matches( $row );
+    my $all = !defined $query || !length $query;
 
-    $list->unselect_row( $row );
+    my ( %want, %any );
+    my $hits = 0;
 
-    my ( $first ) = grep { $self->_matches( $_ ) } $list->get_children;
-    $list->select_row( $first ) if $first;
+    for my $row ( @$rows )
+    {
+        next unless $row->{ effect };
+
+        my $on = $all || index( $row->{ search }, $query ) >= 0 ? 1 : 0;
+
+        $want{ $row->{ path } } = $on;
+        $any{ $row->{ stage } } ||= $on;
+        $hits += $on;
+    }
+
+    $want{ $_->{ path } } = $any{ $_->{ stage } } ? 1 : 0
+        for grep { !$_->{ effect } } @$rows;
+
+    # Written to the model only once every answer is known. Setting a value is
+    # a row-changed, which the filter acts on at once, so interleaving the two
+    # passes would hide a category between deciding about its first effect and
+    # its last.
+    for my $row ( @$rows )
+    {
+        my $on = $want{ $row->{ path } };
+        next if $row->{ visible } == $on;
+
+        $row->{ visible } = $on;
+
+        my ( $iter ) = $store->get_iter_from_string( $row->{ path } );
+        $store->set( $iter, COL_VISIBLE, $on ) if $iter;
+    }
+
+    return $hits;
+}
+
+sub _search
+{
+    my ( $self, $text ) = @_;
+
+    return unless $self->{ filled };
+
+    my $was = $self->{ effect };
+
+    $self->{ query } = lc( $text // q{} );
+
+    my $hits = $self->_apply_query;
+    my $tree = $self->{ tree };
+
+    # A match three rows inside a closed category is not a match anybody can
+    # see. Cleared, the tree goes back to its nine headings, which is the
+    # shape that makes it browsable in the first place.
+    if   ( length $self->{ query } ) { $tree->expand_all }
+    else                             { $tree->collapse_all }
+
+    # Whatever was chosen stays chosen if it survived, so typing one letter
+    # too many and deleting it again lands back where it started. Otherwise
+    # the first surviving effect, so Continue never points off screen.
+    $self->_select_first
+        unless defined $was && $self->_select_effect( $was );
+
+    $self->_note_scope( $hits );
+    return;
+}
+
+sub _select_first
+{
+    my ( $self ) = @_;
+
+    my ( $row ) =
+        grep { $_->{ effect } && $_->{ visible } } @{ $self->{ rows } || [] };
+
+    return 0 unless $row;
+    return $self->_select_effect( $row->{ name } );
+}
+
+=head2 _select_effect( $name )
+
+Select the effect with that internal name, if the search has left it on
+screen. Returns whether it did.
+
+=cut
+
+sub _select_effect
+{
+    my ( $self, $name ) = @_;
+
+    my ( $row ) =
+        grep { $_->{ effect } && $_->{ name } eq $name }
+        @{ $self->{ rows } || [] };
+
+    return 0 unless $row && $row->{ visible };
+
+    my $child = Gtk3::TreePath->new_from_string( $row->{ path } );
+    my $path  = $self->{ filter }->convert_child_path_to_path( $child )
+        or return 0;
+
+    # Ancestors first: selecting a row inside a closed category selects
+    # nothing at all.
+    $self->{ tree }->expand_to_path( $path );
+    $self->{ tree }->get_selection->select_path( $path );
+    $self->{ tree }->scroll_to_cell( $path, undef, 0, 0, 0 );
+
+    return 1;
+}
+
+sub _on_tree_selection
+{
+    my ( $self ) = @_;
+
+    my ( undef, $iter ) = $self->{ tree }->get_selection->get_selected;
+
+    unless ( $iter )
+    {
+        $self->{ effect } = undef;
+        $self->_describe( undef );
+        $self->{ assistant }->set_page_complete( $self->{ effect_page }, 0 );
+        return;
+    }
+
+    my $model  = $self->{ filter };
+    my $name   = $model->get_value( $iter, COL_NAME );
+    my $effect = $model->get_value( $iter, COL_EFFECT ) ? 1 : 0;
+
+    $self->{ stage }  = $model->get_value( $iter, COL_STAGE );
+    $self->{ effect } = $effect ? $name : undef;
+
+    $self->_describe( $name, $effect );
+
+    # A category is a place, not a choice. Selecting one describes it and
+    # stops there, rather than letting Continue arrive at a settings page with
+    # no effect to settle.
+    $self->{ assistant }->set_page_complete( $self->{ effect_page }, $effect );
 
     return;
 }
 
-sub _matches
+sub _describe
 {
-    my ( $self, $row ) = @_;
+    my ( $self, $name, $is_effect ) = @_;
 
-    my $query = $self->{ query };
+    my $heading = $self->{ detail_heading };
+    my $key     = $self->{ detail_key };
+    my $body    = $self->{ detail_body };
+    my $foot    = $self->{ detail_foot };
 
-    if ( defined $query && length $query )
+    unless ( defined $name )
     {
-        return index( $row->{ haystack }, $query ) >= 0;
+        $heading->set_markup( q{} );
+        $key->set_markup( q{} );
+        $body->set_text( 'Choose an effect from the tree.' );
+        $foot->set_markup( q{} );
+        return;
     }
 
-    return 0 unless defined $self->{ stage };
-    return $row->{ stage } eq $self->{ stage };
+    my ( $title, $blurb, $because );
+
+    if ( $is_effect )
+    {
+        my $spec = GlitchVape::Registry->get( $name ) or return;
+        my $info = GlitchVape::Registry->stage_info( $spec->{ stage } );
+
+        $title = $spec->{ title };
+        $blurb = $spec->{ summary };
+
+        # Where it runs, said on the effect as well as on the category,
+        # because a tree can be searched -- and a match arrived at from the
+        # search box has no visible heading above it to have said so.
+        $because = sprintf 'Runs at %s. %s', $info->{ title },
+            $info->{ because };
+    }
+    else
+    {
+        my $info = GlitchVape::Registry->stage_info( $name ) or return;
+
+        $title   = $info->{ title };
+        $blurb   = $info->{ blurb };
+        $because = $info->{ because };
+    }
+
+    $heading->set_markup( '<b>' . _escape( $title ) . '</b>' );
+    $key->set_markup(
+        "<span alpha='45%'><tt>" . _escape( $name ) . '</tt></span>' );
+    $body->set_text( $blurb );
+    $foot->set_markup( sprintf q{<span alpha='55%%'><i>%s</i></span>},
+        _escape( $because ) );
+
+    return;
 }
 
 sub _note_scope
 {
-    my ( $self ) = @_;
+    my ( $self, $hits ) = @_;
 
+    my $label = $self->{ effect_scope } or return;
     my $query = $self->{ query };
-    my $info  = GlitchVape::Registry->stage_info( $self->{ stage } );
-    my $where = $info ? $info->{ title } : 'the whole chain';
+    my $total = $self->{ total } // 0;
 
-    my $heading = $self->{ effect_heading };
-    my $label   = $self->{ effect_scope };
-
-    # The two say different things and have to keep agreeing: the heading is
-    # where you are, the note under the list is what that place is for. A
-    # search moves you somewhere else, so both have to say so -- a heading
-    # still naming one category over a list showing all of them is worse than
-    # no heading at all.
-    if ( defined $query && length $query )
+    unless ( defined $query && length $query )
     {
-        $heading->set_markup( '<b>Every category</b>' );
-
-        $label->set_text( "Searching every category. Clear the box to go "
-                . "back to $where." );
+        $label->set_text(
+            sprintf '%d effects to add, ' . 'in the order the chain runs them.',
+            $total
+        );
         return;
     }
 
-    $heading->set_markup( '<b>' . _escape( $where ) . '</b>' );
+    $hits = 0 unless defined $hits;
 
-    $label->set_text( $info ? $info->{ blurb } : q{} );
+    $label->set_text(
+        $hits
+        ? sprintf( '%d of %d effects match. Clear the box for all of them.',
+            $hits, $total )
+        : 'Nothing matches. Clear the box to see every effect again.'
+    );
+
     return;
 }
 
@@ -1114,10 +1295,7 @@ sub _prepare
 
     if ( $index == PAGE_EFFECT )
     {
-        $self->_fill_effects;
-        $self->{ effect_list }->invalidate_filter;
-        $self->_resync_selection;
-        $self->_note_scope;
+        $self->_fill_tree;
         $self->{ effect_search }->grab_focus;
         return;
     }
@@ -1160,8 +1338,8 @@ __END__
 
 =head1 SEE ALSO
 
-L<GlitchVape::Registry> for the stage titles the first page is built from,
-L<GlitchVape::GUI::Params> for the controls on the third, and
+L<GlitchVape::Registry> for the stage titles the tree is built from,
+L<GlitchVape::GUI::Params> for the controls on the second page, and
 L<GlitchVape::GUI::Render> for why the preview happens in a child process.
 
 =cut

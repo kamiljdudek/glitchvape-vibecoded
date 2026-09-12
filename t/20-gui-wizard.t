@@ -26,7 +26,7 @@ use GlitchVape::GUI::State ();
 use GlitchVape::GUI::Wizard;
 
 # ---------------------------------------------------------------------------
-# The taxonomy the first page is built from
+# The taxonomy the tree is built from
 
 {
     my @stages = GlitchVape::Registry->stages;
@@ -49,7 +49,7 @@ use GlitchVape::GUI::Wizard;
         'the old stage names are gone rather than aliased';
 }
 
-# Titles have to be unique, or the effect list shows two rows a person cannot
+# Titles have to be unique, or the tree shows two rows a person cannot
 # tell apart.
 {
     my $all = GlitchVape::Registry->all;
@@ -66,7 +66,7 @@ use GlitchVape::GUI::Wizard;
 }
 
 # ---------------------------------------------------------------------------
-# Walking the three pages
+# Walking the two pages
 
 sub wizard
 {
@@ -85,6 +85,45 @@ sub wizard
     );
 
     return ( $wizard, \@applied, $state );
+}
+
+# The tree keeps a plain-Perl record of its rows beside the model, so every
+# question below is asked of that rather than by walking a GtkTreeModel.
+sub rows { return @{ $_[ 0 ]->{ rows } || [] } }
+
+sub visible_effects
+{
+    my ( $wizard ) = @_;
+    return map { $_->{ name } }
+        grep { $_->{ effect } && $_->{ visible } } rows( $wizard );
+}
+
+sub visible_categories
+{
+    my ( $wizard ) = @_;
+    return map { $_->{ name } }
+        grep { !$_->{ effect } && $_->{ visible } } rows( $wizard );
+}
+
+# Selecting a category by name, which the wizard has no reason to offer
+# itself: nothing in it selects one except a person clicking on it.
+sub select_category
+{
+    my ( $wizard, $stage ) = @_;
+
+    my ( $row ) =
+        grep { !$_->{ effect } && $_->{ name } eq $stage } rows( $wizard );
+    return 0 unless $row && $row->{ visible };
+
+    my $path =
+        $wizard->{ filter }->convert_child_path_to_path(
+        Gtk3::TreePath->new_from_string( $row->{ path } ) )
+        or return 0;
+
+    $wizard->{ tree }->expand_to_path( $path );
+    $wizard->{ tree }->get_selection->select_path( $path );
+
+    return 1;
 }
 
 # A stand-in for GlitchVape::GUI::Render. The real one forks a child and
@@ -111,63 +150,69 @@ sub wizard
     ok $wizard, 'the wizard opens when there are effects to add';
 
     my $assistant = $wizard->{ assistant };
-    is $assistant->get_n_pages, 3, 'three pages';
-    is $assistant->get_page_type( $assistant->get_nth_page( 2 ) ), 'confirm',
+    is $assistant->get_n_pages, 2, 'two pages: choose one, then adjust it';
+    is $assistant->get_page_type( $assistant->get_nth_page( 1 ) ), 'confirm',
         'the last page is the one with Apply on it';
 
-    # GtkListBox selects its first row on focus, so Continue is live from the
-    # start rather than looking broken until something is clicked.
+    # Every category and every effect, in one tree, in the order the chain
+    # runs them. The categories are still the pipeline stages: where an
+    # effect runs and what it is for are the same fact.
+    my @categories =
+        map { $_->{ name } } grep { !$_->{ effect } } rows( $wizard );
+
+    is_deeply \@categories, [ GlitchVape::Registry->stages ],
+        'the tree has one category per stage, in pipeline order';
+
+    is scalar( grep { $_->{ effect } } rows( $wizard ) ),
+        scalar( GlitchVape::Registry->names ),
+        'and every effect hangs off one of them';
+
+    for my $row ( grep { $_->{ effect } } rows( $wizard ) )
+    {
+        next
+            if GlitchVape::Registry->get( $row->{ name } )->{ stage } eq
+            $row->{ stage };
+        fail "$row->{ name } is filed under $row->{ stage }";
+    }
+
+    # The tree opens with the first effect chosen, so Continue does something
+    # from the moment the page is shown -- and the pane beside it says what
+    # that something is, which is what makes that honest rather than a trap.
     ok $assistant->get_page_complete( $assistant->get_nth_page( 0 ) ),
-        'the category page opens with a category chosen';
-    is $wizard->{ stage }, 'format', 'and it is the first one in the chain';
+        'the tree opens with an effect already chosen';
+    ok defined $wizard->{ effect }, 'and the wizard knows which';
 
-    # Page 1: pick Signal & Tape.
-    my ( $row ) =
-        grep { $_->{ stage } eq 'signal' }
-        $wizard->{ category_list }->get_children;
-    ok $row, 'the signal category is offered';
+    # Searching prunes the tree rather than moving off it. Nothing is scoped
+    # to a category, so 'scanline' finds the effect from wherever you are.
+    $wizard->_search( 'scanline' );
 
-    $wizard->{ category_list }->select_row( $row );
-    is $wizard->{ stage }, 'signal', 'selecting a category records it';
-    ok $assistant->get_page_complete( $assistant->get_nth_page( 0 ) ),
-        'a chosen category completes the page';
+    is_deeply [ visible_effects( $wizard ) ], [ 'scanlines' ],
+        'searching looks through every category at once';
 
-    # Page 2: the effect list is filtered to that category.
-    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_EFFECT );
+    is $wizard->{ effect }, 'scanlines',
+        'and the one surviving match is what Continue now points at';
 
-    my @visible =
-        grep { $wizard->_matches( $_ ) } $wizard->{ effect_list }->get_children;
+    is_deeply [ visible_categories( $wizard ) ], [ 'optics' ],
+        'a category with no surviving effect is pruned with them';
 
-    is_deeply [ sort map { $_->{ effect } } @visible ],
-        [ qw(dropout ghost head_switch interlace static tracking vhold wave) ],
-        'the list shows exactly the chosen category';
-
-    # Search reaches outside it, which is the point of having a search box.
-    $wizard->{ query } = 'scanline';
-    my @found =
-        grep { $wizard->_matches( $_ ) } $wizard->{ effect_list }->get_children;
-    is_deeply [ map { $_->{ effect } } @found ], [ 'scanlines' ],
-        'search crosses categories';
-
-    # Matching is over the title and summary as well as the internal name.
-    $wizard->{ query } = 'aberration';
-    @found =
-        grep { $wizard->_matches( $_ ) } $wizard->{ effect_list }->get_children;
-    is_deeply [ map { $_->{ effect } } @found ], [ 'chroma_shift' ],
+    # Matching is over the title and the summary as well as the internal
+    # name, so someone who knows the picture they want and someone who knows
+    # the preset key both find it.
+    $wizard->_search( 'aberration' );
+    is_deeply [ visible_effects( $wizard ) ], [ 'chroma_shift' ],
         'search matches the presentable title, not just the key';
 
-    $wizard->{ query } = 'wobble';
-    @found =
-        grep { $wizard->_matches( $_ ) } $wizard->{ effect_list }->get_children;
-    is_deeply [ map { $_->{ effect } } @found ], [ 'wave' ],
-        'the internal name need not be known to find the effect';
+    $wizard->_search( 'wobble' );
+    is_deeply [ visible_effects( $wizard ) ], [ 'wave' ],
+        'and the summary, so the internal name need not be known';
 
-    $wizard->{ query } = q{};
+    $wizard->_search( q{} );
+    is scalar( visible_effects( $wizard ) ),
+        scalar( GlitchVape::Registry->names ),
+        'clearing the box brings every effect back';
 
-    # Page 3: parameters, seeded with the declared defaults.
-    my ( $wave ) = grep { $_->{ effect } eq 'wave' }
-        $wizard->{ effect_list }->get_children;
-    $wizard->{ effect_list }->select_row( $wave );
+    # Page 2: parameters, seeded with the declared defaults.
+    ok $wizard->_select_effect( 'wave' ), 'an effect is chosen from the tree';
     is $wizard->{ effect }, 'wave', 'selecting an effect records it';
 
     $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
@@ -176,7 +221,7 @@ sub wizard
         GlitchVape::Registry->resolve_params( 'wave', {} ),
         'the settings page starts at the declared defaults';
 
-    ok $assistant->get_page_complete( $assistant->get_nth_page( 2 ) ),
+    ok $assistant->get_page_complete( $assistant->get_nth_page( 1 ) ),
         'Apply is available as soon as the settings page is reached';
 
     # Apply hands the caller a name and a resolved parameter set.
@@ -221,14 +266,7 @@ sub wizard
 {
     my ( $wizard, undef, $state ) = wizard( present => [ 'grain' ] );
 
-    my ( $row ) = grep { $_->{ stage } eq 'optics' }
-        $wizard->{ category_list }->get_children;
-    $wizard->{ category_list }->select_row( $row );
-    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_EFFECT );
-
-    my ( $bloom ) = grep { $_->{ effect } eq 'bloom' }
-        $wizard->{ effect_list }->get_children;
-    $wizard->{ effect_list }->select_row( $bloom );
+    ok $wizard->_select_effect( 'bloom' ), 'an effect is chosen';
     $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_SETTINGS );
 
     $wizard->_set_param( 'threshold', 0.9 );
@@ -252,17 +290,14 @@ sub wizard
 {
     my ( $wizard ) = wizard( present => [ 'scanlines' ] );
 
-    my ( $row ) = grep { $_->{ stage } eq 'optics' }
-        $wizard->{ category_list }->get_children;
-    $wizard->{ category_list }->select_row( $row );
-    $wizard->_prepare( GlitchVape::GUI::Wizard::PAGE_EFFECT );
-
-    my @offered = map { $_->{ effect } }
-        grep { $wizard->_matches( $_ ) } $wizard->{ effect_list }->get_children;
+    my @offered = visible_effects( $wizard );
 
     ok !( grep { $_ eq 'scanlines' } @offered ),
         'an effect already in the pipeline is not offered twice';
-    ok( ( grep { $_ eq 'bloom' } @offered ), 'the rest of the category is' );
+    ok( ( grep { $_ eq 'bloom' } @offered ), 'the rest of its category is' );
+
+    ok !$wizard->_select_effect( 'scanlines' ),
+        'and it cannot be selected by name either';
 
     $wizard->_finish;
 }
@@ -435,16 +470,17 @@ sub wizard
 }
 
 # ---------------------------------------------------------------------------
-# The effect page says which category it is a list of
+# The pane beside the tree describes whatever is selected
 
-# The first page is a list of nine categories and the second is a list of
-# effects, and the second used to say nothing about which of the nine it came
-# from -- so arriving there by the keyboard, or coming back after a detour,
-# meant working it out from the contents.
+# Both kinds of row answer the same three questions -- the English name, the
+# internal name and what it is for -- because both are things a person can
+# click on, and a pane that described effects but not categories would teach
+# people not to click on categories.
 #
-# The heading and the note under the list say different things and have to
-# keep agreeing: the heading is where you are, the note is what that place is
-# for. A search moves you out of the category, so both have to say so.
+# The internal name is the reason the pane exists. It is what --set, the
+# preset files and the copied command line use, and the tree shows pretty
+# names, so without it the window and the manual page would be two
+# vocabularies for one set of things.
 {
     my ( $wizard ) = wizard();
 
@@ -452,37 +488,87 @@ sub wizard
     {
         my $info = GlitchVape::Registry->stage_info( $stage );
 
-        $wizard->{ stage } = $stage;
-        $wizard->{ query } = q{};
-        $wizard->_note_scope;
+        ok select_category( $wizard, $stage ), "$stage can be selected";
 
-        is $wizard->{ effect_heading }->get_text, $info->{ title },
-            "the heading names $stage by the title the first page used";
+        is $wizard->{ detail_heading }->get_text, $info->{ title },
+            "the pane names $stage by its presentable title";
+        is $wizard->{ detail_key }->get_text, $stage,
+            'and gives the internal name beside it';
+        is $wizard->{ detail_body }->get_text, $info->{ blurb },
+            "and still says what $stage is for";
+        is $wizard->{ detail_foot }->get_text, $info->{ because },
+            'and why it runs where it does';
 
-        is $wizard->{ effect_scope }->get_text, $info->{ blurb },
-            "and the note under the list still says what $stage is for";
+        # A category is a heading, not a choice: Continue has nothing to
+        # settle until an effect under it is picked.
+        ok !defined $wizard->{ effect },
+            'selecting a category chooses no effect';
+        ok !$wizard->{ assistant }
+            ->get_page_complete( $wizard->{ assistant }->get_nth_page( 0 ) ),
+            'so the page is not complete on a category alone';
     }
 
     # An ampersand in three of those titles, and the heading is markup.
-    $wizard->{ stage } = 'optics';
-    $wizard->{ query } = q{};
-    $wizard->_note_scope;
-
-    like $wizard->{ effect_heading }->get_text, qr/&/,
+    select_category( $wizard, 'optics' );
+    like $wizard->{ detail_heading }->get_text, qr/&/,
         'a title with an ampersand in it survives being set as markup';
 
-    # Searching looks outside the category, so the heading stops claiming one.
-    $wizard->{ query } = 'scan';
-    $wizard->_note_scope;
+    for my $name ( GlitchVape::Registry->names )
+    {
+        my $spec = GlitchVape::Registry->get( $name );
 
-    isnt $wizard->{ effect_heading }->get_text,
-        GlitchVape::Registry->stage_info( 'optics' )->{ title },
-        'while searching, the heading no longer names one category';
+        $wizard->_select_effect( $name );
 
-    like $wizard->{ effect_scope }->get_text, qr/Screen & Optics/,
-        'and the note names the one to clear the box to get back to';
+        is $wizard->{ detail_heading }->get_text, $spec->{ title },
+            "the pane names $name by its presentable title";
+        is $wizard->{ detail_key }->get_text, $name,
+            'and gives the internal name, which is what a preset writes';
+        is $wizard->{ detail_body }->get_text, $spec->{ summary },
+            'and says what it does';
 
-    $wizard->{ assistant }->destroy;
+        # Said on the effect as well as on its category, because an effect
+        # arrived at through the search box has no heading above it.
+        my $where =
+            GlitchVape::Registry->stage_info( $spec->{ stage } )->{ title };
+
+        ok index( $wizard->{ detail_foot }->get_text, $where ) >= 0,
+            'and where in the chain it runs';
+    }
+
+    $wizard->_finish;
+}
+
+# ---------------------------------------------------------------------------
+# The note under the tree counts what the search left
+
+# The old pair of pages needed two sentences to explain that a search looked
+# outside the category being browsed. A tree is not in a category, so all
+# that is left to say is how much of it survived -- and, when nothing did,
+# that clearing the box is the way back.
+{
+    my ( $wizard ) = wizard();
+    my $total = scalar GlitchVape::Registry->names;
+
+    like $wizard->{ effect_scope }->get_text, qr/\b$total\b/,
+        'with an empty box the note counts every effect there is to add';
+
+    $wizard->_search( 'scan' );
+    like $wizard->{ effect_scope }->get_text, qr/of $total effects match/,
+        'searching, it counts the matches against that same total';
+
+    $wizard->_search( 'no such effect' );
+    is_deeply [ visible_effects( $wizard ) ], [],
+        'a search matching nothing prunes the tree to nothing';
+    ok !defined $wizard->{ effect },
+        'and leaves no effect chosen, so Continue cannot act on one';
+    like $wizard->{ effect_scope }->get_text, qr/Clear the box/,
+        'and the note says how to get back';
+
+    $wizard->_search( q{} );
+    ok defined $wizard->{ effect },
+        'clearing it chooses the first surviving effect again';
+
+    $wizard->_finish;
 }
 
 # ---------------------------------------------------------------------------
@@ -500,10 +586,10 @@ sub wizard
         GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
 
     my $rendered = 0;
-    my $real     = \&GlitchVape::GUI::_apply;    ## no critic (ProtectPrivateVars)
+    my $real     = \&GlitchVape::GUI::_apply;  ## no critic (ProtectPrivateVars)
 
     {
-        no warnings 'redefine';                  ## no critic (ProhibitNoWarnings)
+        no warnings 'redefine';                ## no critic (ProhibitNoWarnings)
         ## no critic (ProhibitNoStrict)
         no strict 'refs';
         *{ 'GlitchVape::GUI::_apply' } = sub { $rendered++; return };

@@ -65,7 +65,47 @@ sub one_seek
         ? $crossings * GlitchVape::Drive::RATE / ( 2 * ( $ends - 10 ) )
         : 0;
 
-    return ( $ends, $hz, $peak );
+    return ( $ends, $hz, $peak, \@sample );
+}
+
+# How much of a waveform's energy sits in one band. Six probe frequencies
+# spread across it rather than a transform: what is being asked is which end
+# of the spectrum a seek lives at, and that does not need a thousand lines of
+# FFT to answer.
+sub band_energy
+{
+    my ( $wave, $lo, $hi ) = @_;
+
+    my $pi   = 4 * atan2 1, 1;
+    my $rate = GlitchVape::Drive::RATE;
+
+    # The window that actually holds the seek. Taking the whole buffer would
+    # divide every answer by the same silence, but it would also let the
+    # longest seek's tail outweigh the blow that started it.
+    my $tail = 0;
+    for my $n ( 0 .. $#$wave )
+    {
+        $tail = $n if abs $wave->[ $n ] > 0.002;
+    }
+
+    my $total = 0;
+
+    for my $k ( 0 .. 5 )
+    {
+        my $hz = $lo * ( $hi / $lo )**( $k / 5 );
+
+        my ( $re, $im ) = ( 0, 0 );
+        for my $n ( 0 .. $tail )
+        {
+            my $turn = 2 * $pi * $hz * $n / $rate;
+            $re += $wave->[ $n ] * cos $turn;
+            $im -= $wave->[ $n ] * sin $turn;
+        }
+
+        $total += $re * $re + $im * $im;
+    }
+
+    return $total / 6;
 }
 
 # ---------------------------------------------------------------------------
@@ -118,7 +158,7 @@ my $REAL_CLICK = \&GlitchVape::Geiger::_click;
 # for the wrong reason -- two empty buffers are equal whatever the seed was.
 sub record_clicks
 {
-    no warnings 'redefine';    ## no critic (TestingAndDebugging::ProhibitNoWarnings)
+    no warnings 'redefine';    ## no critic (ProhibitNoWarnings)
     *GlitchVape::Geiger::_click = sub {
         push @CLICKS, $_[ 1 ] / GlitchVape::Geiger::RATE;
         return;
@@ -128,7 +168,7 @@ sub record_clicks
 
 sub real_clicks
 {
-    no warnings 'redefine';    ## no critic (TestingAndDebugging::ProhibitNoWarnings)
+    no warnings 'redefine';    ## no critic (ProhibitNoWarnings)
     *GlitchVape::Geiger::_click = $REAL_CLICK;
     return;
 }
@@ -300,7 +340,7 @@ sub thud_times
     @THUDS = ();
 
     {
-        no warnings 'redefine';    ## no critic (TestingAndDebugging::ProhibitNoWarnings)
+        no warnings 'redefine';    ## no critic (ProhibitNoWarnings)
         ## no critic (Variables::ProtectPrivateVars)
         local *GlitchVape::Heart::_thud = sub {
             push @THUDS, $_[ 1 ] / GlitchVape::Heart::RATE;
@@ -579,6 +619,140 @@ sub split_gaps
 
     is $fanless, GlitchVape::Wav::silence( int( GlitchVape::Drive::RATE * 3 ) ),
         'no fan and no work is a drive that is switched off';
+}
+
+# ---------------------------------------------------------------------------
+# The rattle is the spindle's, so it is periodic and it follows the rpm
+
+# What told everybody this was a keyboard. The gaps inside a burst used to be
+# drawn uniformly from twelve to sixty-seven milliseconds, which is both the
+# range and the irregularity of somebody typing. A drive cannot choose them:
+# the data goes past the head at a fixed rate, so the wait for the next sector
+# is a whole number of revolutions plus however much of one it takes to
+# arrive.
+# The gaps inside one drive's bursts, measured in revolutions of its own
+# spindle and sorted. Whole revolutions is the claim; what comes back is how
+# nearly whole each one is.
+sub burst_turns
+{
+    my ( $rpm ) = @_;
+
+    my $turn = 60 / $rpm;
+
+    my $seek = GlitchVape::Drive::seeks(
+        {
+            seconds  => 60,
+            activity => 0.5,
+            travel   => 0.3,
+            rpm      => $rpm,
+            seed     => 11,
+        },
+        60
+    );
+
+    # Inside a burst only: the quiet between bursts is a request arriving,
+    # which has nothing to do with where the platter has got to.
+    my @turns =
+        sort { $a <=> $b }
+        map { $_ / $turn } grep { $_ < 4 * $turn } seek_gaps( $seek );
+
+    return @turns;
+}
+
+{
+    my %median;
+
+    for my $rpm ( 3600, 5400, 15_000 )
+    {
+        my @turns = burst_turns( $rpm );
+
+        cmp_ok scalar @turns, '>', 40, "$rpm rpm gives bursts to measure";
+
+        # Each gap is a whole number of turns plus a fraction of one, and that
+        # fraction is the sector coming round. Landing in the low part of a
+        # turn means the gaps fall in bands rather than in a smear, which is
+        # the difference between a rattle and a hand.
+        #
+        # Not all of them, and the handful that miss are the point of the word
+        # "inside": the quiet between bursts is exponential, so a few of those
+        # land under four revolutions and are counted here with no way to tell
+        # them apart. They are the noise floor of the question rather than a
+        # gap the drive chose.
+        my $banded = grep { $_ - int $_ < 0.4 } @turns;
+
+        cmp_ok $banded, '>', 0.95 * scalar @turns,
+            "at $rpm rpm the gaps inside a burst are whole revolutions apart"
+            or diag sprintf '%d of %d', $banded, scalar @turns;
+
+        $median{ $rpm } = $turns[ $#turns / 2 ];
+
+        cmp_ok $median{ $rpm }, '>', 1,
+            "and the usual one at $rpm rpm is a revolution or more";
+        cmp_ok $median{ $rpm }, '<', 4, 'and a few at most';
+    }
+
+    # Which makes the spindle the one setting that reaches the timing as well
+    # as the pitch: a rack drive clatters where a quiet one chatters.
+    cmp_ok $median{ 15_000 } * 60 / 15_000, '<',
+        0.5 * $median{ 5400 } * 60 / 5400,
+        'a drive that spins faster rattles faster';
+}
+
+# ---------------------------------------------------------------------------
+# A seek is not a keystroke
+
+# The complaint this was fixed for, and the measurement that found it. A seek
+# used to put eighty-six per cent of its energy between one and four kilohertz
+# and four per cent below five hundred, which is the spectrum of a small hard
+# plastic thing being struck -- a key, a pen, a mouse button. No amount of
+# getting the pattern around it right survives that, because what says
+# "keyboard" is the sound of one press.
+#
+# Two things were wrong and each has its own question below. The first is
+# asked as a comparison rather than against a figure: what matters is that a
+# seek has a body under it, not that any particular band holds any particular
+# share of it.
+sub has_more_body_than_click
+{
+    my ( $distance ) = @_;
+
+    my ( undef, undef, undef, $wave ) = one_seek( $distance );
+
+    my $body  = band_energy( $wave, 120,  600 );
+    my $click = band_energy( $wave, 1500, 5000 );
+
+    return cmp_ok $body, '>', $click,
+        "a seek of $distance has more body in it than click"
+        or diag sprintf 'body %.3g, click %.3g', $body, $click;
+}
+
+# The other half. The resonator's pole radius was picked and its decay taken
+# as whatever that came to, which was a millisecond and a quarter -- under a
+# fifth of the move it was supposed to outlast, so every seek stopped dead the
+# instant the head arrived. A struck box does not do that.
+sub rings_past_the_move
+{
+    my ( $distance ) = @_;
+
+    my $move =
+        GlitchVape::Drive::SEEK_MIN_S +
+        GlitchVape::Drive::SEEK_SPAN_S * sqrt $distance;
+
+    my ( $ends ) = one_seek( $distance );
+    my $heard = ( $ends - 10 ) / GlitchVape::Drive::RATE;
+
+    return cmp_ok $heard, '>', 3 * $move,
+        "a seek of $distance is still audible well after the head lands"
+        or diag sprintf 'move %.1f ms, heard for %.1f ms', 1000 * $move,
+        1000 * $heard;
+}
+
+{
+    for my $distance ( 0.02, 0.5, 1 )
+    {
+        has_more_body_than_click( $distance );
+        rings_past_the_move( $distance );
+    }
 }
 
 done_testing;
