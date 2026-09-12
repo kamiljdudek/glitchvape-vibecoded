@@ -302,8 +302,77 @@ sub select_effect
     my ( $box ) = $row->get_children;
     my @buttons = grep { $_->isa( 'Gtk3::Button' ) } $box->get_children;
 
-    is scalar @buttons, 1,
-        'and carries one button, the minus, having lost its Edit';
+    is scalar @buttons, 2,
+        'and carries Save and the minus, having lost its Edit';
+
+    $gui->{ audio }   = undef;
+    $gui->{ animate } = 0;
+    $gui->{ left_stack }->set_visible_child_name( 'image' );
+    $gui->_sync_actions;
+}
+
+# ---------------------------------------------------------------------------
+# A generated track can be written out from its own row
+
+# It was always possible -- reopen the dialog it was made in and press the
+# Save there -- but that is a window and three gestures for a question about
+# one track that changes nothing. Beside the minus, because that is where the
+# things you may do to a row live, and to the left of it, because Remove is
+# the one that is hard to take back.
+#
+# The buttons are told apart by what they say rather than by their icons:
+# an icon name is a theme's business, and the tooltip is the claim being made
+# to the person reading it.
+sub row_buttons
+{
+    my ( $row ) = @_;
+
+    my ( $box ) = $row->get_children;
+    return grep { $_->isa( 'Gtk3::Button' ) } $box->get_children;
+}
+
+{
+    $gui->{ animate } = 1;
+    $gui->{ audio }   = {
+        path      => '/somewhere/song.wav',
+        start     => 0,
+        end       => 12,
+        generated => [ { kind => 'drive', seconds => 20 } ],
+    };
+
+    $gui->{ left_stack }->set_visible_child_name( 'soundtrack' );
+    $gui->_sync_actions;
+
+    my ( $file, $made ) = $gui->{ audio_list }->get_children;
+
+    ok $file && $made, 'the file and the generated track each have a row';
+
+    my @on_made = row_buttons( $made );
+
+    is scalar @on_made, 2, 'a generated track carries two buttons';
+    like $on_made[ 0 ]->get_tooltip_text, qr/save/i,
+        'Save is the left of the pair';
+    like $on_made[ 1 ]->get_tooltip_text, qr/remove/i,
+        'and the minus the right, so the destructive one is the far one';
+
+    # The file row deliberately has no Save. It is already a file on
+    # somebody's disk, and what the mix does to it -- the crop, the filters,
+    # the gain -- belongs to the render rather than to the track, so a button
+    # there would either write out a copy of something they already have or
+    # quietly mean what the word does not say.
+    my @on_file = row_buttons( $file );
+
+    is scalar @on_file, 1, 'the opened file carries only the minus';
+    like $on_file[ 0 ]->get_tooltip_text, qr/remove/i, 'which is what it is';
+
+    # A stale index must not reach the chooser. Each button closes over the
+    # position its track had when the list was built, and a removal between
+    # the two would otherwise ask where to put nothing -- which is a modal
+    # window over an answer nobody can give.
+    my @nothing = $gui->_save_generated( 99 );
+
+    is_deeply \@nothing, [],
+        'saving a track that is no longer in the mix does nothing at all';
 
     $gui->{ audio }   = undef;
     $gui->{ animate } = 0;

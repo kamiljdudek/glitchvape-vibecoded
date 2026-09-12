@@ -469,16 +469,36 @@ sub _toggle_play
     return;
 }
 
-# Write the track out on its own. At full length, not the audition cap: the
-# cap is there so that pressing Play does not commit you to four minutes, and
-# somebody asking for a file wants the file they configured.
-sub _save_track
+=head2 save( %arg )
+
+    parent   => Gtk3::Window
+    spec     => one generated track
+    before   => sub {}, run once the path is settled and before the write
+    on_done  => sub { my ( $path ) = @_ }
+    on_error => sub { my ( $message ) = @_ }
+
+Asks where to put one generated track and writes it there. Returns the path,
+or nothing if the chooser was dismissed or the write failed.
+
+At full length, not the audition cap: the cap is there so that pressing Play
+does not commit you to four minutes, and somebody asking for a file wants the
+file they configured.
+
+A package function rather than a method, because the dialog is not the only
+place a track can be saved from. A track already in the mix has the same
+button on its row in the main window, and "ask where, then render there" is
+one thing -- the same chooser, the same default name, the same overwrite
+warning -- rather than two that would drift.
+
+=cut
+
+sub save
 {
-    my ( $self ) = @_;
+    my ( %arg ) = @_;
 
-    my $spec = $self->spec or return;
+    my $spec = $arg{ spec } or return undef;
 
-    my $chooser = Gtk3::FileChooserDialog->new( 'Save track', $self->{ dialog },
+    my $chooser = Gtk3::FileChooserDialog->new( 'Save track', $arg{ parent },
         'save', 'Cancel', 'cancel', 'Save', 'accept' );
     $chooser->set_do_overwrite_confirmation( 1 );
     $chooser->set_current_name( sprintf '%s.wav',
@@ -488,12 +508,9 @@ sub _save_track
     my $path   = $chooser->get_filename;
     $chooser->destroy;
 
-    return unless $answer eq 'accept' && defined $path;
+    return undef unless $answer eq 'accept' && defined $path;
 
-    # Stopped first: the player holds the scratch file open, and on a slow
-    # disk writing a long track underneath a running pipeline is asking for
-    # the two to meet.
-    $self->{ player }->stop if $self->{ player }->playing;
+    $arg{ before }->() if $arg{ before };
 
     local $@;
     my $ok = eval {
@@ -503,11 +520,42 @@ sub _save_track
 
     unless ( $ok )
     {
-        $self->_report( $@ || 'the track could not be written' );
-        return;
+        $arg{ on_error }->( $@ || 'the track could not be written' )
+            if $arg{ on_error };
+        return undef;
     }
 
-    $self->{ hint }->set_text( "Saved $path" );
+    $arg{ on_done }->( $path ) if $arg{ on_done };
+
+    return $path;
+}
+
+sub _save_track
+{
+    my ( $self ) = @_;
+
+    my $spec = $self->spec or return;
+
+    save(
+        parent => $self->{ dialog },
+        spec   => $spec,
+
+        # Stopped first: the player holds the scratch file open, and on a slow
+        # disk writing a long track underneath a running pipeline is asking
+        # for the two to meet.
+        before => sub {
+            $self->{ player }->stop if $self->{ player }->playing;
+            return;
+        },
+        on_done => sub {
+            $self->{ hint }->set_text( "Saved $_[ 0 ]" );
+            return;
+        },
+        on_error => sub {
+            $self->_report( $_[ 0 ] );
+            return;
+        },
+    );
 
     return;
 }

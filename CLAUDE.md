@@ -7,7 +7,7 @@ without noticing, and how each of them is checked.
 
 ## What it is
 
-A Perl image pipeline that puts a photograph through a chain of forty-five
+A Perl image pipeline that puts a photograph through a chain of forty-six
 VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Pure Perl
 apart from the effects, which shell out to ImageMagick, and the animated
 writers, which shell out to ffmpeg.
@@ -21,7 +21,7 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 |---|---|
 | `bin/` | `glitchvape` (CLI), `glitchvape-batch`, `glitchvape-gui` |
 | `lib/GlitchVape.pm` | the façade — `render()`, which every front end calls |
-| `lib/GlitchVape/Effect/*.pm` | the forty-five effects, grouped by theme not by stage |
+| `lib/GlitchVape/Effect/*.pm` | the forty-six effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
@@ -361,6 +361,18 @@ says what it does and this says what else was tried.
   a real Cancel and only commits on Add, so the argument that turned the
   effect settings into a popover does not transfer to it.
 
+  A generated row does keep a Save beside its minus, which is not a third
+  action bar button for the same reason Remove is not one: both are questions
+  about *that row* rather than about the page, and neither needs anything
+  selected first. Writing a track out was always possible — reopen the dialog
+  it was made in, press the Save there — but that is a window and three
+  gestures for something that changes nothing. The chooser and the write are
+  `GUI::Generated::save`, called from both places, so the default filename and
+  what lands on disk cannot come to differ between them. The opened *file* row
+  has no Save: it is already a file on somebody's disk, and what the mix does
+  to it — the crop, the filters, the gain — belongs to the render rather than
+  to the track.
+
 - **Choosing a category and choosing an effect were a page each.** That made
   the category a decision in its own right: you committed to one of nine
   before seeing anything in it, and comparing two effects in different
@@ -541,9 +553,9 @@ than mixing through each other, because mixed channel by channel they meet in
 the middle and the frame collapses to one colour. Half a slider being the
 worst-looking place on it is not a control anybody can use.
 
-Thirteen effects have no animation and are meant not to: `downsample`,
-`curvature`, `grille`, `vignette` and `maximised` describe how the picture is
-made rather than what is happening to it, and `palette`, `posterize`,
+Fourteen effects have no animation and are meant not to: `crop`,
+`downsample`, `curvature`, `grille`, `vignette` and `maximised` describe how
+the picture is made rather than what is happening to it, and `palette`, `posterize`,
 `quantize` and `deepfry` would have to animate the *number* of levels or
 generations, which reads as strobing rather than as motion. `grain`,
 `dropout`, `head_switch` and `stars` need no setting because they already
@@ -580,6 +592,23 @@ anything at all, in three different ways:
 The lesson each of those has in common: **a slider that has stopped working
 looks exactly like a slider set to a value that does nothing**, and no still
 and no single frame can tell them apart.
+
+The same lesson has a still-picture half, and `pixelsort` was carrying it. Its
+`min_run` and `max_run` were counts of pixels — 2 to 4000, and 0 to 8000 with
+0 meaning "no limit". On a 720-pixel preview every `max_run` above 720 did the
+same nothing, which is seven thousand of the eight thousand positions; every
+one below `min_run` did nothing either, because each chunk was then thrown away
+for being too short. What was left did something, but not the same something as
+on a 4000-pixel export — the preview and the file disagreed about a setting
+neither of them named. **A length that is a property of the picture belongs in
+fractions of the picture**, so they are `min_smear` and `max_smear` now, both
+shares of the line being sorted, with "no limit" at the top of its own range
+rather than at a magic zero below the bottom. Renamed rather than
+reinterpreted, so a preset carrying the old keys stops with the list of the new
+ones instead of clamping 260 to 1 and rendering something nobody asked for.
+`t/46-pixelsort.t` pins both halves: the same setting cuts a line into the same
+number of pieces at 400 pixels and at 800, and every step down the slider gives
+more of them.
 
 `t/31-drift.t` is driven off the registry and so covers every effect declaring
 a `drift` the day it is declared. A moving parameter under any other name is

@@ -49,14 +49,70 @@ parameters that govern it say how far and how fast rather than in what
 pattern: the wandering stays irregular whatever they are set to, because it is
 a random walk that is being shaped and not a waveform.
 
+=head2 Why a thud needs more than the note it is built on
+
+This was a damped sine at 40 Hz with a burst of low-passed noise over it, and
+it sounded like a train crossing rail joints: two hard knocks, unequally
+spaced, repeating. Measuring one of them said why. Ninety-nine per cent of its
+energy was below 160 Hz and more than half of it below 40, which is under what
+a laptop, a phone or a pair of desk speakers can move air at -- so what
+actually reached the ear was the onset and nothing else. An onset on its own is
+a click, and two clicks at unequal intervals is a train.
+
+Depth had made it worse rather than better, because everything it did took
+more away: it closed the filter further and lengthened the decay, so the
+deeper the setting, the more of the sound was in the part nobody could hear.
+
+So one thud is three things now, and the two that were missing are the two
+that carry:
+
+=over 4
+
+=item The fundamental
+
+A damped sine at the valve's own pitch, 34 Hz for S1 and 50 for S2. This is
+the part you feel rather than hear, and it is why the sound has weight on
+anything that can reproduce it.
+
+=item The chest mode
+
+A second damped sine about three and a half times higher -- around 100 Hz
+against the chest wall -- falling away twice as fast as the fundamental. This
+is the part you actually hear, and it is what makes a heartbeat sound warm
+rather than like a knock on a door. It is louder than the fundamental on
+purpose: energy goes as amplitude squared times how long a thing rings, so
+something that rings for half as long needs more than half again the amplitude
+to weigh the same.
+
+=item The valve
+
+A short band of noise around 300 Hz, driven only while the valve is actually
+shutting and left to ring out afterwards. Barely there, and the first thing
+depth takes away, but it is what says "valve" rather than "drum".
+
+=back
+
+Depth now moves all three together in the direction a body between the valve
+and the ear actually moves them: the chest mode drops in pitch and level, the
+noise goes first and goes furthest, both decays lengthen, and the attack
+softens from twelve milliseconds to nearly forty. What it never does is take
+the sound below what can be reproduced, because a heartbeat nobody can hear is
+not a deeper heartbeat.
+
+=head2 Why the attack is a curve and not a ramp
+
+The rise used to be linear and then stop, which leaves a corner in the
+envelope at the loudest moment of the sound. The ear hears a corner as a
+click, which is half of what "two hard knocks" was. It is a raised cosine now,
+which arrives at the peak with the slope already zero.
+
 =head2 Why the sounds are noise and not tones
 
-A valve closing is a broadband thud, not a pitch. A sine burst -- the obvious
-implementation -- gives a synthesised kick drum, which is recognisably not a
-heart. What is here is a burst of noise through a low-pass tuned low, with a
-little damped sine underneath for body.
+A valve closing is a broadband thud, not a pitch. A sine burst on its own --
+the obvious implementation -- gives a synthesised kick drum, which is
+recognisably not a heart.
 
-Almost none of the result is above 200 Hz, which is why 16 kHz is a generous
+Almost none of the result is above 600 Hz, which is why 16 kHz is a generous
 sampling rate for it rather than a compromise.
 
 =cut
@@ -73,8 +129,34 @@ use constant SYSTOLE_AT_60 => 0.30;
 # The two closures, each described in one place: the resonance it sits on, how
 # long it rings, and how hard it hits. S2 is the higher, shorter and quieter
 # of the two, which between them is what tells the "dub" from the "lub".
-use constant S1 => { hz => 40, seconds => 0.14, level => 1.00 };
-use constant S2 => { hz => 58, seconds => 0.10, level => 0.75 };
+use constant S1 => { hz => 34, seconds => 0.15, level => 1.00 };
+use constant S2 => { hz => 50, seconds => 0.10, level => 0.74 };
+
+# Where the chest mode sits above the fundamental, against the chest wall.
+# Depth brings it down from there; see L</Why a thud needs more than the note
+# it is built on>.
+use constant CHEST_RATIO => 3.4;
+
+# The valve itself, as opposed to the body around it, again before depth.
+use constant FLUTTER_HZ => 300;
+
+# How the three are mixed at the chest wall. The chest mode is louder than the
+# fundamental on purpose: energy goes as amplitude squared times how long it
+# rings, and this one rings for half as long, so matching it by ear takes more
+# than matching it by number. What the balance is for is in the POD.
+use constant FUND_MIX    => 0.50;
+use constant CHEST_MIX   => 1.35;
+use constant FLUTTER_MIX => 0.40;
+
+# What the three come to together, so that one beat peaks about where it did
+# before any of this and a mix at full gain still has room.
+use constant THUD_LEVEL => 0.30;
+
+# How fast each falls away, as a fraction of the sound's nominal length. The
+# chest mode goes first and the fundamental rings on under it, which is the
+# order a struck body of any size gives them.
+use constant FUND_FALL  => 1 / 2.4;
+use constant CHEST_FALL => 1 / 4.6;
 
 # How often the wandering rate is redrawn. Slower than a beat, because it is
 # meant to be heard across beats rather than within one.
@@ -276,10 +358,10 @@ sub pcm
 
 # One valve closure, added in place at $at.
 #
-# Noise through a one-pole low-pass for the body of it -- a valve is a thud
-# and not a pitch -- with a damped sine underneath so it has a centre. Depth
-# closes the filter and lengthens the decay together, because both are what
-# distance through a chest actually does.
+# Three things at once, because a thud heard through a body is not one sound:
+# the fundamental you feel, the chest mode you actually hear, and a little
+# noise for the valve itself. See L</Why a thud needs more than the note it is
+# built on>.
 sub _thud
 {
     my ( $sample, $at, $sound, $depth, $rng ) = @_;
@@ -290,22 +372,43 @@ sub _thud
     my $level    = $sound->{ level };
     my $length_s = $sound->{ seconds };
 
-    my $length = int( RATE * $length_s * ( 1 + $depth * 0.6 ) );
+    # Long enough for the tail to be over rather than cut off. The decay below
+    # is the shape; this only says where to stop computing it.
+    my $length = int( RATE * $length_s * ( 1.8 + $depth * 1.1 ) );
 
-    # The corner comes down as depth goes up: 180 Hz against the chest wall,
-    # 60 Hz through it.
-    my $corner = 180 - $depth * 120;
-    my $alpha  = 1 - exp( -2 * $PI * $corner / RATE );
+    # The chest mode is the first thing distance takes away, so its level and
+    # its pitch both come down with depth -- but it never disappears, because
+    # a heartbeat with nothing between 80 and 200 Hz is a sound most rooms and
+    # most speakers cannot reproduce at all, and what is left of it at the ear
+    # is the onset. Which is a knock.
+    my $chest_hz = $hz * ( CHEST_RATIO - $depth * 0.9 );
+    my $chest    = CHEST_MIX * ( 1 - $depth * 0.30 );
 
-    my $decay = $length_s / 1.9;
+    # The valve, as opposed to the body it is inside. A narrow band of noise
+    # rather than a filtered hiss: a two-pole resonator puts it where it can
+    # be heard instead of leaving it under the fundamental, where the old
+    # cascade of one-poles had put all of it.
+    my $flutter_hz = FLUTTER_HZ - $depth * 110;
+    my $flutter    = FLUTTER_MIX * ( 1 - $depth * 0.8 );
+    $flutter = 0 if $flutter < 0;
 
-    # Two poles, not one. A single pole rolls off at six decibels an octave,
-    # which at this corner still passes a fifth of what is at a kilohertz --
-    # and that residue is the whole difference between a heartbeat heard
-    # through someone's chest and one heard through a stethoscope pressed to
-    # it. Tissue is not a gentle shelf. Cascading two of the same filter
-    # doubles the slope and costs one more multiply-add per sample.
-    my ( $low, $lower ) = ( 0, 0 );
+    my $r = exp( -1 / ( RATE * ( 0.010 + $depth * 0.012 ) ) );
+    my $c = 2 * $r * cos( 2 * $PI * $flutter_hz / RATE );
+
+    # Depth lengthens both, because a body between the valve and the ear is
+    # what turns a sound into a swell.
+    my $fall       = $length_s * FUND_FALL * ( 1 + $depth * 0.55 );
+    my $chest_fall = $length_s * CHEST_FALL * ( 1 + $depth * 0.55 );
+
+    # A slow rise is most of what "muffled" is. Through tissue there is no
+    # transient left to read, and keeping a sharp one is what made this sound
+    # like two hard objects meeting rather than like something happening
+    # inside a body. Raised cosine rather than a straight ramp, because a ramp
+    # into an exponential has a corner at the top of it and the ear hears a
+    # corner as a click.
+    my $attack = 0.012 + $depth * 0.026;
+
+    my ( $y1, $y2 ) = ( 0, 0 );
 
     for my $n ( 0 .. $length - 1 )
     {
@@ -314,28 +417,29 @@ sub _thud
 
         my $t = $n / RATE;
 
-        # The attack softens with depth as well. A four-millisecond rise is
-        # already fast enough to read as a transient; through a chest wall
-        # there is no transient left to read, and keeping the sharp one is
-        # what made this sound like a recording of a valve rather than like a
-        # heartbeat somebody is standing near.
-        my $attack = 0.004 + $depth * 0.014;
-
-        my $env = exp( -$t / $decay );
-        $env *= $t / $attack if $t < $attack;
+        my $rise = 1;
+        $rise = 0.5 - 0.5 * cos( $PI * $t / $attack ) if $t < $attack;
 
         my $white = $rng->rand( 2 ) - 1;
-        $low   += $alpha * ( $white - $low );
-        $lower += $alpha * ( $low - $lower );
 
-        my $body = sin( 2 * $PI * $hz * $t ) * 0.5;
+        # Driven only while the valve is actually shutting; after that the
+        # resonator is ringing out what it was given, which is what makes it
+        # a flutter rather than a hiss with an envelope on it.
+        my $drive = $t < $attack * 2 ? $white * ( 1 - $r * $r ) : 0;
+        my $y     = $drive + $c * $y1 - $r * $r * $y2;
+        ( $y2, $y1 ) = ( $y1, $y );
 
-        # Weighted towards the body rather than the noise. The noise is what
-        # says "valve"; the body is what carries through anything between it
-        # and the ear, and past the first inch of chest there is far more of
-        # the second than the first.
         $sample->[ $i ] +=
-            ( $lower * 2.6 + $body * 1.35 ) * $env * $level * 0.7;
+            ( FUND_MIX *
+                sin( 2 * $PI * $hz * $t ) *
+                exp( -$t / $fall ) +
+                $chest *
+                sin( 2 * $PI * $chest_hz * $t ) *
+                exp( -$t / $chest_fall ) +
+                $flutter * $y *
+                3.4 ) *
+            $rise * $level *
+            THUD_LEVEL;
     }
 
     return;

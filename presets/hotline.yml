@@ -44,8 +44,8 @@ effects:
     key: luma
     lower: 0.0
     upper: 0.22
-    min_run: 20
-    max_run: 260
+    min_smear: 0.012
+    max_smear: 0.14
     coverage: 0.5
 
   grain:

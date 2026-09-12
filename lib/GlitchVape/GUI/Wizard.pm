@@ -22,7 +22,7 @@ GlitchVape::GUI::Wizard - the two-page Add Effect assistant
 
 =head1 DESCRIPTION
 
-Forty-five effects are too many for one flat list, so they are shown as a
+Forty-six effects are too many for one flat list, so they are shown as a
 tree: nine categories, each holding the effects that run at that point in the
 chain. The assistant asks two questions.
 
@@ -275,10 +275,8 @@ sub _tree_page
 
     my $lead = Gtk3::Label->new;
     $lead->set_markup(
-              'Effects are grouped by where they run in the chain, which is '
-            . 'also what they are for. Open a category to see what is in it, '
-            . 'or search — the box looks through every category at once. '
-            . 'Whatever you click on is described beside the tree.' );
+              'Effects are grouped by where they run in the chain. '
+            . 'Open a category to see what is in it, or search.' );
     $lead->set_xalign( 0 );
     $lead->set_line_wrap( 1 );
 

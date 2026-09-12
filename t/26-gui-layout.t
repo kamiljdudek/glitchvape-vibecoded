@@ -18,8 +18,9 @@ BEGIN
         or plan skip_all => 'no display';
 }
 
-use GlitchVape      ();
-use GlitchVape::GUI ();
+use GlitchVape             ();
+use GlitchVape::GUI        ();
+use GlitchVape::GUI::State ();
 
 local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 
@@ -470,6 +471,77 @@ my %claimed;
 
     is $view->get_interpolation, 'nearest',
         'which scales by dropping and repeating pixels rather than averaging';
+}
+
+# ---------------------------------------------------------------------------
+# Copy the command line copies it, and Copy comes before Close
+
+# Two claims about the one window in this program whose whole purpose is to
+# hand something to somewhere else.
+#
+# It copies on the way in, because somebody who chose "Copy the command line"
+# from the menu has already said what they want and should not have to say it
+# twice. The button stays anyway -- a clipboard is shared, and anything may
+# have taken it between opening this and reaching a terminal.
+#
+# And Copy sits before Close, which is the order Gtk packs them in and so the
+# order they are added. Close is how you leave a window you have finished
+# with; Copy is the reason this one opened, and it was on the wrong side of
+# that.
+#
+# Both are asked of the real dialog, which means running it: it is modal and
+# blocks in gtk_dialog_run. An idle queued first fires inside that nested
+# loop, which is where the window can be looked at and then told to go.
+{
+    $gui->{ state } =
+        GlitchVape::GUI::State->new( source => 'photo.png', seed => 11 );
+    $gui->{ state }->add_effect( 'scanlines' );
+
+    my $clipboard =
+        Gtk3::Clipboard::get( Gtk3::Gdk::Atom::intern( 'CLIPBOARD', 0 ) );
+    $clipboard->set_text( 'nothing to do with this', -1 );
+
+    my @labels;
+    my $seen = 0;
+
+    Glib::Idle->add(
+        sub {
+            my ( $dialog ) =
+                grep { $_->isa( 'Gtk3::Dialog' ) && $_->get_visible }
+                Gtk3::Window::list_toplevels();
+
+            return 1 unless $dialog;
+
+            $seen = 1;
+
+            # Read off the action area in packing order, which is what
+            # decides what the eye meets first.
+            @labels =
+                map  { $_->get_label }
+                grep { $_->isa( 'Gtk3::Button' ) }
+                $dialog->get_action_area->get_children;
+
+            $dialog->response( 'close' );
+            return 0;
+        }
+    );
+
+    $gui->_copy_command;
+
+    ok $seen, 'the command line opens a dialog';
+
+    is_deeply [ grep { /Copy|Close/ } @labels ], [ '_Copy', '_Close' ],
+        'with Copy before Close';
+
+    my $text = $clipboard->wait_for_text;
+
+    like $text, qr/^glitchvape\b/,
+        'and the command is on the clipboard without Copy having been pressed';
+    like $text, qr/-e scanlines/,
+        'and it is this pipeline rather than an empty one';
+
+    $gui->{ state } = undef;
+    $gui->_sync_actions;
 }
 
 done_testing;

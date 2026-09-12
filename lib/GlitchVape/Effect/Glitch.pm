@@ -59,11 +59,25 @@ $R->register(
     stage   => 'damage',
     summary => 'Sort runs of pixels by brightness',
     doc     => <<'DOC',
-Finds contiguous runs of pixels whose brightness falls inside a threshold band
-and sorts each run. The threshold is what makes this read as art rather than
-noise: sorting everything just smears the picture into gradients, whereas
-sorting only the dark runs (or only the bright ones) leaves the subject legible
-while the shadows pour sideways.
+Finds contiguous runs of pixels whose brightness falls inside a band and sorts
+each run. The band is what makes this read as art rather than noise: sorting
+everything just smears the picture into gradients, whereas sorting only the
+dark runs (or only the bright ones) leaves the subject legible while the
+shadows pour sideways.
+
+Four settings, in two pairs. C<lower> and C<upper> say I<which> pixels are
+eligible -- the darkest and the brightest a run may be made of. C<min_smear>
+and C<max_smear> say I<how long> a smear is allowed to be, as a share of the
+line being sorted: below the first nothing is sorted at all, and above the
+second the run is broken into lengths of it, which reads as deliberate banding
+rather than as one enormous streak.
+
+Both lengths are fractions rather than counts of pixels, and that is the whole
+reason they are readable. As pixel counts they meant different things at every
+output size: twelve pixels was a visible dash on a preview and invisible on a
+full-size export, and a maximum of 260 did nothing whatever above a 260-pixel
+line -- which on a 4000-pixel photograph was most of the slider doing nothing
+and the preview disagreeing with the export about the rest.
 DOC
     params => {
         reroll => {
@@ -77,51 +91,79 @@ DOC
                 . 'choose',
         },
         direction => {
+            label   => 'Direction',
+            order   => 10,
             default => 'horizontal',
             type    => 'enum',
             values  => [ qw(horizontal vertical) ],
             doc     => 'Axis along which runs are sorted',
         },
         key => {
+            label   => 'Sort by',
+            order   => 20,
             default => 'luma',
             type    => 'enum',
             values  => [ qw(luma hue saturation red green blue) ],
             doc     => 'What the sort compares',
         },
-        lower => {
-            default => 0.25,
-            type    => 'num',
-            min     => 0,
-            max     => 1,
-            doc     => 'Runs start where brightness exceeds this',
-        },
-        upper => {
-            default => 0.80,
-            type    => 'num',
-            min     => 0,
-            max     => 1,
-            doc     => 'Runs end where brightness exceeds this',
-        },
         reverse => {
+            label   => 'Reversed',
+            order   => 45,
             default => 0,
             type    => 'bool',
             doc     => 'Sort descending',
         },
-        min_run => {
-            default => 12,
-            type    => 'int',
-            min     => 2,
-            max     => 4000,
-            doc     => 'Ignore runs shorter than this',
-        },
-        max_run => {
-            default => 0,
-            type    => 'int',
+        lower => {
+            label   => 'Darkest sorted',
+            order   => 30,
+            default => 0.25,
+            type    => 'num',
             min     => 0,
-            max     => 8000,
-            doc     => 'Split runs longer than this (0 = unlimited)',
+            max     => 1,
+            doc     => 'A run is made of pixels at least this bright. Below '
+                . 'it they are left alone, which is what keeps the shadows '
+                . 'out of the sort -- or, turned down, is what lets nothing '
+                . 'else in',
+        },
+        upper => {
+            label   => 'Brightest sorted',
+            order   => 40,
+            default => 0.80,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'And no brighter than this. The two together are a '
+                . 'band, not two thresholds: a pixel outside it on either '
+                . 'side ends the run it was in',
+        },
+        min_smear => {
+            label   => 'Shortest smear',
+            order   => 50,
+            default => 0.015,
+            type    => 'num',
+            min     => 0,
+            max     => 0.25,
+            doc     => 'A run shorter than this share of the line is left '
+                . 'alone. At 0 every run is sorted, down to pairs of pixels, '
+                . 'which on a noisy picture is a fine grit rather than a '
+                . 'smear',
+        },
+        max_smear => {
+            label   => 'Longest smear',
+            order   => 60,
+            default => 1,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'A run longer than this share of the line is broken '
+                . 'into lengths of it, which reads as banding rather than as '
+                . 'one endless streak. At 1 nothing is broken, and it never '
+                . 'goes below the shortest smear, so there is no setting '
+                . 'here that quietly does nothing',
         },
         coverage => {
+            label   => 'Lines sorted',
+            order   => 70,
             default => 1.0,
             type    => 'num',
             min     => 0,
@@ -153,6 +195,8 @@ sub _pixelsort
         sub {
             my ( $px ) = @_;
             my $w = $px->width;
+
+            my ( $shortest, $longest ) = _smear_lengths( $p, $w );
 
             $px->each_row(
                 sub {
@@ -188,36 +232,15 @@ sub _pixelsort
                             && $key[ $i ] <= $upper;
                         my $len = $i - $start;
 
-                        next if $len < $p->{ min_run };
+                        next if $len < $shortest;
 
-                        # Splitting a long run gives repeated short gradients,
-                        # which reads as deliberate banding rather than one
-                        # very long smear.
-                        my $chunk = $len;
-                        if ( $p->{ max_run } && $p->{ max_run } < $len )
-                        {
-                            $chunk = $p->{ max_run };
-                        }
-
-                        for (
-                            my $off = $start ;
-                            $off < $start + $len ;
-                            $off += $chunk
-                            )
-                        {
-                            my $end = $off + $chunk - 1;
-                            $end = $start + $len - 1
-                                if $end > $start + $len - 1;
-                            next if $end - $off + 1 < $p->{ min_run };
-
-                            my @idx = sort { $key[ $a ] <=> $key[ $b ] }
-                                ( $off .. $end );
-                            @idx = reverse @idx if $p->{ reverse };
-
-                            @v[ $off * 3 .. ( $end + 1 ) * 3 - 1 ] =
-                                map { @v[ $_ * 3 .. $_ * 3 + 2 ] } @idx;
-                            $changed = 1;
-                        }
+                        $changed = 1
+                            if _sort_run(
+                            \@v, \@key,
+                            [ $start,    $len ],
+                            [ $shortest, $longest ],
+                            $p->{ reverse }
+                            );
                     }
 
                     # Returning undef leaves the row untouched, which skips
@@ -235,6 +258,65 @@ sub _pixelsort
 
     $ctx->image->Rotate( degrees => -90 ) if $vertical;
     return;
+}
+
+# How long a smear may be, in pixels, from the shares the effect is set with
+# and the line they are shares of.
+#
+# Worked out per render rather than declared in pixels, and that is the whole
+# point of the change: 1.5% of a line is 1.5% of it at any size, where twelve
+# pixels is a visible dash on a preview and nothing at all on a full-size
+# export. The two used to disagree about a setting neither of them named.
+#
+# A longest of 1 is the top of the slider and means "do not break anything",
+# which is why 0 comes back for it. Anything under the floor becomes the floor
+# rather than a setting that quietly sorts nothing: the old pair had eleven
+# such values at the bottom of one slider and seven thousand identical ones at
+# the top of it.
+sub _smear_lengths
+{
+    my ( $p, $w ) = @_;
+
+    my $shortest = int( $p->{ min_smear } * $w );
+    $shortest = 2 if $shortest < 2;
+
+    my $longest = $p->{ max_smear } >= 1 ? 0 : int( $p->{ max_smear } * $w );
+    $longest = $shortest if $longest && $longest < $shortest;
+
+    return ( $shortest, $longest );
+}
+
+# One eligible run, sorted in place, in chunks no longer than $longest.
+# Splitting a long run gives repeated short gradients, which reads as
+# deliberate banding rather than as one very long smear.
+sub _sort_run
+{
+    my ( $v, $key, $run, $smear, $descending ) = @_;
+
+    my ( $start,    $len )     = @$run;
+    my ( $shortest, $longest ) = @$smear;
+
+    my $chunk  = $longest && $longest < $len ? $longest : $len;
+    my $end_of = $start + $len - 1;
+    my $done   = 0;
+
+    for ( my $off = $start ; $off <= $end_of ; $off += $chunk )
+    {
+        my $end = $off + $chunk - 1;
+        $end = $end_of if $end > $end_of;
+
+        next if $end - $off + 1 < $shortest;
+
+        my @idx = sort { $key->[ $a ] <=> $key->[ $b ] } ( $off .. $end );
+        @idx = reverse @idx if $descending;
+
+        @{ $v }[ $off * 3 .. ( $end + 1 ) * 3 - 1 ] =
+            map { @{ $v }[ $_ * 3 .. $_ * 3 + 2 ] } @idx;
+
+        $done = 1;
+    }
+
+    return $done;
 }
 
 # Returns a coderef mapping (r,g,b) to a comparable scalar in 0..$q.

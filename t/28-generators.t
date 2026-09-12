@@ -622,6 +622,209 @@ sub split_gaps
 }
 
 # ---------------------------------------------------------------------------
+# Heart: a beat is not a knock
+
+# This was a damped sine at 40 Hz with a burst of low-passed noise over it,
+# and it sounded like a train crossing rail joints. Measuring one thud said
+# why: ninety-nine per cent of its energy was under 160 Hz and over half of it
+# under 40, which is below what a laptop, a phone or a pair of desk speakers
+# can move air at. What reached the ear was the onset on its own, and an onset
+# on its own is a click.
+#
+# So the question asked here is not "what does one thud contain" -- a figure
+# nobody can check by ear -- but "is there anything in it that ordinary
+# reproduction can carry". The band is deliberately wide and the bar
+# deliberately low: this is the difference between audible and inaudible
+# rather than a tuning nobody may change.
+
+# One thud, on its own.
+sub thud
+{
+    my ( $which, $depth ) = @_;
+
+    my @wave = ( 0 ) x int( GlitchVape::Heart::RATE * 0.8 );
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    GlitchVape::Heart::_thud( \@wave, 0, $which, $depth,
+        GlitchVape::Random->new( seed => 4 ) );
+    ## use critic
+
+    return \@wave;
+}
+
+# How a thud's energy is spread, as the fraction landing in each of the bands
+# the edges describe.
+#
+# Probed on an even grid in hertz rather than a few points per band, because a
+# band is only comparable with another band if each of them was sampled at the
+# same density -- six points across forty hertz and six across four hundred
+# says more about the probe than about the sound. Decimated first, by
+# averaging: everything here is under 600 Hz, so eight samples in one is both
+# a crude low-pass and the thing that makes an even grid affordable.
+#
+# Which puts a ceiling on what may be asked for. Eight to one leaves a
+# thousand hertz of Nyquist, and a probe above that does not report nothing --
+# it reports whatever is at its mirror image below, which the first version of
+# this took for a fizz that was not there.
+sub spread
+{
+    my ( $wave, @edge ) = @_;
+
+    use constant DECIMATE => 8;
+    use constant PROBE_HZ => 5;
+
+    my $rate = GlitchVape::Heart::RATE / DECIMATE;
+
+    my @thin;
+    for ( my $i = 0 ; $i + DECIMATE <= @$wave ; $i += DECIMATE )
+    {
+        my $sum = 0;
+        $sum += $wave->[ $_ ] for $i .. $i + DECIMATE - 1;
+        push @thin, $sum / DECIMATE;
+    }
+
+    my $pi   = 4 * atan2 1, 1;
+    my @band = ( 0 ) x ( @edge - 1 );
+
+    for ( my $hz = $edge[ 0 ] ; $hz <= $edge[ -1 ] ; $hz += PROBE_HZ )
+    {
+        my ( $re, $im ) = ( 0, 0 );
+        for my $n ( 0 .. $#thin )
+        {
+            my $turn = 2 * $pi * $hz * $n / $rate;
+            $re += $thin[ $n ] * cos $turn;
+            $im -= $thin[ $n ] * sin $turn;
+        }
+
+        my $power = $re * $re + $im * $im;
+
+        for my $b ( 0 .. $#edge - 1 )
+        {
+            next unless $hz >= $edge[ $b ] && $hz < $edge[ $b + 1 ];
+            $band[ $b ] += $power;
+        }
+    }
+
+    my $sum = 0;
+    $sum += $_ for @band;
+
+    return map { $_ / $sum } @band;
+}
+
+# Under 60 Hz is the part you feel and most reproduction throws away; 60 to
+# 500 is the part a small speaker can actually produce; above that there
+# should be almost nothing.
+sub carries
+{
+    my ( $name, $sound, $depth ) = @_;
+
+    my ( $felt, $heard, $fizz ) =
+        spread( thud( $sound, $depth ), 20, 60, 500, 900 );
+
+    cmp_ok $heard, '>', 0.25,
+        "$name at depth $depth puts a quarter of itself where it can be heard"
+        or diag sprintf 'felt %.2f, heard %.2f, fizz %.2f', $felt, $heard,
+        $fizz;
+
+    # And is still a heartbeat rather than a woodblock: what is above 500 Hz
+    # is a trace of the valve and never the sound itself.
+    cmp_ok $fizz, '<', 0.15,
+        "and $name at depth $depth is still nearly all low";
+
+    return $heard;
+}
+
+# Asked from a sub rather than from a bare block, as the one below it is: the
+# file's main body has a complexity budget and these two walk three depths and
+# two sounds apiece.
+sub a_beat_is_not_a_knock
+{
+    for my $depth ( 0, 0.5, 1 )
+    {
+        carries( 'S1', GlitchVape::Heart::S1, $depth );
+        carries( 'S2', GlitchVape::Heart::S2, $depth );
+    }
+
+    # Depth is a body between the valve and the ear, so it takes the top away
+    # -- but it must never take the sound below what can be reproduced, since
+    # a heartbeat nobody can hear is not a deeper heartbeat.
+    cmp_ok carries( 'S1', GlitchVape::Heart::S1, 1 ), '<',
+        carries( 'S1', GlitchVape::Heart::S1, 0 ),
+        'depth moves a thud down the spectrum';
+
+    return;
+}
+
+a_beat_is_not_a_knock();
+
+# ---------------------------------------------------------------------------
+# Heart: the two sounds are told apart by more than their gap
+
+# Lub and dub are a pitch apart as well as a length apart, and both halves of
+# that have to survive: two identical knocks unequally spaced is the train
+# again, whatever the spacing is doing.
+{
+    my $s1 = GlitchVape::Heart::S1;
+    my $s2 = GlitchVape::Heart::S2;
+
+    cmp_ok $s2->{ hz }, '>', 1.2 * $s1->{ hz }, 'S2 is audibly higher than S1';
+    cmp_ok $s2->{ seconds }, '<', $s1->{ seconds },
+        'and shorter, which is the other half of telling them apart';
+    cmp_ok $s2->{ level }, '<', $s1->{ level }, 'and quieter';
+}
+
+# ---------------------------------------------------------------------------
+# Heart: a thud swells rather than arriving
+
+# The rise used to be linear and then stop, which leaves a corner in the
+# envelope at the loudest moment of the sound; the ear hears a corner as a
+# click, and that was half of what made this a knock. It is a raised cosine
+# now, which reaches the top with its slope already at zero.
+#
+# Measured on the samples themselves rather than on a windowed envelope: at 34
+# Hz a window long enough to smooth the fundamental is longer than the whole
+# attack, so it would report the rise as instant however slow it was.
+# How loud a thud gets in its first three milliseconds, how loud it gets at
+# all, and how long it took to get there.
+sub onset
+{
+    my ( $wave ) = @_;
+
+    my $early = int( GlitchVape::Heart::RATE * 0.003 );
+
+    my ( $first, $top, $at ) = ( 0, 0, 0 );
+
+    for my $n ( 0 .. $#$wave )
+    {
+        my $here = abs $wave->[ $n ];
+
+        $first = $here if $n <= $early && $here > $first;
+        ( $top, $at ) = ( $here, $n ) if $here > $top;
+    }
+
+    return ( $first, $top, $at / GlitchVape::Heart::RATE );
+}
+
+sub a_thud_swells
+{
+    for my $depth ( 0, 0.5, 1 )
+    {
+        my ( $first, $top, $at ) =
+            onset( thud( GlitchVape::Heart::S1, $depth ) );
+
+        cmp_ok $first, '<', 0.2 * $top,
+            "at depth $depth the first three milliseconds are not the sound"
+            or diag sprintf 'reached %.3f of a peak of %.3f', $first, $top;
+
+        cmp_ok $at, '>', 0.008, 'and the loudest moment is not the first one';
+    }
+
+    return;
+}
+
+a_thud_swells();
+
+# ---------------------------------------------------------------------------
 # The rattle is the spindle's, so it is periodic and it follows the rpm
 
 # What told everybody this was a keyboard. The gaps inside a burst used to be
@@ -721,9 +924,11 @@ sub has_more_body_than_click
     my $body  = band_energy( $wave, 120,  600 );
     my $click = band_energy( $wave, 1500, 5000 );
 
-    return cmp_ok $body, '>', $click,
+    cmp_ok $body, '>', $click,
         "a seek of $distance has more body in it than click"
         or diag sprintf 'body %.3g, click %.3g', $body, $click;
+
+    return;
 }
 
 # The other half. The resonator's pole radius was picked and its decay taken
@@ -741,10 +946,12 @@ sub rings_past_the_move
     my ( $ends ) = one_seek( $distance );
     my $heard = ( $ends - 10 ) / GlitchVape::Drive::RATE;
 
-    return cmp_ok $heard, '>', 3 * $move,
+    cmp_ok $heard, '>', 3 * $move,
         "a seek of $distance is still audible well after the head lands"
         or diag sprintf 'move %.1f ms, heard for %.1f ms', 1000 * $move,
         1000 * $heard;
+
+    return;
 }
 
 {

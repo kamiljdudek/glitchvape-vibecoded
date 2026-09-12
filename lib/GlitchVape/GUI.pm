@@ -1229,13 +1229,20 @@ sub _rebuild_audio_rows
     {
         # The file's own description, with the generated tracks taken out of
         # the spec so they are not repeated on its line.
+        # No Save on this one, deliberately. It is already a file on
+        # somebody's disk, and what the mix does to it -- the crop, the
+        # filters, the gain -- belongs to the render rather than to the track,
+        # so a button here would either write out a copy of a file they
+        # already have or quietly mean something the word does not say.
         $self->{ audio_list }->add(
             $self->_audio_row(
-                'audio-x-generic-symbolic',
-                GlitchVape::Audio::describe( { %$audio, generated => undef } ),
-                'Reopen the crop and filter wizard',
-                sub { return $self->_edit_audio },
-                sub { return $self->_remove_audio },
+                icon => 'audio-x-generic-symbolic',
+                text => GlitchVape::Audio::describe(
+                    { %$audio, generated => undef }
+                ),
+                tip    => 'Reopen the crop and filter wizard',
+                edit   => sub { return $self->_edit_audio },
+                remove => sub { return $self->_remove_audio },
             )
         );
     }
@@ -1248,11 +1255,12 @@ sub _rebuild_audio_rows
 
         $self->{ audio_list }->add(
             $self->_audio_row(
-                GlitchVape::Generator::icon( $made[ $n ]{ kind } ),
-                GlitchVape::Generator::describe( $made[ $n ] ),
-                'Reopen this generated track',
-                sub { return $self->_edit_generated( $index ) },
-                sub { return $self->_remove_generated( $index ) },
+                icon   => GlitchVape::Generator::icon( $made[ $n ]{ kind } ),
+                text   => GlitchVape::Generator::describe( $made[ $n ] ),
+                tip    => 'Reopen this generated track',
+                edit   => sub { return $self->_edit_generated( $index ) },
+                save   => sub { return $self->_save_generated( $index ) },
+                remove => sub { return $self->_remove_generated( $index ) },
             )
         );
     }
@@ -1265,45 +1273,80 @@ sub _rebuild_audio_rows
 # Shaped like an effect row: what it is on the left, the way to take it out
 # again on the right, and its settings behind the same Adjust button the
 # effects use. One gesture for both lists -- select, then press the cog.
+#
+# Save sits beside Remove rather than behind Adjust because it does not change
+# anything: a track in the mix could always be written out, but only by
+# reopening the dialog it was made in and finding the button there, which is
+# three gestures and a window for something that answers "can I keep this".
+# Taken by name because the two kinds of row do not want the same set -- see
+# where the file row is built for why it has no Save.
 sub _audio_row
 {
-    my ( $self, $icon, $text, $tip, $edit_with, $remove_with ) = @_;
+    my ( $self, %arg ) = @_;
 
     my $row = Gtk3::ListBoxRow->new;
 
     # Hung on the row so that activating it -- double click, or Enter -- does
     # what the Edit button does.
-    $row->{ edit } = $edit_with;
+    $row->{ edit } = $arg{ edit };
 
     my $box = Gtk3::Box->new( 'horizontal', 6 );
     $box->set_border_width( 6 );
 
-    my $image = Gtk3::Image->new_from_icon_name( $icon, 'button' );
+    my $image = Gtk3::Image->new_from_icon_name( $arg{ icon }, 'button' );
 
-    my $label = Gtk3::Label->new( $text );
+    my $label = Gtk3::Label->new( $arg{ text } );
     $label->set_xalign( 0 );
     $label->set_ellipsize( 'middle' );
     $label->set_hexpand( 1 );
-    $label->set_tooltip_text( $tip );
+    $label->set_tooltip_text( $arg{ tip } );
 
-    my $remove =
-        _icon_button( 'list-remove-symbolic', 'Remove this from the mix' );
-    $remove->set_relief( 'none' );
-    $remove->set_valign( 'center' );
-    $remove->signal_connect(
-        clicked => sub {
-            $remove_with->();
-            return;
-        }
+    $box->pack_start( $image, 0, 0, 0 );
+    $box->pack_start( $label, 1, 1, 0 );
+
+    if ( my $save = $arg{ save } )
+    {
+        $box->pack_start(
+            _row_button(
+                'document-save-symbolic', 'Save this track as a .wav file',
+                $save
+            ),
+            0, 0, 0
+        );
+    }
+
+    $box->pack_start(
+        _row_button(
+            'list-remove-symbolic',
+            'Remove this from the mix',
+            $arg{ remove }
+        ),
+        0, 0, 0
     );
-
-    $box->pack_start( $image,  0, 0, 0 );
-    $box->pack_start( $label,  1, 1, 0 );
-    $box->pack_start( $remove, 0, 0, 0 );
 
     $row->add( $box );
 
     return $row;
+}
+
+# The buttons that live at the end of a row: flat and centred, so that a line
+# of text reads as a line of text with things you may do to it rather than as
+# a toolbar.
+sub _row_button
+{
+    my ( $icon, $tooltip, $pressed ) = @_;
+
+    my $button = _icon_button( $icon, $tooltip );
+    $button->set_relief( 'none' );
+    $button->set_valign( 'center' );
+    $button->signal_connect(
+        clicked => sub {
+            $pressed->();
+            return;
+        }
+    );
+
+    return $button;
 }
 
 sub _build_preview_bar
@@ -1626,12 +1669,10 @@ sub _effect_row
 
     my $motion = $self->_motion_button( $name, $spec );
 
-    my $remove = _icon_button( 'list-remove-symbolic',
-        "Remove $spec->{title} from this pipeline" );
-    $remove->set_relief( 'none' );
-    $remove->set_valign( 'center' );
-    $remove->signal_connect(
-        clicked => sub {
+    my $remove = _row_button(
+        'list-remove-symbolic',
+        "Remove $spec->{title} from this pipeline",
+        sub {
 
             # _rebuild_effects refreshes the popover, which closes itself if
             # this was the effect it had been showing.
@@ -2468,6 +2509,40 @@ sub _remove_audio
     $self->_drop_audio_if_empty;
 
     $self->_audio_changed( 'Removed the audio track.' );
+
+    return;
+}
+
+# One press from the row, because "can I keep this one" is a question about a
+# track rather than about the mix, and nothing in the window changes by
+# answering it. The chooser and the write are GUI::Generated's, so this and
+# the Save button inside that dialog cannot come to disagree about the default
+# name or about what gets written.
+sub _save_generated
+{
+    my ( $self, $index ) = @_;
+
+    my @made = GlitchVape::Audio::generated( $self->{ audio } );
+    my $spec = $made[ $index ] or return;
+
+    GlitchVape::GUI::Generated::save(
+        parent => $self->{ window },
+        spec   => $spec,
+
+        # Synthesis is pure Perl and runs on the main loop, and a drive or a
+        # long static is several seconds of it -- during which the window is
+        # simply frozen. Said before the freeze rather than after, and the
+        # queue drained so that it is actually painted first: a status line
+        # set and not shown until the work it describes has finished is the
+        # same as no status line at all.
+        before => sub {
+            $self->_status( 'Writing the track…' );
+            Gtk3::main_iteration_do( 0 ) while Gtk3::events_pending();
+            return;
+        },
+        on_done  => sub { $self->_status( "Saved $_[ 0 ]" ); return },
+        on_error => sub { $self->_report( $_[ 0 ] );         return },
+    );
 
     return;
 }
@@ -3333,8 +3408,8 @@ sub _copy_command
         'Command line equivalent',
         $shown,
         copy => $shown,
-        lead => 'The command that produces this export. The output path is '
-            . 'where Export would have put it.',
+        lead => 'The command that produces this export, already on the '
+            . 'clipboard. The output path is where Export would have put it.',
     );
 
     return;
@@ -3388,17 +3463,28 @@ use constant COPY_RESPONSE => 1;
 # entire point of a dependency report is to be pasted somewhere else.
 #
 #     lead => text     a sentence above the box, in the window's own font
-#     copy => text     adds a Copy button that puts this on the clipboard
+#     copy => text     put this on the clipboard, and offer a button to do it
+#                      again
 #
 # The box scrolls both ways and the dialog has a size of its own, so a line
 # longer than the window scrolls rather than widening it -- which is what a
 # command line full of --set flags would otherwise do.
+#
+# Copying happens on the way in rather than waiting to be asked. Somebody who
+# chose "Copy the command line" from the menu has already said what they want
+# and should not have to say it twice -- and what the window is for beyond
+# that is reading, which is why it opens rather than merely flashing a status
+# line. The button stays, because a clipboard is shared: anything else may
+# have taken it between opening this and reaching the terminal.
 sub _show_report
 {
     my ( $self, $title, $text, %arg ) = @_;
 
-    my $dialog = Gtk3::Dialog->new_with_buttons( $title, $self->{ window },
-        'modal', 'Close', 'close' );
+    # Built without its buttons so that the order below is the whole story:
+    # new_with_buttons packs in the order it is given, and Close named here
+    # would sit to the left of a Copy added afterwards.
+    my $dialog =
+        Gtk3::Dialog->new_with_buttons( $title, $self->{ window }, 'modal' );
     $dialog->set_default_size( 620, 460 );
 
     my $box = Gtk3::Box->new( 'vertical', 8 );
@@ -3437,13 +3523,23 @@ sub _show_report
 
     $box->pack_start( $scroll, 1, 1, 0 );
 
-    # In the action area beside Close rather than over the text: it acts on the
-    # whole box, and a button inside the box would suggest it acts on the
-    # selection.
-    $dialog->add_button( '_Copy', COPY_RESPONSE ) if defined $arg{ copy };
+    # In the action area rather than over the text: it acts on the whole box,
+    # and a button inside the box would suggest it acts on the selection.
+    #
+    # Before Close, which is where the platform puts the thing you came for
+    # and where the eye lands last on the way out. Close is the way to leave a
+    # window you have finished with; Copy is the reason the window opened.
+    $dialog->add_button( '_Copy',  COPY_RESPONSE ) if defined $arg{ copy };
+    $dialog->add_button( '_Close', 'close' );
 
     $dialog->get_content_area->add( $box );
     $dialog->show_all;
+
+    # Already done, so that the window is a place to read the command rather
+    # than a toll booth in front of it. Said on the status line as well,
+    # because the dialog is modal and the line under it is what remains
+    # afterwards.
+    $self->_to_clipboard( $arg{ copy } ) if defined $arg{ copy };
 
     # Every response ends gtk_dialog_run, Copy included, so it has to be run
     # again afterwards -- otherwise copying closes the window, which is the

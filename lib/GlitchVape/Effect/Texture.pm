@@ -19,6 +19,170 @@ my $R = 'GlitchVape::Registry';
 
 # ---------------------------------------------------------------------------
 
+# The shapes worth cropping to, as width over height, named by what they are
+# rather than by where they get posted: a platform renames its formats and a
+# ratio does not. The generic name is also the one that still means something
+# to somebody reading a preset five years from now.
+my %SHAPE = (
+    square   => [ 1,   1 ],
+    classic  => [ 4,   3 ],
+    wide     => [ 16,  9 ],
+    cinema   => [ 239, 100 ],
+    portrait => [ 4,   5 ],
+    tall     => [ 9,   16 ],
+);
+
+$R->register(
+    name    => 'crop',
+    title   => 'Crop & Zoom',
+    stage   => 'format',
+    summary => 'Reframe to a shape, and choose what is inside it',
+    doc     => <<'DOC',
+Takes a rectangle out of the picture: its shape from C<shape>, how much of the
+picture it covers from C<zoom>, and where it sits from C<x> and C<y>.
+
+C<zoom> magnifies rather than shrinks. The frame that comes out is the same
+size whatever the zoom is -- the largest rectangle of the chosen shape that the
+source could hold -- so turning it up moves in on the subject instead of
+handing the rest of the chain a smaller picture to work on. Past 1 that is a
+real enlargement and it looks like one, which is what zooming into a
+photograph has always looked like.
+
+C<x> and C<y> only bite where the crop has room to slide. A wide crop out of
+an ordinary photograph already spans the full width at zoom 1, so C<x> has
+nowhere to go until the zoom gives it somewhere; C<y> is what chooses between
+the sky and the ground. That is the geometry rather than a limitation, and
+turning the zoom up is what frees both.
+
+With C<shape> at C<none> the frame keeps the source's own proportions, which
+makes this a plain zoom -- still worth having, because C<x> and C<y> then both
+have slack at any zoom above 1. At C<none> and a zoom of 1 the effect is
+exactly nothing, which is the one setting here that is meant to be.
+
+Runs at C<format>, so everything after it works on what is left. That is the
+point of cropping first: grain, scanlines and vignettes belong to the frame
+that survives, not to the one that was thrown away.
+DOC
+    params => {
+        shape => {
+            label => 'Shape',
+            order => 10,
+
+            # Not 'none'. An effect switched on and doing nothing is an
+            # effect nobody can tell they have added, and this is the one
+            # here whose neutral setting is a real option rather than an
+            # omission -- so the neutral one is offered and something else is
+            # where it starts. Sixteen by nine, because reframing a
+            # photograph to it is the commonest reason to reach for a crop.
+            default => 'wide',
+            type    => 'enum',
+            values  => [ qw(none square classic wide cinema portrait tall) ],
+            doc     => 'The proportions of the frame. none keeps the '
+                . "picture's own; square is 1:1, classic 4:3, wide 16:9, "
+                . 'cinema 2.39:1, portrait 4:5 and tall 9:16',
+        },
+        zoom => {
+            label   => 'Zoom',
+            order   => 20,
+            default => 1,
+            type    => 'num',
+            min     => 1,
+            max     => 8,
+            doc     => 'How far into the picture the frame goes. 1 is as '
+                . 'much of it as the shape allows; 2 is half the width and '
+                . 'half the height of that, enlarged back to fill it',
+        },
+        x => {
+            label   => 'Across',
+            order   => 30,
+            default => 0.5,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'Where the frame sits between the left edge and the '
+                . 'right one. Does nothing while the frame already spans the '
+                . 'full width, which is what the zoom is for',
+        },
+        y => {
+            label   => 'Down',
+            order   => 40,
+            default => 0.5,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'Where the frame sits between the top edge and the '
+                . 'bottom one. Does nothing while the frame already spans '
+                . 'the full height',
+        },
+    },
+    apply => \&_crop,
+);
+
+sub _crop
+{
+    my ( $ctx, $p ) = @_;
+
+    my ( $w, $h ) = $ctx->dims;
+    return unless $w > 0 && $h > 0;
+
+    my ( $fw, $fh ) = _frame( $w, $h, $p->{ shape } );
+
+    # Nothing to do: the whole picture, in its own shape.
+    return if $fw >= $w && $fh >= $h && $p->{ zoom } <= 1;
+
+    my $zoom = $p->{ zoom } > 1 ? $p->{ zoom } : 1;
+
+    my $cw = int( $fw / $zoom ) || 1;
+    my $ch = int( $fh / $zoom ) || 1;
+
+    # Whatever the shape and zoom left over, shared out by x and y. Both are
+    # measured across the slack rather than across the picture, so 0 is
+    # against one edge and 1 against the other however much room there is --
+    # which is what makes the control mean the same thing at every zoom.
+    my $ox = int( ( $w - $cw ) * $p->{ x } );
+    my $oy = int( ( $h - $ch ) * $p->{ y } );
+
+    my $img = $ctx->image;
+
+    $img->Crop( geometry => sprintf '%dx%d+%d+%d', $cw, $ch, $ox, $oy );
+
+    # ImageMagick remembers where a crop came from: the image keeps the page
+    # geometry it was cut out of, '600x400+100+50' and not '300x200+0+0', and
+    # that travels all the way into the written file. A picture that claims to
+    # be a tile of a larger canvas is a different thing from a picture, and
+    # everything that honours the claim -- GIF assembly, -layers, a viewer
+    # placing it on its page -- then puts it somewhere nobody asked for.
+    $img->Set( page => '0x0+0+0' );
+
+    # Back to the frame the shape asked for. Not doing this would make zoom
+    # mean "shrink the picture", which is the opposite of what the word says
+    # and would hand every later effect a smaller canvas at every setting.
+    $img->Resize( geometry => "${fw}x${fh}!", filter => 'Lanczos' )
+        if $cw != $fw || $ch != $fh;
+
+    return;
+}
+
+# The largest rectangle of the wanted shape that fits inside the picture. At
+# shape 'none' that is the picture itself, which is what makes the zoom work
+# on its own.
+sub _frame
+{
+    my ( $w, $h, $shape ) = @_;
+
+    my $want  = $SHAPE{ $shape // 'none' } or return ( $w, $h );
+    my $ratio = $want->[ 0 ] / $want->[ 1 ];
+
+    # Whichever edge runs out first is the one the frame keeps. A shape wider
+    # than the picture is limited by its width, a narrower one by its height;
+    # getting that the wrong way round asks for a frame bigger than the thing
+    # it is cut out of.
+    return ( $w, int( $w / $ratio ) || 1 ) if $ratio >= $w / $h;
+    return ( int( $h * $ratio ) || 1, $h );
+}
+
+# ---------------------------------------------------------------------------
+
 $R->register(
     name    => 'downsample',
     title   => 'Pixelize',

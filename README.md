@@ -437,13 +437,13 @@ whatever you changed on top.
 
 ## Effects
 
-45 effects, sorted automatically into a signal chain. Order is not a free
+46 effects, sorted automatically into a signal chain. Order is not a free
 choice — scanlines applied before a downsample get eaten by the resample — so
 each effect declares a stage and the pipeline sorts by it.
 
 | Stage | Shown as | Effects |
 |---|---|---|
-| **format** | Resolution & Format | `downsample` `bitmap` |
+| **format** | Resolution & Format | `crop` `downsample` `bitmap` |
 | **colour** | Colour | `grade` `palette` `duotone` `gradient_map` `posterize` `quantize` |
 | **channels** | Channel Separation | `chroma_shift` `rgb_shift` `chroma_bleed` |
 | **damage** | Data Damage | `pixelsort` `databend` `blockshift` `slice` `vgatext` `deepfry` |
@@ -491,9 +491,15 @@ A few worth knowing about:
   video gives colour far less bandwidth than brightness, so colour smears
   horizontally while edges stay sharp. Done properly in YCbCr, blurring only
   Cb and Cr.
-- **`pixelsort`** — sorts runs of pixels within a brightness band. The
-  threshold is what makes it read as art rather than noise: sorting only the
-  dark runs leaves the subject legible while the shadows pour sideways.
+- **`crop`** — reframes to a shape (square, 4:3, 16:9, 2.39:1, 4:5, 9:16, or
+  the picture's own) and chooses what is inside it. `zoom` magnifies rather
+  than shrinks: the frame that comes out is the same size at every setting, so
+  the rest of the chain is never handed a smaller canvas.
+- **`pixelsort`** — sorts runs of pixels within a brightness band. The band is
+  what makes it read as art rather than noise: sorting only the dark runs
+  leaves the subject legible while the shadows pour sideways. How long a smear
+  may be is a share of the line rather than a count of pixels, so a preview
+  and an export agree about it.
 - **`databend`** — corrupts bytes inside the compressed JPEG stream. Because
   JPEG codes DC terms differentially, one altered byte shifts every block
   after it, giving a coloured band rather than one bad pixel.
