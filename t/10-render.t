@@ -12,6 +12,7 @@ use Test::More;
 use GlitchVape           ();
 use GlitchVape::Context  ();
 use GlitchVape::Pipeline ();
+use GlitchVape::Palette  ();
 use GlitchVape::Registry ();
 use GlitchVape::Raster   ();
 use GlitchVape::Tools    ();
@@ -562,6 +563,150 @@ sub ground_is_two_colours
         highlights => '#CCFFCC'
         )->Get( 'signature' ),
         'and two other colours are two other colours';
+}
+
+# ---------------------------------------------------------------------------
+# A palette is chosen too, and 'custom' is what the row of pickers is for
+
+# The same argument duotone's ramp makes, for the two effects that take a whole
+# palette rather than two ends of one. Both were typeable combos, which is a
+# control that is a menu and a text field at once and says which only after it
+# has been used -- and the thing that was typeable into them, an inline list of
+# colours, is a row of pickers here rather than a string somebody spells.
+#
+# What the CLI accepts has not narrowed: an inline list in the name itself is
+# what older command lines and hand-written presets say, and it still renders.
+{
+    my $registry = 'GlitchVape::Registry';
+
+    for my $effect ( qw( palette gradient_map ) )
+    {
+        my $spec = $registry->get( $effect )->{ params };
+
+        is $spec->{ name }{ choose }, 'palette_custom',
+            "$effect offers a closed list of palettes";
+        ok !$spec->{ name }{ suggest },
+            'with nothing typeable left beside it';
+        is_deeply $spec->{ colors }{ needs }, { name => 'custom' },
+            "$effect.colors means nothing unless the palette is custom";
+        ok $spec->{ colors }{ stops },
+            'and says how many colours it can be given';
+    }
+
+    my $mapped = sub {
+        my ( $effect, %how ) = @_;
+
+        my $img = Image::Magick->new;
+        $img->Read( $src );
+
+        my $ctx = GlitchVape::Context->new( image => $img, seed => 3 );
+        GlitchVape::Pipeline->new( effects => { $effect => { %how } } )
+            ->run( $ctx );
+
+        return $ctx->image->Get( 'signature' );
+    };
+
+    my $vapor = join ',', @{ GlitchVape::Palette::colors( 'vapor' ) };
+
+    for my $effect ( qw( palette gradient_map ) )
+    {
+        is $mapped->( $effect, name => 'vapor' ),
+            $mapped->( $effect, name => 'custom', colors => $vapor ),
+            "$effect with vapor's own colours typed in renders vapor exactly";
+
+        isnt $mapped->( $effect, name => 'custom', colors => $vapor ),
+            $mapped->(
+            $effect, name => 'custom',
+            colors => '#000000,#FFFFFF'
+            ),
+            'and two other colours are two other colours';
+
+        # The spelling the drop-down replaced. It is what a preset written
+        # before this existed says, so it has to go on meaning what it meant.
+        is $mapped->( $effect, name => $vapor ),
+            $mapped->( $effect, name => 'vapor' ),
+            "$effect still takes an inline list in the name itself";
+    }
+}
+
+# ---------------------------------------------------------------------------
+# The sun is a disc, and the way it stops being one is silent
+
+# It is built as a square gradient with a circular mask moved into its alpha,
+# and if that move does not happen the square composites whole: a rectangle of
+# gradient sitting on the horizon, with the slots and the round edge gone. No
+# error is raised, because a composite operator ImageMagick cannot name is not
+# an error -- it simply does nothing -- so nothing but the pixels can say which
+# of the two was drawn.
+#
+# Asked without reckoning where the sun is: it is painted in a colour nothing
+# else in the picture uses, so the pixels wearing that colour are the sun and
+# the box around them is its extent.
+{
+    my $img = Image::Magick->new;
+    $img->Read( $src );
+
+    my $ctx = GlitchVape::Context->new( image => $img, seed => 5 );
+
+    # One flat colour for the whole disc, so the test is asking about its
+    # shape and not about the gradient across it.
+    GlitchVape::Pipeline->new(
+        effects => {
+            grid => {
+                sun        => 1,
+                sun_colors => '#00FF00,#00FF00',
+                color      => '#FF00AA',
+                opacity    => 1,
+            }
+        }
+    )->run( $ctx );
+
+    my ( $w, $h ) =
+        ( $ctx->image->Get( 'width' ), $ctx->image->Get( 'height' ) );
+    my @px = $ctx->image->GetPixels(
+        map    => 'RGB',
+        width  => $w,
+        height => $h
+    );
+
+    my $is_sun = sub {
+        my ( $x, $y ) = @_;
+        my $at = ( $y * $w + $x ) * 3;
+
+        my ( $r, $g, $b ) = map { int( $_ / 257 + 0.5 ) } @px[ $at .. $at + 2 ];
+        return $r < 64 && $g > 191 && $b < 64;
+    };
+
+    my ( $x0, $y0, $x1, $y1 ) = ( $w, $h, -1, -1 );
+    for my $y ( 0 .. $h - 1 )
+    {
+        for my $x ( 0 .. $w - 1 )
+        {
+            next unless $is_sun->( $x, $y );
+
+            $x0 = $x if $x < $x0;
+            $x1 = $x if $x > $x1;
+            $y0 = $y if $y < $y0;
+            $y1 = $y if $y > $y1;
+        }
+    }
+
+    cmp_ok $x1, '>', $x0, 'the sun is drawn';
+
+    # A quarter of the way down, which is above the slots: they are cut across
+    # the lower half, and one of them through the middle would answer this
+    # question with the background.
+    ok $is_sun->(
+        int( ( $x0 + $x1 ) / 2 ),
+        $y0 + int( ( $y1 - $y0 ) / 4 )
+        ),
+        'and the middle of it is the colour it was given';
+
+    my $corners = grep { $is_sun->( @$_ ) } [ $x0, $y0 ], [ $x1, $y0 ],
+        [ $x0, $y1 ], [ $x1, $y1 ];
+
+    is $corners, 0,
+        'while the corners of its extent are not, which is what makes it round';
 }
 
 done_testing;

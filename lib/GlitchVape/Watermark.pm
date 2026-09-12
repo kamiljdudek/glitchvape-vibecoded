@@ -238,7 +238,15 @@ sub _letterforms
     $shape->Set( alpha => 'on' );
 
     $mask->Set( alpha => 'copy' );
-    $shape->Composite( image => $mask->[ 0 ], compose => 'CopyAlpha' );
+
+    # CopyOpacity and not the CopyAlpha this said before. IM7 aliases the two,
+    # so the operation is identical there; IM6 knows only the older name,
+    # ignores a composite it cannot name, and leaves the rectangle opaque --
+    # which signs the picture with a pale square where the letters should be.
+    # Nothing reports it, because an unnamed composite is not an error, and
+    # the mark is the one thing on the page nobody is looking at while they
+    # work, so it can survive a long time as a square.
+    $shape->Composite( image => $mask->[ 0 ], compose => 'CopyOpacity' );
 
     return $LETTERFORMS = $shape;
 }

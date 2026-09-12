@@ -32,15 +32,16 @@ to L<GlitchVape::Registry> gets a control without anyone editing the GUI.
     enum                  Gtk3::ComboBoxText
     list                  Gtk3::Entry       comma separated
     str                   Gtk3::Entry; a combo, open or closed, where the
-                          parameter says what it offers; or an entry paired
-                          with a colour picker, a calendar or a clock
+                          parameter says what it offers; a row of colour
+                          pickers where it holds several colours; or an entry
+                          paired with a colour picker, a calendar or a clock
 
-The five string cases are worth the special-casing: a parameter that declares
+The six string cases are worth the special-casing: a parameter that declares
 a suggestion list takes one of those values I<or> anything else typed in,
 C<text.font> takes a font role rather than a font name, a colour parameter
-typed by hand is the one most likely to be got wrong, and C<osd.date> and
-C<osd.time> are a date and a time, which are things people pick rather than
-spell.
+typed by hand is the one most likely to be got wrong, a palette is several of
+those at once, and C<osd.date> and C<osd.time> are a date and a time, which
+are things people pick rather than spell.
 
 Gtk3 has a calendar and no clock, so the time picker is built here out of two
 spin buttons and a combo. It is the same shape as the calendar deliberately:
@@ -63,10 +64,13 @@ window talking about the same string.
 
 =head1 A DECLARATION MAY SAY HOW IT IS PRESENTED
 
-C<placeholder> is the grey text an empty entry shows. Declared rather than
-decided here because what an empty field means is a fact about the parameter:
-C<osd.date> draws no date, C<text.string> draws nothing at all, and a colour
-means no colour.
+C<placeholder> is the grey text an empty entry shows -- including the entry
+inside a combo that suggests values, where it does more work than anywhere
+else: the states the list cannot enumerate are the whole reason that combo is
+typeable, and empty is usually one of them. Declared rather than decided here
+because what an empty field means is a fact about the parameter: C<osd.date>
+draws no date, C<osd.camera> draws no transport indicator, C<text.string>
+draws nothing at all, and a colour means no colour.
 
 C<suggest> and C<choose> both name the values a parameter offers -- a source
 this module knows, or an inline list -- and differ in what typing something
@@ -111,6 +115,15 @@ my %SUGGEST_SOURCE = (
     # want: three of the four presets that letterbox do it for the border
     # and nothing else.
     ratio => sub { qw(native 16:9 2.35:1 4:3 1:1 9:16) },
+
+    # The same names again with 'custom' in front of them, for the two effects
+    # that can be handed colours instead of a name. A second source rather
+    # than 'custom' added to the first, because offering it is a claim the
+    # effect has somewhere to put the colours: bitmap.palette has not, and a
+    # drop-down offering an answer the render cannot use is the ambiguity this
+    # whole arrangement exists to remove.
+    palette_custom =>
+        sub { return ( 'custom', GlitchVape::Palette::names() ) },
 );
 
 =head2 split( $params )
@@ -219,6 +232,7 @@ my %BUILDER = (
     numeric   => \&_numeric,
     seed      => \&_seed,
     colour    => \&_colour,
+    colours   => \&_colour_list,
     date      => \&_date,
     time      => \&_time,
     suggested => \&_suggested,
@@ -288,6 +302,7 @@ sub _kind
     return 'suggested' if _offered( $arg->{ spec }, 'suggest' );
 
     return 'numeric' if $type eq 'int' || $type eq 'num';
+    return 'colours' if _is_colour_list( $arg );
     return 'colour'  if _is_colour( $arg );
     return 'date'    if $arg->{ name } eq 'date';
     return 'time'    if $arg->{ name } eq 'time';
@@ -633,6 +648,14 @@ sub _combo_with_entry
     my $entry = $combo->get_child;
     $entry->set_text( _as_text( $arg->{ value } ) );
 
+    # The same grey text a plain entry gets, and wanted here for a stronger
+    # reason: the states a suggestion list cannot enumerate are why this combo
+    # is typeable at all, and empty is one of them. Without it the two OSD
+    # indicators offer three words each and no hint that deleting the word is
+    # how the indicator is turned off.
+    $entry->set_placeholder_text( $arg->{ spec }{ placeholder } )
+        if defined $arg->{ spec }{ placeholder };
+
     $entry->signal_connect(
         changed => sub {
             $arg->{ on_change }->( $entry->get_text ) if $arg->{ on_change };
@@ -641,6 +664,23 @@ sub _combo_with_entry
     );
 
     return { control => $combo, get => sub { return $entry->get_text } };
+}
+
+# Two or more colours, which is a palette and not a colour. Read off the
+# default rather than the value, so that what a parameter's control *is*
+# cannot change while somebody is using it.
+sub _is_colour_list
+{
+    my ( $arg ) = @_;
+
+    my $default = $arg->{ spec }{ default };
+    return 0 unless defined $default && !ref $default;
+
+    my @stops = _colour_stops( $default );
+    return 0 unless @stops > 1;
+
+    return ( grep { m{\A [#][0-9a-f]{3}(?:[0-9a-f]{3})? \z}xi } @stops )
+        == @stops ? 1 : 0;
 }
 
 sub _is_colour
@@ -707,6 +747,158 @@ sub _colour
     $box->pack_start( $button, 0, 0, 0 );
 
     return { control => $box, get => sub { return $entry->get_text } };
+}
+
+=head2 A LIST OF COLOURS IS A ROW OF PICKERS
+
+A parameter whose default is two or more colours is a palette, and it gets one
+C<Gtk3::ColorButton> per stop rather than a box to type a comma-separated list
+into. The declaration says whether the length is fixed: C<stops> gives the
+range the effect can actually use, and without it the row is as long as the
+value it was handed and offers no way to change that -- a parameter that has
+not said it can take more colours does not grow buttons that would add some.
+
+Inferred from the default's shape for C<_is_colour>'s reason, one step along:
+a default of C<#FFE261,#FF3864> is two colours in every effect that declares
+one, so the rule holds for whatever declares the next without this file being
+told about it.
+
+=cut
+
+# The stops in a value, from either spelling GlitchVape::Palette accepts.
+sub _colour_stops
+{
+    my ( $value ) = @_;
+
+    my $text = _as_text( $value );
+    return grep { length } split m{\s*[,/]\s*}, $text;
+}
+
+# How many colours this parameter may hold: the count it has, unless the
+# declaration says it varies.
+sub _stop_range
+{
+    my ( $arg, $have ) = @_;
+
+    my $stops = $arg->{ spec }{ stops };
+
+    return ( $have, $have ) unless defined $stops;
+    return ( $stops->[ 0 ], $stops->[ 1 ] ) if ref $stops eq 'ARRAY';
+    return ( $stops, $stops );
+}
+
+sub _colour_list
+{
+    my ( $arg ) = @_;
+
+    my @stops = _colour_stops( $arg->{ value } );
+    @stops = _colour_stops( $arg->{ spec }{ default } ) unless @stops;
+
+    my ( $least, $most ) = _stop_range( $arg, scalar @stops );
+
+    my $box = Gtk3::Box->new( 'horizontal', 8 );
+    my $row = Gtk3::Box->new( 'horizontal', 2 );
+
+    my $announce = sub {
+        $arg->{ on_change }->( join ',', @stops ) if $arg->{ on_change };
+        return;
+    };
+
+    # Declared before the rebuild that makes them insensitive at the ends of
+    # the range, and only actually built where the range has two ends.
+    my ( $fewer, $more );
+
+    # The buttons are rebuilt rather than added to, because each one closes
+    # over which stop it is: inserting one in the middle would leave every
+    # button after it writing to the wrong colour, and a picker that changes
+    # the stop next to the one it shows is worse than a slow rebuild.
+    my $rebuild = sub {
+        $row->remove( $_ ) for $row->get_children;
+
+        for my $n ( 0 .. $#stops )
+        {
+            my $button = Gtk3::ColorButton->new;
+            $button->set_tooltip_text(
+                sprintf 'Colour %d of %d', $n + 1, scalar @stops );
+
+            my $rgba = _parse_colour( $stops[ $n ] );
+            $button->set_rgba( $rgba ) if $rgba;
+
+            $button->signal_connect(
+                'color-set' => sub {
+                    $stops[ $n ] = _rgba_to_hex( $button->get_rgba );
+                    $announce->();
+                    return;
+                }
+            );
+
+            $row->pack_start( $button, 0, 0, 0 );
+        }
+
+        $fewer->set_sensitive( @stops > $least ) if $fewer;
+        $more->set_sensitive( @stops < $most )   if $more;
+
+        $row->show_all;
+        return;
+    };
+
+    if ( $most > $least )
+    {
+        # The range is enforced here and shown by the sensitivity above, not
+        # the other way round: an insensitive button is a picture of the
+        # limit, and the limit itself has to hold whatever presses it.
+        $fewer = _icon_button( 'list-remove-symbolic', 'One colour fewer' );
+        $fewer->signal_connect(
+            clicked => sub {
+                return if @stops <= $least;
+
+                pop @stops;
+                $rebuild->();
+                $announce->();
+                return;
+            }
+        );
+
+        # The new stop is a copy of the last one rather than a colour nobody
+        # chose: it is visibly there to be changed, and a palette that gains a
+        # random colour has to be corrected before it can be looked at.
+        $more = _icon_button( 'list-add-symbolic', 'One colour more' );
+        $more->signal_connect(
+            clicked => sub {
+                return if @stops >= $most;
+
+                push @stops, $stops[ -1 ];
+                $rebuild->();
+                $announce->();
+                return;
+            }
+        );
+    }
+
+    $rebuild->();
+
+    $box->pack_start( $row, 0, 0, 0 );
+    $box->pack_start( $fewer, 0, 0, 0 ) if $fewer;
+    $box->pack_start( $more,  0, 0, 0 ) if $more;
+
+    # Not stretched, for the switch's reason: a row of swatches has a size of
+    # its own and a colour twice as wide is not a colour said twice as loudly.
+    return {
+        control => $box,
+        stretch => 0,
+        get     => sub { return join ',', @stops },
+    };
+}
+
+sub _icon_button
+{
+    my ( $icon, $tooltip ) = @_;
+
+    my $button = Gtk3::Button->new;
+    $button->set_image( Gtk3::Image->new_from_icon_name( $icon, 'button' ) );
+    $button->set_tooltip_text( $tooltip );
+
+    return $button;
 }
 
 # The camcorder OSD format: three-letter month, zero-padded day, four-digit

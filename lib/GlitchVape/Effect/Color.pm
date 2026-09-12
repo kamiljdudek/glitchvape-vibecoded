@@ -295,15 +295,40 @@ $R->register(
 Remaps every pixel to its nearest entry in a fixed palette. At strength 1 this
 is a hard remap; below that the result is blended back over the original, which
 keeps detail while pulling the overall cast towards the palette.
+
+The palette is one of the named ones or C<custom>, which uses the colours
+under it -- duotone's arrangement, for duotone's reason, with a list instead
+of a pair. A closed list rather than a box to type into: every name on it is a
+set of colours somebody chose, a mistyped one is a render that stops, and a
+control that is both a menu and a text field never says which of the two it
+is at the moment you are looking at it.
 DOC
     params => {
         name => {
+            order   => 10,
+            label   => 'Palette',
             default => 'vapor',
             type    => 'str',
-            doc     => 'Palette name, or inline "#FF71CE,#01CDFE,..."',
-            suggest => 'palette',
+            choose  => 'palette_custom',
+            doc     => 'Which palette the image is forced into; custom uses '
+                . 'the colours below',
+        },
+        colors => {
+            order   => 20,
+            label   => 'Custom colours',
+            default => '#2B0F54,#B967FF,#FF71CE,#01CDFE,#05FFA1',
+            type    => 'str',
+
+            # Two is the fewest that is a palette rather than a tint, and
+            # eight is where a row of pickers stops fitting the panel -- a
+            # limit of the control and not of the remap, which takes as many
+            # as it is given.
+            stops => [ 2, 8 ],
+            needs => { name => 'custom' },
+            doc   => 'The palette itself, when the name above is custom',
         },
         strength => {
+            order   => 30,
             default => 1.0,
             type    => 'num',
             min     => 0,
@@ -311,6 +336,7 @@ DOC
             doc     => 'Blend back over the original (1 = full remap)',
         },
         dither => {
+            order   => 40,
             default => 'floydsteinberg',
             type    => 'enum',
             values  => [ qw(none floydsteinberg riemersma) ],
@@ -320,12 +346,31 @@ DOC
     apply => \&_palette,
 );
 
+# Which colours an effect offering named palettes is actually using.
+#
+# Three spellings arrive here and all three have to keep working: a name, the
+# word 'custom' with the colours in a parameter of their own, and an inline
+# list in the name itself -- which is what the control used to be for and what
+# a hand-written preset or a --set on the command line may still say.
+# Palette::colors has always taken either, so the only case needing an answer
+# is the one the drop-down introduced.
+sub _palette_spec
+{
+    my ( $p ) = @_;
+
+    my $name = $p->{ name } // q{};
+
+    return $name unless lc $name eq 'custom';
+    return $p->{ colors };
+}
+
 sub _palette
 {
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my $remap = GlitchVape::Palette::remap_file( $p->{ name }, $ctx->cachedir );
+    my $remap =
+        GlitchVape::Palette::remap_file( _palette_spec( $p ), $ctx->cachedir );
 
     # Below full strength the effect is blended back over the untouched
     # image, so a copy has to be kept before anything modifies it.
@@ -485,6 +530,11 @@ $R->register(
 Like duotone but using every colour in a palette as a stop, giving a richer
 graded look: deep purple shadows through magenta midtones to mint highlights.
 
+The palette is picked from the same closed list C<palette> offers, C<custom>
+included -- and for the same reason: a ramp is a set of colours somebody chose,
+so choosing one is the question, and colours of your own are the pickers under
+it rather than something spelled into the box that holds the names.
+
 C<swap> is the same setting duotone has, doing the same thing to more colours:
 every stop heads for the place its opposite number started from, so at 1 the
 palette is exactly itself reversed half way round the loop and back by the
@@ -495,14 +545,25 @@ DOC
     params => {
         name => {
             order   => 1,
+            label   => 'Palette',
             default => 'vapor',
             type    => 'str',
-            doc     => 'Palette name or inline colour list',
-            suggest => 'palette',
+            choose  => 'palette_custom',
+            doc     => 'Which palette the luminance is mapped onto; custom '
+                . 'uses the colours below',
+        },
+        colors => {
+            order   => 2,
+            label   => 'Custom colours',
+            default => '#2B0F54,#B967FF,#FF71CE,#01CDFE,#05FFA1',
+            type    => 'str',
+            stops   => [ 2, 8 ],
+            needs   => { name => 'custom' },
+            doc     => 'The ramp itself, when the name above is custom',
         },
         swap => {
             animation => 1,
-            order     => 2,
+            order     => 3,
             default   => 0,
             type      => 'num',
             min       => 0,
@@ -512,7 +573,7 @@ DOC
                 . 'half way round',
         },
         strength => {
-            order   => 3,
+            order   => 4,
             default => 0.7,
             type    => 'num',
             min     => 0,
@@ -533,7 +594,7 @@ sub _gradient_map
     # animate exactly as a registered one does.
     my $stops = _swap_at(
         $ctx,
-        GlitchVape::Palette::colors( $p->{ name } ),
+        GlitchVape::Palette::colors( _palette_spec( $p ) ),
         $p->{ swap }
     );
 

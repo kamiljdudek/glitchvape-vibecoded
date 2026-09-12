@@ -71,6 +71,16 @@ default, and is what makes the text flicker -- or held for the whole render.
 An empty C<string> with C<invent> off draws nothing, which is how to have the
 effect in a pipeline and silent for one render.
 
+A phrase can be more than one line. C<wrap> gives a width, as a fraction of
+the picture, and the phrase is broken to fit it -- between words where the
+script has spaces and between characters where it does not, which is what the
+Japanese the built-in list is written in needs. A C<\n> typed into C<string>
+breaks a line wherever it is put, since a one-line box has no other way to ask
+for two lines, and C<leading> opens the lines out or pulls them together.
+Which line sits under which is C<gravity>'s doing: the block is aligned the way
+it is placed, so a phrase in the corner is ragged towards the middle of the
+picture rather than away from it.
+
 The C<shadow> offset draws the same text in a contrasting colour behind the
 main copy, which is what stops light text disappearing into a light
 background.
@@ -98,6 +108,31 @@ DOC
             doc     => 'Pick a phrase from the built-in list instead of '
                 . 'drawing the one above',
         },
+
+        # Beside the phrase for the reason `invent` is: these two say what
+        # shape the phrase comes out in, and a width that wraps is read
+        # together with the box it wraps, which alphabetically it is not.
+        wrap => {
+            order   => 30,
+            label   => 'Wrap width',
+            default => 0,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'Break the phrase to this fraction of the image '
+                . 'width; 0 keeps it on one line however long it is',
+        },
+        leading => {
+            order   => 40,
+            label   => 'Line spacing',
+            default => 0,
+            type    => 'num',
+            min     => -0.5,
+            max     =>  2,
+            doc     => 'Extra space between lines as a fraction of the type '
+                . 'size; 0 is what the face itself asks for',
+        },
+
         reroll => {
             label     => 'Varying phrase',
             default   => 1,
@@ -211,18 +246,12 @@ sub _text
 
     return unless length $str;
 
-    # Wide tracking is done by hand because ImageMagick has no letter-spacing
-    # control; inserting thin spaces is the usual workaround.
-    if ( $p->{ spacing } > 0 )
-    {
-        my $gap = ' ' x ( int( $p->{ spacing } / 8 ) || 1 );
-        $str = join $gap, split //, $str;
-    }
-
     my ( $w, $h ) = $ctx->dims;
     my $font =
         GlitchVape::Fonts::resolve_or_die( $p->{ font }, "effect 'text'" );
     my $size = int( $h * $p->{ size } / 100 ) || 8;
+
+    $str = _lay_out( $ctx, $str, $p, $font, $size, $w );
 
     my $dx = int( $w * $p->{ x } );
     my $dy = int( $h * $p->{ y } );
@@ -234,6 +263,7 @@ sub _text
         gravity => $p->{ gravity },
         opacity => $p->{ opacity },
         rotate  => $p->{ rotate },
+        leading => int( $p->{ leading } * $size ),
     );
 
     if ( length $p->{ shadow } && $p->{ shadow_offset } )
@@ -248,6 +278,180 @@ sub _text
 
     _annotate( $ctx, %common, color => $p->{ color }, x => $dx, y => $dy );
     return;
+}
+
+# Characters that may not begin a line. Japanese line breaking allows a break
+# between any two characters, which is what makes wrapping it possible at all
+# -- and then forbids a handful of them at the start of a line, because a full
+# stop or a closing bracket pushed onto the next line reads as belonging to
+# nothing. The set is the common half of kinsoku shori; the long vowel mark is
+# in it because a line starting with one is a syllable cut in half.
+my $NO_LINE_START =
+    qr/[、。，．・？！：；）］｝」』〕】ー〜…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ]/;
+
+# One character wide, and where a line may be broken after it. A script that
+# writes without spaces gets a break opportunity between every pair of
+# characters, which is how Japanese is set; a script that writes with them
+# gets one at each space and nowhere else, because breaking an English word
+# anywhere but at a hyphen is a typesetting error rather than a tight fit.
+my $BREAK_ANYWHERE =
+    qr/[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\p{Bopomofo}]/;
+
+=head2 _lay_out
+
+The phrase as it is to be drawn: escapes resolved, lines broken to C<wrap> if
+it asks for it, and each line tracked out by C<spacing>.
+
+Tracking is applied to the finished lines rather than to the phrase, which is
+the whole reason the two are done in one place. Wrapping measures what will
+actually be drawn, so a tracked phrase wraps where the tracked phrase is too
+wide -- and the spaces tracking inserts are not break opportunities, which
+they would be if the string were tracked first and wrapped afterwards. A
+phrase set wide enough would otherwise come out one letter per line.
+
+=cut
+
+sub _lay_out
+{
+    my ( $ctx, $str, $p, $font, $size, $width ) = @_;
+
+    # The only newline a one-line entry can produce. It costs the ability to
+    # draw a literal backslash-n, which is not a thing anybody has wanted to
+    # write over a photograph, and buys a phrase in two lines from a box that
+    # is one line tall.
+    $str =~ s/\\n/\n/g;
+
+    my $limit = $p->{ wrap } > 0 ? $p->{ wrap } * $width : 0;
+
+    my @lines;
+    for my $para ( split /\n/, $str, -1 )
+    {
+        push @lines,
+            $limit
+            ? _wrapped( $ctx, $para, $p, $font, $size, $limit )
+            : $para;
+    }
+
+    return join "\n", map { _tracked( $_, $p->{ spacing } ) } @lines;
+}
+
+# Wide tracking is done by hand because ImageMagick has no letter-spacing
+# control; inserting thin spaces is the usual workaround.
+sub _tracked
+{
+    my ( $line, $spacing ) = @_;
+    return $line unless $spacing > 0 && length $line;
+
+    my $gap = ' ' x ( int( $spacing / 8 ) || 1 );
+    return join $gap, split //, $line;
+}
+
+# One paragraph broken into lines no wider than $limit pixels.
+#
+# Greedy rather than a Knuth-Plass total fit: the phrases this draws are a few
+# words long, where the two agree, and the second line of a two-line phrase is
+# not a place where an even measure is worth a dynamic program.
+#
+# A unit too wide for the limit on its own still gets its own line rather than
+# being cut mid-character: a wrap width below one word is a setting the render
+# should survive, not one it should obey to the letter.
+sub _wrapped
+{
+    my ( $ctx, $para, $p, $font, $size, $limit ) = @_;
+
+    my @units = _units( $para ) or return ( $para );
+
+    my @lines;
+    my $line = q{};
+
+    for my $unit ( @units )
+    {
+        my $candidate = $line . $unit;
+
+        if (   length $line
+            && $unit !~ /^\s/
+            && $unit !~ /^$NO_LINE_START/
+            && _drawn_width( $ctx, $candidate, $p, $font, $size ) > $limit )
+        {
+            push @lines, $line;
+            $line = $unit;
+            next;
+        }
+
+        $line = $candidate;
+    }
+
+    push @lines, $line if length $line;
+
+    # Trailing spaces are what is left of the break that was taken at them,
+    # and a centred line is centred including them.
+    s/\s+$// for @lines;
+
+    return @lines ? @lines : ( $para );
+}
+
+# A paragraph split at every place a line may be broken, with the spaces kept
+# on the unit before the break so that nothing starts a line with one.
+sub _units
+{
+    my ( $para ) = @_;
+
+    my @units;
+    for my $chunk ( split /(\s+)/, $para )
+    {
+        next unless length $chunk;
+
+        if ( $chunk =~ /^\s/ )
+        {
+            if ( @units )
+            {
+                $units[ -1 ] .= $chunk;
+            }
+            else
+            {
+                push @units, $chunk;
+            }
+            next;
+        }
+
+        # A run with no space in it is one unit unless it is written in a
+        # script that has no spaces, in which case every character is one.
+        if ( $chunk =~ /$BREAK_ANYWHERE/ )
+        {
+            push @units, split //, $chunk;
+        }
+        else
+        {
+            push @units, $chunk;
+        }
+    }
+
+    return @units;
+}
+
+# How wide a line will come out, tracking included. QueryFontMetrics asks the
+# same rasteriser Annotate will use, so the answer accounts for kerning and
+# for the substituted face a missing glyph falls back to -- which measuring
+# character counts against an average advance does not.
+sub _drawn_width
+{
+    my ( $ctx, $line, $p, $font, $size ) = @_;
+
+    my $drawn = Encode::encode( 'UTF-8', _tracked( $line, $p->{ spacing } ) );
+
+    my @metrics = $ctx->image->QueryFontMetrics(
+        text      => $drawn,
+        font      => $font,
+        pointsize => $size,
+        encoding  => 'UTF-8',
+        antialias => 'true',
+    );
+
+    # Index 4 is the width of the text. A failed query returns nothing at all,
+    # and zero is the answer that leaves the phrase on one line: a measurement
+    # nobody can make is a reason to draw the phrase as it was typed, not a
+    # reason to break it after every character.
+    return $metrics[ 4 ] // 0;
 }
 
 # ---------------------------------------------------------------------------
@@ -342,20 +546,22 @@ DOC
             doc         => 'Time as it should read; empty draws no time',
         },
         camera => {
-            order   => 90,
-            label   => 'Camera mode',
-            default => 'REC',
-            type    => 'str',
-            suggest => [ 'REC', 'PLAY', 'PLAY-FF' ],
-            doc     => 'Transport indicator, top left; empty draws none',
+            order       => 90,
+            label       => 'Camera mode',
+            placeholder => 'Not shown',
+            default     => 'REC',
+            type        => 'str',
+            suggest     => [ 'REC', 'PLAY', 'PLAY-FF' ],
+            doc         => 'Transport indicator, top left; empty draws none',
         },
         rec_mode => {
-            order   => 100,
-            label   => 'DV REC mode',
-            default => 'SP',
-            type    => 'str',
-            suggest => [ qw(SP LP HD) ],
-            doc     => 'Tape speed, top right; empty to omit',
+            order       => 100,
+            label       => 'DV REC mode',
+            placeholder => 'Not shown',
+            default     => 'SP',
+            type        => 'str',
+            suggest     => [ qw(SP LP HD) ],
+            doc         => 'Tape speed, top right; empty to omit',
         },
         reroll => {
             order     => 110,
@@ -845,15 +1051,19 @@ sub _draw_sun
     }
 
     # The mask carries the shape as black and white pixels, so its intensity
-    # has to be moved into its alpha channel before the composite. IM6's
-    # CopyOpacity fell back to intensity when the source had no alpha; IM7
-    # aliases CopyOpacity to CopyAlpha, which copies the alpha channel and
-    # nothing else -- and `xc:black` arrives with a fully opaque one. Without
-    # the copy the sun composites as an opaque square with no slots in it.
+    # has to be moved into its alpha channel before the composite: both
+    # versions copy the alpha channel and nothing else here, and `xc:black`
+    # arrives with a fully opaque one, so without the copy the sun composites
+    # as an opaque square with no slots in it.
     $mask->Set( alpha => 'copy' );
 
+    # CopyOpacity and not CopyAlpha, which is the name IM7 added and aliases
+    # this one to. The operation is identical there and it is the only name
+    # IM6 answers to, and the way this fails is the reason the older spelling
+    # is worth keeping: a composite ImageMagick cannot name is not an error,
+    # so the picture simply comes out with a square where the sun should be.
     $disc->Set( alpha => 'on' );
-    $disc->Composite( image => $mask->[ 0 ], compose => 'CopyAlpha' );
+    $disc->Composite( image => $mask->[ 0 ], compose => 'CopyOpacity' );
 
     my $x = $cx - $r;
     my $y = $hy - int( $r * 1.15 );
@@ -2262,6 +2472,11 @@ sub _annotate
         antialias => 'true',
     );
     $args{ rotate } = $a{ rotate } if $a{ rotate };
+
+    # Only when it is asked for: the attribute is additive, and passing a zero
+    # is not the same as leaving the face to say what its own line height is
+    # on every ImageMagick this has to run on.
+    $args{ 'interline-spacing' } = $a{ leading } if $a{ leading };
 
     if ( $opacity < 1 )
     {

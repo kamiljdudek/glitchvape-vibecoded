@@ -473,6 +473,149 @@ SKIP:
 }
 
 # ---------------------------------------------------------------------------
+# A palette is picked, never spelled
+
+# Both of these were combos with an entry in them, which is a control that is a
+# menu and a text field at once: what it is depends on what you do to it next,
+# and nothing about it says which of the two answers the render will use. The
+# list is closed now, 'custom' is the explicit way of saying "none of these",
+# and the colours that word refers to are pickers rather than a string.
+{
+    for my $effect ( qw( palette gradient_map ) )
+    {
+        my $spec = GlitchVape::Registry->get( $effect )->{ params };
+
+        my $built = GlitchVape::GUI::Params->build(
+            effect => $effect,
+            name   => 'name',
+            spec   => $spec->{ name },
+            value  => 'vapor',
+        );
+
+        my $combo = $built->{ control };
+
+        isa_ok $combo, 'Gtk3::ComboBoxText', "the $effect palette control";
+        ok !$combo->get_has_entry,
+            'and it is a plain list with nothing to type into';
+
+        my @offered;
+        $combo->get_model->foreach(
+            sub { push @offered, $_[ 0 ]->get_value( $_[ 2 ], 0 ); return 0 } );
+
+        # First, because it is the one answer that is not a name: it is what
+        # to pick when none of the names is what was meant.
+        is $offered[ 0 ], 'custom', 'custom is the first thing it offers';
+        ok scalar( grep { $_ eq 'vapor' } @offered ),
+            'and the registered palettes are the rest of it';
+    }
+
+    # The colours themselves: one Gtk3::ColorButton per stop, and a value that
+    # is still the comma-separated list the CLI and the presets speak.
+    my $colours =
+        GlitchVape::Registry->get( 'palette' )->{ params }{ colors };
+
+    my @told;
+    my $built = GlitchVape::GUI::Params->build(
+        effect    => 'palette',
+        name      => 'colors',
+        spec      => $colours,
+        value     => '#FF71CE,#01CDFE,#05FFA1',
+        on_change => sub { push @told, $_[ 0 ] },
+    );
+
+    my ( $row, $fewer, $more ) = $built->{ control }->get_children;
+    my @swatches = $row->get_children;
+
+    is scalar @swatches, 3, 'a palette of three is three pickers';
+    isa_ok $swatches[ 0 ], 'Gtk3::ColorButton', 'each of which';
+    is $built->{ get }->(), '#FF71CE,#01CDFE,#05FFA1',
+        'and the value is the list they spell out';
+
+    ok !$built->{ stretch },
+        'a row of swatches is not widened to fill the panel';
+
+    # Through an array rather than the (()=) idiom: split is the one operator
+    # that idiom does not count, since it answers the empty assignment with a
+    # field count of its own.
+    my $count = sub {
+        my @stops = split /,/, $built->{ get }->();
+        return scalar @stops;
+    };
+
+    $more->clicked;
+    is $count->(), 4, 'the button beside them adds a colour';
+    is $told[ -1 ], $built->{ get }->(), 'and the caller hears the new list';
+
+    $fewer->clicked;
+    $fewer->clicked;
+    is $count->(), 2, 'and the one before it takes them away again';
+
+    # The declared range holds however hard it is pressed. The buttons go
+    # insensitive at the ends, which is a picture of the limit and not the
+    # limit itself -- a value out of range would reach the render.
+    my ( $least, $most ) = @{ $colours->{ stops } };
+
+    $fewer->clicked for 1 .. 5;
+    is $count->(), $least,
+        'it will not go below the fewest colours the effect can use';
+
+    $more->clicked for 1 .. 20;
+    is $count->(), $most, 'nor above the most';
+}
+
+# A colour list that has not said it can vary does not offer to. grid's sun is
+# a top colour and a bottom colour, and a third would be drawn by nothing.
+{
+    my $spec = GlitchVape::Registry->get( 'grid' )->{ params }{ sun_colors };
+
+    ok !$spec->{ stops }, 'the sun says nothing about varying its colours';
+
+    my $built = GlitchVape::GUI::Params->build(
+        effect => 'grid',
+        name   => 'sun_colors',
+        spec   => $spec,
+        value  => $spec->{ default },
+    );
+
+    my @parts = $built->{ control }->get_children;
+    my @swatches = $parts[ 0 ]->get_children;
+
+    is scalar @swatches, 2, 'so it gets a picker for each colour it draws';
+    is scalar @parts,    1, 'and no buttons to add or remove one';
+}
+
+# ---------------------------------------------------------------------------
+# A typeable list still says what leaving it empty means
+
+# The two camcorder indicators are the reason a suggestion list is typeable at
+# all: what they offer is three words each, and what they accept is any string
+# the deck could have burned in -- including none, which is how the indicator
+# is turned off. A drop-down cannot hold "no value", so the placeholder is what
+# has to say it, exactly as it does on a plain entry.
+{
+    for my $name ( qw(camera rec_mode) )
+    {
+        my $spec = $SPEC->{ params }{ $name };
+
+        ok $spec->{ placeholder },
+            "osd.$name says what an empty one means";
+
+        my $built = GlitchVape::GUI::Params->build(
+            effect => 'osd',
+            name   => $name,
+            spec   => $spec,
+            value  => q{},
+        );
+
+        my $entry = $built->{ control }->get_child;
+
+        isa_ok $entry, 'Gtk3::Entry', "the $name control is typeable";
+        is $entry->get_placeholder_text, $spec->{ placeholder },
+            'and empty it shows the grey text the declaration names';
+    }
+}
+
+# ---------------------------------------------------------------------------
 # A number that names the values people use gets the list, not a track
 
 # The same argument as the calendar and the seed, a third time. A slider is
@@ -504,7 +647,11 @@ SKIP:
     $combo->get_model->foreach(
         sub { push @offered, $_[ 0 ]->get_value( $_[ 2 ], 0 ); return 0 } );
 
-    is_deeply \@offered, [ 4200, 5400, 7200, 10_000, 15_000 ],
+    # Against the declaration rather than against a copy of it: a list written
+    # out here is a second place to edit when a speed is added, and the claim
+    # is that the combo says what the parameter says, not that either of them
+    # says any particular thing.
+    is_deeply \@offered, [ @{ $spec->{ suggest } } ],
         'and offers exactly the ones the declaration names';
 
     is $built->{ get }->(), 5400, 'opening on the one it was given';

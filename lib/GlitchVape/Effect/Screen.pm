@@ -353,26 +353,58 @@ $R->register(
 Bows the image outward as if it were painted on the inside of a curved tube
 face. Small amounts (0.02-0.08) are convincing; larger amounts read as a
 fisheye lens instead.
+
+C<softness> is the other half of the same illusion. A tube is focused for the
+middle of its face, so the beam lands slightly out of focus everywhere else --
+the corners of a real CRT are never as sharp as its centre, whatever the
+signal is. A bulge with a uniformly crisp rim reads as a warped photograph
+rather than as glass, which is why this arrives on rather than at zero.
+C<focus> says how much of the middle stays sharp.
 DOC
     params => {
         amount => {
+            order   => 10,
             default => 0.05,
             type    => 'num',
             min     => -0.5,
             max     =>  0.5,
             doc     => 'Positive bulges outward, negative pinches inward',
         },
-        background => {
-            default => 'black',
-            type    => 'str',
-            doc     => 'Colour revealed at the corners',
-        },
         zoom => {
+            order   => 20,
             default => 1.0,
             type    => 'num',
             min     => 0.5,
             max     => 2,
             doc     => 'Scale up afterwards to hide the revealed corners',
+        },
+
+        # Ordered so that the two halves of the tube face -- its shape and its
+        # focus -- sit together, which alphabetically they do not.
+        softness => {
+            order   => 30,
+            default => 0.3,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'How far out of focus the rim goes; 0 leaves the '
+                . 'whole picture sharp',
+        },
+        focus => {
+            order   => 40,
+            default => 1.4,
+            type    => 'num',
+            min     => 0.2,
+            max     => 4,
+            needs   => { softness => 1 },
+            doc     => 'Radius of the sharp centre; larger keeps more of '
+                . 'the picture crisp',
+        },
+        background => {
+            order   => 50,
+            default => 'black',
+            type    => 'str',
+            doc     => 'Colour revealed at the corners',
         },
     },
     apply => \&_curvature,
@@ -381,27 +413,151 @@ DOC
 sub _curvature
 {
     my ( $ctx, $p ) = @_;
-    return if abs( $p->{ amount } ) < 0.001;
 
     my ( $w, $h ) = $ctx->dims;
 
-    # Barrel coefficients are A B C (D is derived as 1-A-B-C). Driving C alone
-    # gives a clean single-parameter bulge.
-    $ctx->magick(
-        '-virtual-pixel', 'background', '-background', $p->{ background },
-        '-distort',       'Barrel', sprintf( '0.0 0.0 %.5f', $p->{ amount } ),
-    );
-
-    if ( $p->{ zoom } != 1 )
+    # A flat tube is still a tube, so the two halves are skipped separately
+    # rather than behind one guard: with the bulge at zero the softness would
+    # be a setting that quietly did nothing, which is the one thing a slider
+    # must never look like.
+    if ( abs( $p->{ amount } ) >= 0.001 )
     {
-        my $zw = int( $w * $p->{ zoom } );
-        my $zh = int( $h * $p->{ zoom } );
+        # Barrel coefficients are A B C (D is derived as 1-A-B-C). Driving C
+        # alone gives a clean single-parameter bulge.
         $ctx->magick(
-            '-resize', "${zw}x${zh}!", '-gravity', 'Center',
-            '-extent', "${w}x${h}",
+            '-virtual-pixel', 'background',
+            '-background',    $p->{ background },
+            '-distort', 'Barrel', sprintf( '0.0 0.0 %.5f', $p->{ amount } ),
         );
+
+        if ( $p->{ zoom } != 1 )
+        {
+            my $zw = int( $w * $p->{ zoom } );
+            my $zh = int( $h * $p->{ zoom } );
+            $ctx->magick(
+                '-resize', "${zw}x${zh}!", '-gravity', 'Center',
+                '-extent', "${w}x${h}",
+            );
+        }
     }
+
+    # After the zoom rather than before it: the softness belongs to the glass,
+    # so it follows the frame that is finally shown and is not itself
+    # magnified into a smear by a crop that happens afterwards.
+    _defocus_rim( $ctx, $p );
     return;
+}
+
+# The picture going gradually out of focus towards the rim.
+#
+# ImageMagick has no blur whose radius varies across the frame -- the closest
+# it offers is a whole second render of the image at each of several radii --
+# so this blurs once and dissolves that copy in under a radial mask. Two
+# levels of sharpness with a smooth ramp between them is what a lens with one
+# focal surface actually does, and it costs one blur rather than one per band.
+#
+# The blur itself is Blur and not GaussianBlur for the reason the vignette's
+# is: at these radii the approximation is indistinguishable and markedly
+# cheaper, and this runs on every frame of a loop.
+sub _defocus_rim
+{
+    my ( $ctx, $p ) = @_;
+    return if $p->{ softness } <= 0;
+    require Image::Magick;
+
+    my ( $w, $h ) = $ctx->dims;
+
+    # Measured against the short side so that the rim of a thumbnail and the
+    # rim of a full-size render are the same feature of the same tube rather
+    # than the same count of pixels.
+    my $short = $w < $h ? $w : $h;
+    my $sigma = $p->{ softness } * $short / 150;
+    return if $sigma < 0.2;
+
+    my $soft = $ctx->image->Clone;
+    $soft->Blur( radius => 0, sigma => $sigma );
+
+    my $mask = _focus_mask( $ctx, $w, $h, $p->{ focus } );
+
+    # The falloff is carried as intensity and wanted as alpha. Both versions
+    # of ImageMagick copy the alpha channel and nothing else here, so without
+    # the copy the mask arrives fully opaque and the blurred picture covers
+    # the sharp one entirely. Done on the way out of the cache rather than on
+    # the way in, because a grey PNG is a thing every ImageMagick reads back
+    # as the picture that was written and a greyscale one carrying its own
+    # alpha is not.
+    $mask->Set( alpha => 'copy' );
+    $soft->Set( alpha => 'on' );
+
+    # CopyOpacity rather than CopyAlpha, which IM7 aliases to it: the
+    # operation is identical on the version this program is packaged against,
+    # and it is the only name IM6 knows. What makes the older spelling worth
+    # using is that the failure is silent -- a composite ImageMagick cannot
+    # name leaves the mask opaque, which here means the blurred copy over the
+    # whole picture rather than an error saying so.
+    $soft->Composite( image => $mask->[ 0 ], compose => 'CopyOpacity' );
+
+    $ctx->image->Composite(
+        image   => $soft->[ 0 ],
+        compose => 'Over',
+        gravity => 'Center',
+    );
+    return;
+}
+
+# Where the picture stops being sharp: black across the middle, white at the
+# rim, as an ImageMagick image.
+#
+# Built into the render's cache directory and not its temp directory, which is
+# the difference between building this once and building it on every frame of
+# a loop -- the falloff is the same picture for the whole render, since its
+# only inputs are the size of the frame and the focus, and neither of those is
+# allowed to animate. It costs about as much to build as the blur it masks,
+# which is what makes it worth the file.
+sub _focus_mask
+{
+    my ( $ctx, $w, $h, $focus ) = @_;
+    require File::Spec;
+
+    my $path = File::Spec->catfile( $ctx->cachedir,
+        sprintf 'crtfocus_%dx%d_%.3f.png', $w, $h, $focus );
+
+    my $mask = Image::Magick->new;
+
+    if ( -f $path )
+    {
+        GlitchVape::Magick::check( $mask->Read( $path ),
+            'curvature: could not read the cached focus falloff' );
+        return $mask;
+    }
+
+    # radial-gradient is white in the centre, and here the centre is the part
+    # that must not be touched -- so black-white. Built oversize and cropped
+    # back, which is the vignette's trick for pushing the falloff outwards: a
+    # larger gradient crops to more of its own black middle.
+    my $gw = int( $w * $focus ) || $w;
+    my $gh = int( $h * $focus ) || $h;
+
+    $mask->Set( size => "${gw}x${gh}" );
+    GlitchVape::Magick::check( $mask->Read( 'radial-gradient:black-white' ),
+        'curvature: could not build the focus falloff' );
+
+    $mask->Set( gravity => 'Center' );
+    $mask->Crop( geometry => "${w}x${h}+0+0", gravity => 'Center' );
+    $mask->Set( page => '0x0+0+0' );
+
+    # Squared, because a gradient used as it comes out reaches a third of the
+    # way into the middle of the picture and the setting then reads as an
+    # overall blur with a sharp spot in it. How far out of focus a spherical
+    # face is grows with the square of the distance from the point it is
+    # focused at, so this is the falloff the glass has as well as the one that
+    # looks right: flat across the middle, and all of the fall near the rim.
+    $mask->Evaluate( operator => 'Pow', value => 2 );
+
+    GlitchVape::Magick::check( $mask->Write( $path ),
+        'curvature: could not cache the focus falloff' );
+
+    return $mask;
 }
 
 # ---------------------------------------------------------------------------

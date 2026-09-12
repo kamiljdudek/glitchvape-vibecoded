@@ -321,26 +321,32 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 }
 
 # ---------------------------------------------------------------------------
-# A suggestion list comes from the declaration, not from a list in the GUI
+# The list a parameter offers comes from the declaration, not from the GUI
 
 # The property being pinned is invariant 1: adding an effect must not require
-# editing GlitchVape::GUI::Params. A parameter says `suggest => 'palette'`
+# editing GlitchVape::GUI::Params. A parameter names the source of its values
 # where its type and range are declared, and the combo fills itself. This used
 # to be a table here keyed on 'effect.param', so every new effect that wanted
 # palette names needed a line adding to the GUI -- which is exactly the
 # coupling the invariant exists to forbid.
+#
+# These two used to take an inline '#FF71CE,#01CDFE' typed into the same box
+# that held the names, which made the control a menu and a text field at once.
+# The colours are a row of pickers now, under 'custom', so the list itself is
+# closed -- and the source it names is the one that offers that word.
 {
     my @palette_params = ( [ 'palette', 'name' ], [ 'gradient_map', 'name' ], );
 
-    my $offered = scalar GlitchVape::Palette::names();
+    # The registered palettes, and 'custom' for the colours that are not one.
+    my $offered = 1 + scalar GlitchVape::Palette::names();
 
     for my $pair ( @palette_params )
     {
         my ( $effect, $param ) = @$pair;
         my $spec = GlitchVape::Registry->get( $effect )->{ params }{ $param };
 
-        is $spec->{ suggest }, 'palette',
-            "$effect.$param declares where its suggestions come from";
+        is $spec->{ choose }, 'palette_custom',
+            "$effect.$param declares where its values come from";
 
         my $built = GlitchVape::GUI::Params->build(
             effect => $effect,
@@ -352,15 +358,16 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
         isa_ok $built->{ control }, 'Gtk3::ComboBoxText',
             "so $effect.$param gets a combo";
 
-        my $rows = 0;
-        $built->{ control }->get_model->foreach( sub { $rows++; return 0 } );
-        is $rows, $offered, 'offering every registered palette';
+        my @rows;
+        $built->{ control }->get_model->foreach(
+            sub { push @rows, $_[ 0 ]->get_value( $_[ 2 ], 0 ); return 0 } );
 
-        # An entry as well as a list, because these two effects are about the
-        # colours, so an inline '#FF71CE,#01CDFE' that no list could
-        # enumerate is exactly what somebody might mean.
-        ok $built->{ control }->get_child->isa( 'Gtk3::Entry' ),
-            'and still takes an inline colour list';
+        is scalar @rows, $offered,
+            'offering every registered palette and the way out of the list';
+        is $rows[ 0 ], 'custom', 'which is the first thing on it';
+
+        ok !$built->{ control }->get_has_entry,
+            'and there is nothing to type into';
     }
 }
 

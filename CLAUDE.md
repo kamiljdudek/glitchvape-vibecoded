@@ -73,9 +73,10 @@ the window and by `--explain` alike — never by the render:
 | `order` | where it sits among its siblings; the default is alphabetical |
 | `label` | what to call the row, where the key is not the clearest English |
 | `needs` | which other parameters must hold before this one means anything |
-| `placeholder` | the grey text an empty entry shows, since what empty *means* is the parameter's fact |
-| `suggest` | values to offer, typeable: a named source (`palette`) or an inline list |
-| `choose` | the same, but closed — a plain drop-down with nothing to type into |
+| `placeholder` | the grey text an empty entry or typeable combo shows, since what empty *means* is the parameter's fact |
+| `suggest` | values to offer, typeable: a named source or an inline list |
+| `choose` | the same, but closed — a plain drop-down with nothing to type into (`palette_custom`, `duotone`) |
+| `stops` | how many colours a colour list may hold, where it may vary: a count, or a `[least, most]` pair |
 
 `needs => { timestamp => 1, invent => 0 }` greys the control until both hold,
 without hiding it and without touching the value — `osd` is what these exist

@@ -519,8 +519,17 @@ Real hardware, for the eight-bit end: `cga` `ega` `c64` `spectrum` `nes`.
 These are not moods somebody chose but the whole set of colours a machine
 could show, which is why they look the way they do.
 
-Anything that takes a palette takes any of them, and takes an inline list
-instead:
+Anything that takes a palette takes any of them, and takes colours of your own
+instead. `palette` and `gradient_map` spell that `custom`, with the colours in
+a parameter of their own — which is a row of colour pickers in the window:
+
+```bash
+glitchvape -e palette --set palette.name=custom \
+    --set palette.colors='#FF71CE,#01CDFE,#05FFA1' photo.png
+```
+
+An inline list written into the name itself still works everywhere, which is
+what older command lines and hand-written presets say:
 
 ```bash
 glitchvape -e palette --set palette.name='#FF71CE,#01CDFE,#05FFA1' photo.png

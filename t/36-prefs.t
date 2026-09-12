@@ -100,12 +100,16 @@ my $P = 'GlitchVape::GUI::Prefs';
 
 SKIP:
 {
-    skip 'ImageMagick is not installed', 4
+    skip 'ImageMagick is not installed', 6
         unless GlitchVape::Tools::have( 'magick' )
         && eval { require Image::Magick; 1 };
 
     my $made = sub {
-        my $img = Image::Magick->new( size => '320x240' );
+        my ( $w, $h ) = @_;
+        $w ||= 320;
+        $h ||= 240;
+
+        my $img = Image::Magick->new( size => "${w}x$h" );
         $img->Read( 'xc:#203040' );
         return $img;
     };
@@ -122,6 +126,64 @@ SKIP:
     is $bar->Get( 'width' ), 320, 'the bar keeps the width';
     cmp_ok $bar->Get( 'height' ), '>', 240,
         'and makes the result taller, which is the point of it';
+
+    # The mark is letters and not a block, which is a thing only the pixels
+    # can say.
+    #
+    # It is built by taking a greyscale silhouette of the V and the A and
+    # moving it into the alpha of a white rectangle, and if that move is not
+    # made the rectangle stays opaque -- so the picture is signed with a pale
+    # square in the corner and every other check here still passes. That is
+    # exactly what happened under ImageMagick 6, which does not know the newer
+    # name for the composite that does the moving.
+    #
+    # So the question is the shape of what was drawn: find the pixels the mark
+    # changed, take the box around them, and ask how much of that box is
+    # filled. Letterforms leave the counters and the gap between the two
+    # letters untouched and fill about half of it; a solid block fills all of
+    # it. Drawn at twice the size of the others, since a mark of eighteen
+    # pixels is mostly the antialiasing at its edges.
+    my ( $w, $h ) = ( 640, 480 );
+
+    my $pixels = sub {
+        my ( $img ) = @_;
+        return [
+            $img->GetPixels(
+                map       => 'I',
+                width     => $w,
+                height    => $h,
+                normalize => 1
+            )
+        ];
+    };
+
+    my $before = $pixels->( $made->( $w, $h ) );
+    my $after =
+        $pixels->( GlitchVape::Watermark::apply( $made->( $w, $h ), 'logo' ) );
+
+    my ( $x0, $y0, $x1, $y1 ) = ( $w, $h, -1, -1 );
+    my $marked = 0;
+
+    for my $y ( 0 .. $h - 1 )
+    {
+        for my $x ( 0 .. $w - 1 )
+        {
+            my $at = $y * $w + $x;
+            next if abs( $before->[ $at ] - $after->[ $at ] ) <= 0.01;
+
+            $marked++;
+            $x0 = $x if $x < $x0;
+            $x1 = $x if $x > $x1;
+            $y0 = $y if $y < $y0;
+            $y1 = $y if $y > $y1;
+        }
+    }
+
+    cmp_ok $marked, '>', 0, 'the logo actually marks the picture';
+
+    my $box = ( $x1 - $x0 + 1 ) * ( $y1 - $y0 + 1 );
+    cmp_ok $marked / ( $box || 1 ), '<', 0.8,
+        'and marks it with letters rather than with a solid block';
 }
 
 # ---------------------------------------------------------------------------
