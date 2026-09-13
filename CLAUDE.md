@@ -7,7 +7,7 @@ without noticing, and how each of them is checked.
 
 ## What it is
 
-A Perl image pipeline that puts a photograph through a chain of forty-six
+A Perl image pipeline that puts a photograph through a chain of forty-seven
 VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Pure Perl
 apart from the effects, which shell out to ImageMagick, and the animated
 writers, which shell out to ffmpeg.
@@ -21,7 +21,7 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 |---|---|
 | `bin/` | `glitchvape` (CLI), `glitchvape-batch`, `glitchvape-gui` |
 | `lib/GlitchVape.pm` | the façade — `render()`, which every front end calls |
-| `lib/GlitchVape/Effect/*.pm` | the forty-six effects, grouped by theme not by stage |
+| `lib/GlitchVape/Effect/*.pm` | the forty-seven effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
@@ -212,6 +212,50 @@ too small. `Chicago::type_size` measures the stem of an `l` at a large em and
 takes `ceil(1 / stem)`, never below the twelve the interface wants: twelve for
 the `pixel` role, thirteen for W95FA. It is a measurement and not a table, so
 a font nobody here has seen gets the same answer.
+
+## The disk defragmenter
+
+`defrag` redraws the picture as the cluster map from the 1995 defragmenter, and
+`GlitchVape::Defrag` is its palette and the anatomy of one block. Three things
+in it are the difference between a drawing of that window and a mosaic:
+
+- **A block is an outline, a chequer and a gap.** The interior is two colours
+  in a checkerboard, not one flat fill, because a 1995 display had sixteen
+  colours and made every colour between them by dithering two of them at fifty
+  per cent. Rendering the blocks flat is the single change that makes the
+  result look remembered rather than drawn.
+
+- **Enlarging replicates the design.** The same rule `Chicago` follows and for
+  the same reason: a pitch of sixteen is the eight-pixel block with every pixel
+  doubled — outline, chequer and gap alike — not a bigger block with a hairline
+  round it. `Defrag::unit` is that scale factor, and every part of the block is
+  measured in it.
+
+- **Free space is the paper, with nothing on it.** No block, no outline, not
+  even a pale one. Most of that window always was empty, and a map that put
+  something in every cell would be a mosaic. Which cells go empty is chosen by
+  **rank** and not by a brightness threshold — asking for a third of the disk
+  has to give a third of it whatever the photograph is, and a picture of one
+  flat colour, which is every sky and every studio backdrop, has no threshold
+  that divides it at all.
+
+`scatter` exists because the rank on its own sorts the picture into smooth
+continents of white, which reads as posterised rather than as a disk. It
+disturbs each cell's brightness *before* the ranking rather than flipping cells
+after it, so what frays is the boundary — a cell near the edge of being empty
+is the one a nudge moves, and one in the middle of the data stays put.
+
+The window around it is `maximised`, unchanged: `presets/defrag.yml` is the two
+of them wired together with the caption and no menu bar. There is no second
+window-drawing implementation and there should not be one.
+
+aalib and libcaca were considered and are not used. What they do is map
+luminance to glyphs, or to coloured characters from a terminal's palette; what
+this needs is a grid of blocks in a palette with fourteen named states, each
+drawn with its own outline and chequer. Neither library draws that, both would
+be a new external dependency to declare in two packagings and to fall back
+from when absent, and the dithering they are genuinely good at is something
+`GlitchVape::Palette` and ImageMagick already do here.
 
 ## Packaging
 
@@ -553,7 +597,7 @@ than mixing through each other, because mixed channel by channel they meet in
 the middle and the frame collapses to one colour. Half a slider being the
 worst-looking place on it is not a control anybody can use.
 
-Fourteen effects have no animation and are meant not to: `crop`,
+Fifteen effects have no animation and are meant not to: `crop`, `defrag`,
 `downsample`, `curvature`, `grille`, `vignette` and `maximised` describe how
 the picture is made rather than what is happening to it, and `palette`, `posterize`,
 `quantize` and `deepfry` would have to animate the *number* of levels or

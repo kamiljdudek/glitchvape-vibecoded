@@ -6,6 +6,8 @@ use warnings;
 use GlitchVape::Registry ();
 use GlitchVape::Pixels   ();
 use GlitchVape::Palette  ();
+use GlitchVape::Defrag   ();
+use GlitchVape::Magick   ();
 
 our $VERSION = '0.01';
 
@@ -179,6 +181,264 @@ sub _frame
     # it is cut out of.
     return ( $w, int( $w / $ratio ) || 1 ) if $ratio >= $w / $h;
     return ( int( $h * $ratio ) || 1, $h );
+}
+
+# ---------------------------------------------------------------------------
+
+$R->register(
+    name    => 'defrag',
+    title   => 'Disk Defragmenter',
+    stage   => 'format',
+    summary => 'Redraw the picture as a 1995 disk cluster map',
+    doc     => <<'DOC',
+The picture as the cluster map from the disk defragmenter that shipped with
+Windows 95: a grid of small blocks, each one drawn in the colour of what is
+supposed to be in it.
+
+Each cell of the grid takes the average colour of the picture under it and is
+painted as whichever cluster state is nearest. Fourteen states, eight of them
+from the window's own legend and six invented, which is what gives the grid
+enough colours to be a picture of something. C<palette> says which set they
+are painted in -- see L<GlitchVape::Defrag> for what is in each.
+
+C<free> is the half of it that makes it read as a disk rather than as a
+mosaic. Most of the map was always empty: white paper, no block, no outline,
+nothing. So that share of the cells is left blank, and which ones is decided
+by the picture -- the brightest go first, because paper is the brightest thing
+on the grid and a photograph's highlights are where the eye already expects
+nothing much. At 0 every cell is a block and the picture is a mosaic; at 0.8
+there is a scattering of data on an empty disk.
+
+C<scatter> is what keeps that from looking like a threshold. Free and used
+sorted strictly by brightness gives smooth continents of white, which is a
+posterised photograph; a disk frays at that boundary and has odd clusters
+stranded out on their own. Turning it up fringes the edges and strands them.
+
+C<block> is the pitch of one cluster in pixels. At the eight it was drawn at
+there is an outline and a chequer inside it; below seven the chequer goes and
+below five the outline does too, because at that size an outline is most of
+the block.
+
+It runs at C<format>, first in the chain, for the reason C<downsample> does:
+everything after it then happens to the grid rather than to the photograph,
+which is what makes scanlines over this look like scanlines over a screen
+showing it.
+DOC
+    params => {
+        block => {
+            label   => 'Cluster size',
+            order   => 10,
+            default => 8,
+            type    => 'int',
+            min     => 3,
+            max     => 48,
+            doc     => 'How many pixels across one cluster block is, gap '
+                . 'included. Eight is what it was drawn at',
+        },
+        palette => {
+            label   => 'Palette',
+            order   => 20,
+            default => 'defrag',
+            type    => 'enum',
+            values  => [ GlitchVape::Defrag::palettes() ],
+            doc     => 'Which colours the states are painted in. defrag and '
+                . 'scandisk are sixteen-colour tables with chequered blocks; '
+                . 'mono, amber and phos are one ink on one paper, where a '
+                . 'cluster glows in proportion to how dark it was',
+        },
+        free => {
+            label   => 'Free space',
+            order   => 30,
+            default => 0.35,
+            type    => 'num',
+            min     => 0,
+            max     => 0.9,
+            doc     => 'What share of the disk is empty. Empty means bare '
+                . 'paper rather than a pale block, which is what most of the '
+                . 'window always was',
+        },
+        scatter => {
+            label   => 'Fragmentation',
+            order   => 40,
+            default => 0.3,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'How ragged the edge between used and free is. At 0 '
+                . 'it follows the picture exactly, which reads as posterised '
+                . 'rather than as a disk; turning it up strands clusters out '
+                . 'on their own the way a fragmented one does',
+        },
+        seed => {
+            label   => 'Layout seed',
+            order   => 50,
+            default => 0,
+            type    => 'int',
+            min     => 0,
+            max     => 9999,
+            needs   => { scatter => 1 },
+            doc     => 'Which scattering. The same number gives the same '
+                . 'disk, and the map is held still for a whole animation '
+                . 'either way -- a cluster map that re-rolled every frame '
+                . 'would strobe rather than move',
+        },
+    },
+    apply => \&_defrag,
+);
+
+sub _defrag
+{
+    my ( $ctx, $p ) = @_;
+    require Image::Magick;
+
+    my ( $w, $h ) = $ctx->dims;
+    return unless $w && $h;
+
+    my $cell = $p->{ block };
+    my $cols = int( $w / $cell );
+    my $rows = int( $h / $cell );
+
+    # Nothing to draw a grid on. Two cells across is not a cluster map, and
+    # what it would be instead is four coloured rectangles.
+    return if $cols < 2 || $rows < 2;
+
+    my $map = GlitchVape::Defrag::map_for( $p->{ palette } );
+
+    my $avg = _cluster_colours( $ctx, $cols, $rows );
+
+    # Held still rather than re-rolled: which clusters are empty is a fact
+    # about the disk, and a map that redrew itself every frame would strobe
+    # where the picture underneath it had not moved.
+    my $rng = $ctx->rng_fixed( 'defrag' . ( $p->{ seed } || 0 ) );
+
+    my $used = _used_cells( $avg, $p, $rng );
+
+    # One stamp per state, built once and written straight into the buffer.
+    # A cluster map is tens of thousands of cells, and the alternative is
+    # tens of thousands of draw operations to produce a picture made of
+    # fourteen distinct rectangles.
+    my @stamp = map {
+        GlitchVape::Defrag::stamp(
+            state => $_,
+            block => $cell,
+            paper => $map->{ paper },
+            edge  => $map->{ edge },
+        )
+    } ( undef, @{ $map->{ states } } );
+
+    # Centred, so the remainder of a picture that is not a whole number of
+    # clusters across shows as paper on both sides rather than as a margin
+    # down one.
+    my $ox = int( ( $w - $cols * $cell ) / 2 );
+    my $oy = int( ( $h - $rows * $cell ) / 2 );
+
+    my $paper = pack 'C3', @{ $map->{ paper } };
+
+    GlitchVape::Pixels->edit(
+        $ctx,
+        sub {
+            my ( $px ) = @_;
+
+            $px->set_row( $_, $paper x $w ) for 0 .. $h - 1;
+
+            for my $y ( 0 .. $rows - 1 )
+            {
+                for my $x ( 0 .. $cols - 1 )
+                {
+                    my $n = $y * $cols + $x;
+
+                    # Free space is paper, which the whole canvas already is.
+                    next unless $used->[ $n ];
+
+                    $px->set_rect(
+                        $ox + $x * $cell,
+                        $oy + $y * $cell,
+                        $cell, $cell, $stamp[ $used->[ $n ] ]
+                    );
+                }
+            }
+        }
+    );
+
+    return;
+}
+
+# The average colour under every cell, as one RGB triple each.
+#
+# Done by asking ImageMagick to resize the picture to the size of the grid,
+# which is exactly the average this wants and is the one operation it does
+# faster than anything written here could. Box rather than a filter with a
+# wider support: a cluster is the picture under it and nothing of its
+# neighbours.
+sub _cluster_colours
+{
+    my ( $ctx, $cols, $rows ) = @_;
+
+    my $small = $ctx->image->Clone;
+
+    GlitchVape::Magick::check(
+        $small->Resize( geometry => "${cols}x$rows!", filter => 'Box' ),
+        'defrag: could not reduce the picture to the cluster grid'
+    );
+
+    my $px = GlitchVape::Pixels->from_image( $small );
+    my @v  = unpack 'C*', $px->data;
+
+    return [ map { [ @v[ $_ * 3 .. $_ * 3 + 2 ] ] } 0 .. $cols * $rows - 1 ];
+}
+
+# Which cells carry a block, and which state each of them is.
+#
+# Returns one number per cell: 0 for free space, otherwise the state's place
+# in the palette plus one -- which is also its index into the stamps, since
+# free space is the stamp before the first state.
+sub _used_cells
+{
+    my ( $avg, $p, $rng ) = @_;
+
+    my $states = GlitchVape::Defrag::map_for( $p->{ palette } )->{ states };
+
+    # How bright each cell is, with the scattering already mixed in. Doing it
+    # here rather than after the threshold is what frays the boundary instead
+    # of speckling the whole grid: a cell near the edge of being empty is the
+    # one a nudge moves, and one in the middle of the data stays put.
+    my @lit;
+    for my $n ( 0 .. $#$avg )
+    {
+        my $l =
+            0.299 * $avg->[ $n ][ 0 ] +
+            0.587 * $avg->[ $n ][ 1 ] +
+            0.114 * $avg->[ $n ][ 2 ];
+
+        $l += ( $rng->rand( 2 ) - 1 ) * $p->{ scatter } * 110;
+
+        push @lit, $l;
+    }
+
+    # Chosen by rank rather than by a brightness to be above, so that asking
+    # for a third of the disk to be empty gives a third of it whatever the
+    # photograph is: a threshold in brightness would give a dark picture a
+    # full disk and a bright one an empty disk from the same setting, and a
+    # picture of one flat colour -- which is every sky and every studio
+    # backdrop -- has no threshold that divides it at all.
+    #
+    # Darkest first, so the brightest cells are the ones left over at the end
+    # and those are the ones that go empty. Ties by position, which puts the
+    # free space of a picture with no variation in it at the far end of the
+    # disk -- where a defragmenter leaves it.
+    my @order = sort { $lit[ $a ] <=> $lit[ $b ] || $a <=> $b } 0 .. $#lit;
+
+    my $empty = int( @order * $p->{ free } + 0.5 );
+
+    my @out = ( 0 ) x scalar @order;
+
+    for my $at ( 0 .. $#order - $empty )
+    {
+        my $n = $order[ $at ];
+        $out[ $n ] = 1 + GlitchVape::Defrag::nearest( $states, $avg->[ $n ] );
+    }
+
+    return \@out;
 }
 
 # ---------------------------------------------------------------------------

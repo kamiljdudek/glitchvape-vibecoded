@@ -396,6 +396,7 @@ were tried and discarded on the way to this one.
 | `anaglyph` | red/cyan misregistration, a 3D comic without the glasses |
 | `arcade` | eight-bit game: chunky pixels, a hardware palette, dithered |
 | `newspaper` | colour newsprint, screened at print angles and misregistered |
+| `defrag` | the 1995 disk defragmenter, mid-pass, with the photograph on the disk |
 
 `base-vhs` is also on the list but is not a look: it is the shared tape chain
 with the damage dialled low, for other presets to `extends` rather than
@@ -437,13 +438,13 @@ whatever you changed on top.
 
 ## Effects
 
-46 effects, sorted automatically into a signal chain. Order is not a free
+47 effects, sorted automatically into a signal chain. Order is not a free
 choice — scanlines applied before a downsample get eaten by the resample — so
 each effect declares a stage and the pipeline sorts by it.
 
 | Stage | Shown as | Effects |
 |---|---|---|
-| **format** | Resolution & Format | `crop` `downsample` `bitmap` |
+| **format** | Resolution & Format | `crop` `downsample` `bitmap` `defrag` |
 | **colour** | Colour | `grade` `palette` `duotone` `gradient_map` `posterize` `quantize` |
 | **channels** | Channel Separation | `chroma_shift` `rgb_shift` `chroma_bleed` |
 | **damage** | Data Damage | `pixelsort` `databend` `blockshift` `slice` `vgatext` `deepfry` |
@@ -491,6 +492,14 @@ A few worth knowing about:
   video gives colour far less bandwidth than brightness, so colour smears
   horizontally while edges stay sharp. Done properly in YCbCr, blurring only
   Cb and Cr.
+- **`defrag`** — redraws the picture as the cluster map from the disk
+  defragmenter that shipped with Windows 95: a grid of small blocks, each one
+  the state of what is supposed to be in it, most of the grid left as bare
+  white paper because most of that window always was. Fourteen states, eight
+  of them off the window's own legend. `palette` picks between two
+  sixteen-colour tables with chequered blocks and three one-ink phosphor
+  screens; `free` says how much of the disk is empty and `scatter` how ragged
+  the edge of it is.
 - **`crop`** — reframes to a shape (square, 4:3, 16:9, 2.39:1, 4:5, 9:16, or
   the picture's own) and chooses what is inside it. `zoom` magnifies rather
   than shrinks: the frame that comes out is the same size at every setting, so

@@ -22,7 +22,7 @@ GlitchVape::GUI::Wizard - the two-page Add Effect assistant
 
 =head1 DESCRIPTION
 
-Forty-six effects are too many for one flat list, so they are shown as a
+Forty-seven effects are too many for one flat list, so they are shown as a
 tree: nine categories, each holding the effects that run at that point in the
 chain. The assistant asks two questions.
 
