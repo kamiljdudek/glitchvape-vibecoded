@@ -1,0 +1,18 @@
+name: Cat
+title: 'defrag cat'
+
+effects:
+  defrag:
+    advance: 0.051
+    block: 3
+    detail: 1
+    dither: 1
+    free: 0.35
+    palette: laserwave
+    progress: 0.195
+    scatter: 0.3
+    seed: 0
+    status: 1
+    theme: rain
+    title: 'Defragmenting Drive C'
+    window: 1

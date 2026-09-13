@@ -180,10 +180,14 @@ renderer antialiases and hints and a text-mode display could do neither. It
 also holds the cell rasteriser and the blit, because two effects paint text
 cells now -- `vgatext` and `stars` -- and a second copy of a blitter is a
 second place for a rounding to drift.
-`GlitchVape::Chicago` holds the nine glyphs a Windows 95 window needs that are
-pictures rather than rules -- the document icon, three caption glyphs, four
-arrows and the sizing grip -- as one character per pixel, keyed by a five-ink
-palette.
+`GlitchVape::Chicago` holds the eleven glyphs a Windows 95 window needs that
+are pictures rather than rules -- the document icon, three caption glyphs,
+four arrows, the sizing grip, this program's own icon and the cluster map
+`defrag` wears in its caption -- as one character per pixel, keyed by a
+five-ink palette. The last two are drawn here rather than read off the
+screenshot: what Microsoft put in that caption is not this program's to
+ship, and a field of blocks packed at the top and thinning to specks below
+says *defragmenter* at sixteen pixels in a way a grey circle does not.
 
 Everything else about that window is a *rule*: two bevels, four flat fills and
 a 50% dither, applied at metrics that do not change with the window's size.
@@ -252,6 +256,32 @@ disturbs each cell's brightness *before* the ranking rather than flipping cells
 after it, so what frays is the boundary — a cell near the edge of being empty
 is the one a nudge moves, and one in the middle of the data stays put.
 
+`detail` is the same nudge with the picture doing the nudging. Emptying the
+palest cells deletes a bright subject as readily as the sky behind it, so a
+second question is asked of every cell — is there an edge in it — and the
+answer goes into the same sum `scatter` goes into, at full range, so a cell on
+a contour outranks a flat cell of any brightness. Because it moves the *order*
+and not the count, the share of the disk that ends up empty is untouched: on a
+white disc against a grey ground it takes the rim cells kept from 8 of 72 to
+57, with the same 480 cells used either way. The edge pass runs only when the
+setting is above nought, which is what keeps a render that does not ask for it
+from paying for it.
+
+**`dither` is what stops the palette collapsing, and it is the biggest single
+thing standing between the photograph and the grid.** Rounding each cell on
+its own puts most of a picture on whichever state sits in the middle of it —
+measured, five of the fourteen states on an ordinary photograph with one of
+them taking 64% of the grid, and 8 states with one at 84% on another. Carrying
+the error into the cells not yet reached takes those to 9 states with the
+largest under a half, and 11 with the largest at 46%. It is Floyd–Steinberg,
+serpentine, written out in `Defrag::match_grid` rather than handed to
+ImageMagick as a remap — **because ImageMagick would diffuse in its own colour
+distance and this program has its own**, the 2/4/3 weighting `nearest` uses,
+and a dither walking towards a different palette entry than the matcher will
+then pick is a dither fighting its own result. The happy accident is that a
+dithered cluster map reads as a *fragmented* one, which is what the window is
+about.
+
 **The window comes with the effect**, because a cluster map without one is a
 mosaic rather than a defragmenter — it is not furniture the picture happens to
 be sitting in, it is the other half of the thing being drawn. That is why
@@ -267,6 +297,97 @@ moved to when `defrag` needed the same thing: the arithmetic that rounds a
 client area up to whole window pixels, centres the picture in the sliver that
 leaves, enlarges the chrome by replication and composites the two is one
 behaviour, and a second copy of it is a second place for a rounding to drift.
+
+**`defrag` animates by defragmenting**, which is the one thing on that
+window that ever moved. `advance` is how much of the disk the pass works
+through over the loop, and `Defrag::sweep` is the algorithm rather than an
+impression of it: walk from the beginning, pull the next data along into every
+hole. So once *k* clusters have moved, the first *k* cells hold them in the
+order they were already in and everything after that is untouched — which
+means a frame can be rendered on its own, with nothing carried between them,
+and that the free share stays exactly what `free` asked for because data is
+conserved. The front counts **clusters moved, not cells crossed**: a disk two
+thirds empty is finished a third of the way along, so a front measured across
+the cells would have a dead top end whose size depended on `free`. A dozen
+clusters at the head are lit as written and read.
+
+**The pass starts at the beginning of the disk every time round**, and that is
+a decision rather than a default. Starting it at `progress` instead was tried
+and is wrong twice over: the head opens the loop already a third of the way
+down the map with a slab of packed clusters over everything above it, so the
+loop begins on the dullest part of the pass and with that much of the
+photograph already hidden. Started at the top, the loop opens on the picture
+and the pass eats into it. What `progress` counts is the whole *job*, of which
+a sweep is one part — so the gauge adds what the pass has done to it rather
+than being replaced by it, which also keeps `progress` live while Animate is
+on instead of going dead the moment it is switched on.
+
+Three things about it are deliberate and easy to undo by accident. It is
+**inert on a still** — `_pass` returns undef unless there is a loop, which is
+what an `animation` parameter must do, since `Registry::without_animation`
+resets it when a still is rendered. It **does not close its loop**, and sits
+beside `stars` rather than beside the drifts: a defragmented disk is not the
+disk that was, and the frame after the last is the job starting again. And it
+**costs the picture** in the packed region, because moving a cluster moves its
+colour with it — a pass that runs to the end leaves a disk with no photograph
+on it, which is what defragmenting is and why `advance` arrives at nought.
+
+**The gauge under the map is part of the window too**, and is in `Chicago`
+with the rest of it for the same reason the caption is: it is drawn in window
+pixels, in the window's own inks, and enlarged with the chrome. A bar
+composited on afterwards would be the one part of the picture that had not
+been through the zoom. It is the one piece of chrome `maximised` has no use
+for — a window around a photograph is not doing anything and this one is —
+so `progress` is a setting on `defrag` and nothing over there, and `undef`
+rather than nought is what means "no band", because nought is a gauge that has
+not started yet and that is a different picture. The band comes out of the
+window's height and never out of the map's: `around()` accounts for it, which
+is what `t/40-chicago.t` checks by building a window around a client area and
+measuring the hole. Its blocks are painted in the caption's ink rather than a
+blue of their own, so a themed window gets a themed gauge without the theme
+growing a sixth role, and the percentage beside it is worked out from
+`progress` rather than asked for separately — a gauge and a number that
+disagreed would be a bug nothing but the picture could show.
+
+**The palette is borrowed rather than listed.** `Defrag::palettes()` is the
+two hand-written tables, the three one-ink screens, and then everything
+`GlitchVape::Palette` has, so a palette added for `gradient_map` is a cluster
+map's palette the same day and there is no list here to keep up to date. A
+borrowed one is a ramp, and a state's place along it is how far from white it
+was in `defrag`. Where a name is already taken — `amber` — this module's own
+meaning wins, because a preset that asked for it before must still render as
+it did.
+
+**A borrowed palette is spent on the clusters and never on the ground.** Free
+space is the paper, most of that window always was free space, and white is
+what makes a scattering of blocks read as a disk rather than as a mosaic on a
+coloured tile — so the paper stays white and the palette is sorted brightest
+first, which keeps the ramp darkening as a cluster fills. Handing a scheme its
+own darkest colour instead turns every one of them into a picture of a lit
+screen, which looks good and is wrong: there were nineteen of those and one
+window. Sorted rather than reversed, because a machine's whole palette is in
+the order the hardware numbered its colours and the C64's second entry is
+white. The exceptions are `amber` and `phos`, which are a monitor rather than
+a window: they name their own paper as their first stop, and naming it is what
+it takes to have one. **The outline follows from the paper** rather than being
+set beside it — on paper the palest states sit a shade off the ground and
+without a rim they are free space with a tint; on a screen a black ring is a
+hole in the glow — so `map_for` gives one to every scheme whose paper is lit
+and `t/47-defrag.t` checks the pairing in both directions.
+
+**The fourteen states are spread twice over, and both are measured.** Two
+states close in *colour* are one state as far as the picture is concerned,
+since `nearest` reaches whichever comes first and the other never appears —
+`scandisk` shipped with two drawn in exactly the same grey, written as
+`silver, grey` in one place and `grey, silver` in the other. And two states
+close in *brightness* are the same colour in every derived palette whatever
+their hues were, because those read the `defrag` table as a ramp position:
+`writing` and `swap` were a bright red and a bright magenta two and a half
+levels apart, so in `mono` they were one grey. `t/47-defrag.t` measures both,
+in the weighted distance `nearest` itself uses. What the spreading may not
+touch is the hue — the deep blue, the three tones of one teal, the bright red
+and the bright green all mean something — so it happens in what is left over,
+which is why the six invented states carry most of it.
 
 aalib and libcaca were considered and are not used. What they do is map
 luminance to glyphs, or to coloured characters from a terminal's palette; what
@@ -554,19 +675,25 @@ modelling rather than a choice:
 | | |
 |---|---|
 | re-rolls every frame | the medium at an instant — grain, tape noise, damage |
-| moves if asked | `drift`, `pulse`, `rate`: the picture or the pattern travelling |
+| moves if asked | `drift`, `pulse`, `rate`, `advance`: the picture, the pattern or the job moving on |
 | identical every frame | the setup — resolution, colour maps, lens, framing |
 
-A fourth exists in one place: `stars` is the *same* thing later. Its sky is
+A fourth exists in two places, and `stars` is one: it is the *same* thing later. Its sky is
 stepped rather than re-rolled, because what reads as twinkling is that stars
 stay where they are between the moments they do not. Frame N is the sky after
 N steps, computed from the seed each time rather than carried between frames,
 which a render has no way to do. It cannot close its loop and does not pretend
-to: a star that flares comes back somewhere else.
+to: a star that flares comes back somewhere else. `defrag`'s pass is the
+other, and closes no better for the same kind of reason: a disk that has been
+defragmented is not the disk that was, and the frame after the last one is the
+job starting again.
 
 It lines up with the stages almost exactly, which is not a coincidence: damage,
 signal and grain are things happening *now*, while format, colour, optics and
-framing describe how the picture is made.
+framing describe how the picture is made. `defrag` is the exception that
+proves it — it sits at `format` and animates, because what it draws is not a
+way of making the picture but a *program running*, and the picture is that
+program's progress bar.
 
 `reroll` is the switch for the first kind, and it is spelled the same way
 everywhere — `rng_for` when on, `rng_fixed` when off, both derived under the
@@ -616,7 +743,7 @@ than mixing through each other, because mixed channel by channel they meet in
 the middle and the frame collapses to one colour. Half a slider being the
 worst-looking place on it is not a control anybody can use.
 
-Fifteen effects have no animation and are meant not to: `crop`, `defrag`,
+Fourteen effects have no animation and are meant not to: `crop`,
 `downsample`, `curvature`, `grille`, `vignette` and `maximised` describe how
 the picture is made rather than what is happening to it, and `palette`, `posterize`,
 `quantize` and `deepfry` would have to animate the *number* of levels or

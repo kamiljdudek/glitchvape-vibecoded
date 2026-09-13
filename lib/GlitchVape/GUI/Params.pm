@@ -122,8 +122,7 @@ my %SUGGEST_SOURCE = (
     # effect has somewhere to put the colours: bitmap.palette has not, and a
     # drop-down offering an answer the render cannot use is the ambiguity this
     # whole arrangement exists to remove.
-    palette_custom =>
-        sub { return ( 'custom', GlitchVape::Palette::names() ) },
+    palette_custom => sub { return ( 'custom', GlitchVape::Palette::names() ) },
 );
 
 =head2 split( $params )
@@ -679,8 +678,8 @@ sub _is_colour_list
     my @stops = _colour_stops( $default );
     return 0 unless @stops > 1;
 
-    return ( grep { m{\A [#][0-9a-f]{3}(?:[0-9a-f]{3})? \z}xi } @stops )
-        == @stops ? 1 : 0;
+    return ( grep { m{\A [#][0-9a-f]{3}(?:[0-9a-f]{3})? \z}xi } @stops ) ==
+        @stops ? 1 : 0;
 }
 
 sub _is_colour
@@ -782,9 +781,9 @@ sub _stop_range
 
     my $stops = $arg->{ spec }{ stops };
 
-    return ( $have, $have ) unless defined $stops;
+    return ( $have,         $have ) unless defined $stops;
     return ( $stops->[ 0 ], $stops->[ 1 ] ) if ref $stops eq 'ARRAY';
-    return ( $stops, $stops );
+    return ( $stops,        $stops );
 }
 
 sub _colour_list
@@ -818,8 +817,8 @@ sub _colour_list
         for my $n ( 0 .. $#stops )
         {
             my $button = Gtk3::ColorButton->new;
-            $button->set_tooltip_text(
-                sprintf 'Colour %d of %d', $n + 1, scalar @stops );
+            $button->set_tooltip_text( sprintf 'Colour %d of %d',
+                $n + 1, scalar @stops );
 
             my $rgba = _parse_colour( $stops[ $n ] );
             $button->set_rgba( $rgba ) if $rgba;
@@ -877,7 +876,7 @@ sub _colour_list
 
     $rebuild->();
 
-    $box->pack_start( $row, 0, 0, 0 );
+    $box->pack_start( $row,   0, 0, 0 );
     $box->pack_start( $fewer, 0, 0, 0 ) if $fewer;
     $box->pack_start( $more,  0, 0, 0 ) if $more;
 

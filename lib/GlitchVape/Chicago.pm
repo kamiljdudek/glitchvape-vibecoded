@@ -78,10 +78,10 @@ preset is a file and a file can outlive the version that wrote it.
 =head1 WHY THE GLYPHS ARE IN THE FILE
 
 The same argument L<GlitchVape::VGA> makes about its font, for the same
-reason. What is left once the rules have drawn everything they can is ten
+reason. What is left once the rules have drawn everything they can is eleven
 small pictures, none bigger than sixteen pixels square, most of them two
-colours. Held as PNGs they would be ten files to install, ten files to
-package, and ten files that could go missing at run time; held here they are
+colours. Held as PNGs they would be eleven files to install, eleven to
+package, and eleven that could go missing at run time; held here they are
 legible in a diff, and the effect cannot half-render.
 
 They are scaled by pixel replication and never by interpolation, so a window
@@ -101,10 +101,14 @@ The arrows, the caption glyphs and the sizing grip are geometry -- triangles,
 a bar, a box, a cross, three diagonal ribs. The document icon is the one piece
 that is somebody else's artwork rather than a shape, and it is no longer what
 a window arrives with: the caption holds this program's own icon unless asked
-for the other one.
+for one of the other two.
 
-That icon is the tenth bitmap and the only one that did not come off the
-screenshot. It is F<assets/artwork/icon-256.png> squeezed into the sixteen
+Two of the eleven did not come off the screenshot. One is the cluster-map
+icon C<defrag> wears: a field of blocks packed at the top and thinning to
+specks below it, which is the arrangement the map itself comes out in rather
+than a copy of what Microsoft put on that window.
+
+The other is this program's own icon. It is F<assets/artwork/icon-256.png> squeezed into the sixteen
 pixels Windows gives a system menu -- a redraw rather than a resize, because
 an outline scaled to sixteen pixels is mush and the two letterforms are the
 whole of what has to survive. It comes out exact, which is luck worth writing
@@ -237,6 +241,24 @@ use constant {
 # bevel: below this the two-pixel edges meet in the middle and it is a blob.
 use constant THUMB_MIN => 8;
 
+# The status band under the well, and the gauge that is most of it.
+use constant {
+    GAUGE      => 16,    # the sunken trough
+    GAUGE_IN   => 5,     # its inset from the frame, and the air above and below
+    CHUNK      => 6,     # one lit block
+    CHUNK_GAP  => 2,     # and the trough showing between two of them
+    LEGEND     => 84,    # the room kept beside it for what it says
+    LEGEND_GAP => 6,
+};
+
+# Derived rather than written down, because a band that did not agree with
+# what is inside it would show as the gauge sitting off centre in it.
+use constant STATUS => 2 * GAUGE_IN + GAUGE;
+
+# A trough with less than this much room is all inset and no gauge, so the
+# legend beside it stands down and gives the trough the whole band.
+use constant GAUGE_MIN => 24;
+
 # The size the interface itself wants. Windows had one UI font at one size and
 # every caption in the system was that size, so this is a fact about the
 # interface rather than a setting. Twelve because that is the design size of
@@ -299,6 +321,28 @@ my %GLYPH = (
         'PPWWWWPPPKKKKKKP', 'PPPWWPPPKKPPPPKK',
         'PPPWWPPPKKPPPPKK', 'QQQQQQQQQQQQQQQQ',
         'WWWWWWWWKKKKKKKK', 'QQQQQQQQQQQQQQQQ',
+    ],
+
+    # The defragmenter's own. A cluster map and not a disk, because a disk at
+    # sixteen pixels is a grey circle and so is a great many other things,
+    # whereas a field of blocks packed at the top and thinning to specks below
+    # it is the picture this program draws and the one thing nothing else in
+    # the interface looks like.
+    #
+    # A cluster here is one pixel where the map draws it as seven by nine.
+    # There is no room to keep the proportion and no point: what the icon
+    # carries over is the *arrangement*, which is the half of it a glance
+    # reads. Drawn rather than copied, unlike the page below it -- what
+    # Microsoft put on that window is not this program's to ship.
+    defrag => [
+        '................', '................',
+        '.KKKKKKKKKKKKKK.', '.KWWWWWWWWWWWWK.',
+        '.KWKKKKKKKKKKWK.', '.KWKKKKKKKKKKWK.',
+        '.KWKKKKKKKWWWWK.', '.KWKWKWKWWKWWWK.',
+        '.KWWKWWWKWWKWWK.', '.KWKWWKWWWKWWWK.',
+        '.KWWWKWWWWWKWWK.', '.KWWWWWWWWWWWWK.',
+        '.KWWWWWWWWWWWWK.', '.KKKKKKKKKKKKKK.',
+        '................', '................',
     ],
 
     # The three caption glyphs, at (428,15), (443,8) and (462,9). Minimise is
@@ -379,7 +423,7 @@ The icon names the caption can be given, in the order they should be offered.
 
 =cut
 
-sub icons { return qw(glitchvape notepad) }
+sub icons { return qw(glitchvape notepad defrag) }
 
 my %IS_ICON = map { $_ => 1 } icons();
 
@@ -419,6 +463,8 @@ sub metrics
         menu    => MENU,
         sunken  => SUNKEN,
         bar     => BAR,
+        status  => STATUS,
+        gauge   => GAUGE,
     };
 }
 
@@ -444,6 +490,7 @@ sub ink
     client     => [ $width, $height ]
     menu       => the menu string, or undef
     scrollbars => whether there are any
+    progress   => 0..1 if there is a status band under the well
 
 The window size that puts a client area of that size inside it, as
 C<< ( $width, $height ) >>. The inverse of the layout in L</render( %arg )>,
@@ -458,12 +505,13 @@ sub around
 
     my ( $cw, $ch ) = @{ $arg{ client } };
 
-    my $bars = $arg{ scrollbars }                          ? BAR  : 0;
-    my $menu = defined $arg{ menu } && length $arg{ menu } ? MENU : 0;
+    my $bars = $arg{ scrollbars }                          ? BAR    : 0;
+    my $menu = defined $arg{ menu } && length $arg{ menu } ? MENU   : 0;
+    my $band = defined $arg{ progress }                    ? STATUS : 0;
 
     return (
         $cw + 2 * SUNKEN + $bars + 2 * FRAME,
-        $ch + 2 * SUNKEN + $bars + 2 * FRAME + CAPTION + $menu,
+        $ch + 2 * SUNKEN + $bars + 2 * FRAME + CAPTION + $menu + $band,
     );
 }
 
@@ -517,7 +565,8 @@ sub minimum
     my $height =
         2 * FRAME +
         CAPTION +
-        ( defined $arg{ menu } && length $arg{ menu } ? MENU : 0 ) +
+        ( defined $arg{ menu } && length $arg{ menu } ? MENU   : 0 ) +
+        ( defined $arg{ progress }                    ? STATUS : 0 ) +
         2 * SUNKEN +
         $bars + 4;
 
@@ -540,6 +589,10 @@ sub minimum
     grip        => draw the sizing grip in the corner between them
     scroll      => 0..1, where along its bar each thumb sits
     thumb       => 0..1, how much of its bar each thumb covers
+    progress    => 0..1, and a status band under the well showing it;
+                   undef for a window that is not doing anything
+    legend      => what that band says beside the gauge, or undef for the
+                   share as a percentage
 
 An L<Image::Magick> object of exactly that size, with the document area
 transparent so the picture underneath shows through it.
@@ -591,9 +644,17 @@ sub render
         $y += MENU;
     }
 
-    my $ih = $h - FRAME - $y;
+    my $band = defined $arg{ progress } ? STATUS : 0;
+    my $ih   = $h - FRAME - $y - $band;
 
     _well( $buf, $x, $y, $iw, $ih, \%arg );
+
+    my ( $legend, $says );
+    if ( $band )
+    {
+        $legend = _status( $buf, $x, $y + $ih, $iw, $arg{ progress } );
+        $says   = _legend_text( \%arg );
+    }
 
     my $img = _image( $buf );
 
@@ -604,6 +665,8 @@ sub render
             size    => type_size( $arg{ font }, $arg{ type_size } ),
             caption => $arg{ caption },
             menu    => $menu,
+            legend  => $legend,
+            says    => $says,
         },
         $w,
         _icon_width( $arg{ icon } )
@@ -778,6 +841,93 @@ sub _at
     _glyph( $buf, $x + $dx, $y + $dy, $which );
 
     return;
+}
+
+# ---------------------------------------------------------------------------
+# The status band
+
+# What the defragmenter had under its cluster map and Notepad did not: a
+# sunken trough with the work so far lit up along it, and beside that the
+# share as a percentage.
+#
+# It is here rather than in the effect for the reason everything else in this
+# file is: it is drawn in the window's own pixels, in the window's own inks,
+# and enlarged with the rest of the chrome. A bar composited on afterwards
+# would be the one part of the window that had not been through the zoom.
+#
+# The chunks are the caption's ink rather than a blue of their own, because
+# that is the colour Windows lit a selection and a gauge in -- so a themed
+# window gets a themed gauge without the theme having to grow a sixth role.
+#
+# Returns the box the legend goes in, or undef where the band was too narrow
+# to hold one. Which is the same rule the rest of the file follows: a part
+# with no room for it stands down rather than being drawn over its neighbour.
+sub _status
+{
+    my ( $buf, $x, $y, $w, $progress ) = @_;
+
+    my $room = $w - 2 * GAUGE_IN;
+    return if $room < 1;
+
+    my $gauge = $room - LEGEND - LEGEND_GAP;
+
+    my $legend = $gauge >= GAUGE_MIN;
+    $gauge = $room unless $legend;
+
+    my $gx = $x + GAUGE_IN;
+    my $gy = $y + GAUGE_IN;
+
+    _sunken( $buf, $gx, $gy, $gauge, GAUGE );
+
+    # A pixel of trough inside the bevel, so the first chunk does not touch
+    # the shadow it sits in and read as part of it.
+    _chunks(
+        $buf,
+        $gx + SUNKEN + 1,
+        $gy + SUNKEN + 1,
+        $gauge - 2 * SUNKEN - 2,
+        GAUGE - 2 * SUNKEN - 2, $progress
+    );
+
+    return unless $legend;
+
+    return [ $gx + $gauge + LEGEND_GAP, $y, LEGEND, STATUS ];
+}
+
+# The lit part, which is blocks and not a bar. A gauge that filled smoothly is
+# a later decade's; this one steps, and how far along it is is legible as a
+# count of blocks rather than as a length.
+sub _chunks
+{
+    my ( $buf, $x, $y, $w, $h, $progress ) = @_;
+
+    return if $w < CHUNK || $h < 1;
+
+    # The last block needs no gap after it, which is what makes a gauge at one
+    # fill its trough to the end instead of stopping a gap short of it.
+    my $slots = int( ( $w + CHUNK_GAP ) / ( CHUNK + CHUNK_GAP ) );
+    my $lit   = int( $slots * _clamp( $progress, 0, 1 ) + 0.5 );
+
+    for my $n ( 0 .. $lit - 1 )
+    {
+        _fill( $buf, $x + $n * ( CHUNK + CHUNK_GAP ), $y, CHUNK, $h, 'B' );
+    }
+
+    return;
+}
+
+# What the band says. The percentage is worked out rather than asked for,
+# because a gauge and a number that disagreed would be a bug nobody could see
+# in the code and everybody could see in the picture.
+sub _legend_text
+{
+    my ( $arg ) = @_;
+
+    return $arg->{ legend }
+        if defined $arg->{ legend } && length $arg->{ legend };
+
+    return sprintf '%d%% Complete',
+        int( _clamp( $arg->{ progress }, 0, 1 ) * 100 + 0.5 );
 }
 
 # ---------------------------------------------------------------------------
@@ -1189,6 +1339,12 @@ sub _text
         @{ $bar }{ qw(font size caption menu) };
 
     return unless $font;
+
+    if ( $bar->{ legend } && defined $bar->{ says } && length $bar->{ says } )
+    {
+        _annotate( $img, $font, $size, $bar->{ says },
+            '#000000', $bar->{ legend } );
+    }
 
     if ( defined $caption && length $caption )
     {

@@ -128,7 +128,7 @@ DOC
             default => 0,
             type    => 'num',
             min     => -0.5,
-            max     => 2,
+            max     =>  2,
             doc     => 'Extra space between lines as a fraction of the type '
                 . 'size; 0 is what the face itself asks for',
         },
@@ -177,7 +177,7 @@ DOC
             default => 4,
             type    => 'num',
             min     => -100,
-            max     => 100,
+            max     =>  100,
             doc     => 'Shadow displacement in pixels',
         },
         opacity => {
@@ -191,21 +191,21 @@ DOC
             default => 0.04,
             type    => 'num',
             min     => -1,
-            max     => 1,
+            max     =>  1,
             doc     => 'Horizontal inset as a fraction of width',
         },
         y => {
             default => 0.04,
             type    => 'num',
             min     => -1,
-            max     => 1,
+            max     =>  1,
             doc     => 'Vertical inset as a fraction of height',
         },
         rotate => {
             default => 0,
             type    => 'num',
             min     => -180,
-            max     => 180,
+            max     =>  180,
             doc     => 'Rotation in degrees',
         },
         spacing => {
@@ -879,7 +879,7 @@ DOC
             default   => 0,
             type      => 'num',
             min       => -64,
-            max       => 64,
+            max       =>  64,
             doc       => 'Grid lines travelled per loop; negative recedes',
         },
         sun => {
@@ -1423,7 +1423,7 @@ DOC
             default => -30,
             type    => 'num',
             min     => -180,
-            max     => 180,
+            max     =>  180,
             doc     => 'Rotation of the tiled text',
         },
         spacing => {
@@ -1438,7 +1438,7 @@ DOC
             default   => 0,
             type      => 'num',
             min       => -32,
-            max       => 32,
+            max       =>  32,
             doc       => 'Tiles the pattern slides per loop; negative reverses',
         },
         direction => {
@@ -1565,13 +1565,13 @@ sub _watermark
 # decoded every time it is read, and a preset is read far more often than it
 # is written.
 my %COMPASS = (
-    north     => [ 0,  -1 ],
-    northeast => [ 1,  -1 ],
-    east      => [ 1,  0 ],
-    southeast => [ 1,  1 ],
-    south     => [ 0,  1 ],
-    southwest => [ -1, 1 ],
-    west      => [ -1, 0 ],
+    north     => [  0, -1 ],
+    northeast => [  1, -1 ],
+    east      => [  1,  0 ],
+    southeast => [  1,  1 ],
+    south     => [  0,  1 ],
+    southwest => [ -1,  1 ],
+    west      => [ -1,  0 ],
     northwest => [ -1, -1 ],
 );
 
@@ -1655,10 +1655,11 @@ it and a tinted highlight flattens the window.
 
 C<icon> is the picture in the top left corner. It arrives as this program's
 own -- the V and the A from F<assets/artwork/icon-256.png>, redrawn at sixteen
-pixels rather than scaled down to them -- and C<notepad> puts back the
-document page the window was scavenged from. The icon keeps its own colours
-under every theme, because an application's icon did not change with the
-desktop scheme.
+pixels rather than scaled down to them -- C<notepad> puts back the document
+page the window was scavenged from, and C<defrag> is the cluster map the
+C<defrag> effect wears, for a window that is meant to look like that one. The
+icon keeps its own colours under every theme, because an application's icon
+did not change with the desktop scheme.
 
 C<jitter> is the animation setting: how far the window may jump from where it
 was put, redrawn every frame, so that it shakes in place rather than sitting
@@ -1725,8 +1726,8 @@ DOC
             default => 0,
             type    => 'num',
             min     => -1,
-            max     => 1,
-            order   => 4,
+            max     =>  1,
+            order   =>  4,
             doc     => 'Horizontal inset from that anchor, as a fraction '
                 . 'of the width',
         },
@@ -1734,8 +1735,8 @@ DOC
             default => 0,
             type    => 'num',
             min     => -1,
-            max     => 1,
-            order   => 5,
+            max     =>  1,
+            order   =>  5,
             doc     => 'Vertical inset, as a fraction of the height',
         },
         zoom => {

@@ -425,8 +425,7 @@ sub _curvature
         # Barrel coefficients are A B C (D is derived as 1-A-B-C). Driving C
         # alone gives a clean single-parameter bulge.
         $ctx->magick(
-            '-virtual-pixel', 'background',
-            '-background',    $p->{ background },
+            '-virtual-pixel', 'background', '-background', $p->{ background },
             '-distort', 'Barrel', sprintf( '0.0 0.0 %.5f', $p->{ amount } ),
         );
 
@@ -519,8 +518,9 @@ sub _focus_mask
     my ( $ctx, $w, $h, $focus ) = @_;
     require File::Spec;
 
-    my $path = File::Spec->catfile( $ctx->cachedir,
-        sprintf 'crtfocus_%dx%d_%.3f.png', $w, $h, $focus );
+    my $path =
+        File::Spec->catfile( $ctx->cachedir, sprintf 'crtfocus_%dx%d_%.3f.png',
+        $w, $h, $focus );
 
     my $mask = Image::Magick->new;
 
@@ -539,8 +539,10 @@ sub _focus_mask
     my $gh = int( $h * $focus ) || $h;
 
     $mask->Set( size => "${gw}x${gh}" );
-    GlitchVape::Magick::check( $mask->Read( 'radial-gradient:black-white' ),
-        'curvature: could not build the focus falloff' );
+    GlitchVape::Magick::check(
+        $mask->Read( 'radial-gradient:black-white' ),
+        'curvature: could not build the focus falloff'
+    );
 
     $mask->Set( gravity => 'Center' );
     $mask->Crop( geometry => "${w}x${h}+0+0", gravity => 'Center' );

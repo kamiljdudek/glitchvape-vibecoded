@@ -3,7 +3,9 @@ title: The disk defragmenter, mid-pass, with your photograph on the disk
 
 # Saturated first, because the grid can only be as colourful as what it is
 # matching against -- fourteen states is a small palette, and a pastel
-# photograph lands most of itself on the greys between them.
+# photograph lands most of itself on the greys between them. The diffusion
+# below is the other half of that: the grade widens what there is to match
+# and the diffusion stops it all landing on one state anyway.
 #
 # The window comes with the effect, so there is no 'maximised' here: adding one
 # would put a second window around the first.
@@ -21,4 +23,19 @@ effects:
     palette: defrag
     free: 0.4
     scatter: 0.35
+
+    # Written down rather than left to the defaults, because these two are
+    # what decides how much of the photograph survives being turned into a
+    # disk, and that is the whole of what this preset is choosing.
+    dither: 0.75
+    detail: 0.4
+
+    # Nothing on a still, and a third of the disk over a loop -- far enough
+    # that the packed end grows visibly, near enough that the photograph is
+    # still there at the end of it.
+    advance: 0.3
     title: Defragmenting Drive C
+
+    # Mid-pass, which is what the title says and what the gauge under the map
+    # has to agree with.
+    progress: 0.4

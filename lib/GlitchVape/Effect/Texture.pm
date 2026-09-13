@@ -201,7 +201,10 @@ Each cell of the grid takes the average colour of the picture under it and is
 painted as whichever cluster state is nearest. Fourteen states, eight of them
 from the window's own legend and six invented, which is what gives the grid
 enough colours to be a picture of something. C<palette> says which set they
-are painted in -- see L<GlitchVape::Defrag> for what is in each.
+are painted in: the two sixteen-colour tables, the three one-ink screens, and
+every palette the rest of the program has -- so the map can be drawn in the
+Game Boy's four greens or the C64's sixteen. See L<GlitchVape::Defrag> for
+what each does with them.
 
 C<free> is the half of it that makes it read as a disk rather than as a
 mosaic. Most of the map was always empty: white paper, no block, no outline,
@@ -216,6 +219,20 @@ sorted strictly by brightness gives smooth continents of white, which is a
 posterised photograph; a disk frays at that boundary and has odd clusters
 stranded out on their own. Turning it up fringes the edges and strands them.
 
+C<detail> is the other thing that disturbs that ranking, and it disturbs it
+with the picture rather than with the dice. Emptying the palest cells deletes
+a bright subject as readily as the sky behind it, so this asks a second
+question of every cell -- is there an edge in it -- and keeps the ones there
+is something in. The share of the disk that ends up empty is untouched,
+because what changes is the order and not the count.
+
+C<dither> is what stops the palette collapsing. Rounded on its own, most of a
+photograph lands on whichever state sits in the middle of it: five of the
+fourteen on an ordinary picture, one of them taking two thirds of the grid.
+Carrying what each cluster could not say into the ones beside it brings the
+rest back, and the shuffling it produces is what a fragmented disk looks
+like -- see L<GlitchVape::Defrag/WHY THE ERROR IS CARRIED>.
+
 C<block> is the pitch of one cluster in pixels. At the eight it was drawn at
 there is an outline and a chequer inside it; below seven the chequer goes and
 below five the outline does too, because at that size an outline is most of
@@ -226,6 +243,31 @@ the way a maximised one is built around whatever it is showing -- the same
 window C<maximised> draws, because there is one implementation of it. Turned
 off, what comes out is the bare cluster map, which is what to use to frame it
 with C<maximised> or C<chicago> yourself.
+
+C<status> is the band under the map, and it is what says this window is doing
+something rather than merely showing something: a sunken trough with the work
+so far lit along it in blocks, and the share as a percentage beside it.
+C<progress> is how far along. It is a setting rather than a thing worked out
+from the picture because there is nothing in a photograph that means "the
+disk is a third done".
+
+C<advance> is the same job in motion, and it is the only setting here that
+means anything in a loop and nothing in a still. One pass over the disk,
+starting at the beginning of it and getting that far through: the clusters
+behind the head are packed down to the front and what they came from goes
+empty, and a dozen at the head flash as written and read. The gauge adds what
+the pass has done to C<progress>, because the pass is one sweep and the gauge
+is the whole job.
+
+Starting at the beginning is the point of it. Opening the loop part of the way
+in -- with the head already down the map and everything above it packed -- puts
+the dullest part of the pass at the front of the loop and hides that much of
+the photograph for all of it. Started at the top, the loop opens on the
+picture and the pass eats into it.
+
+The loop does not close and does not pretend to; the frame after the last one
+is the job starting again.
+
 
 It runs at C<format>, first in the chain, for the reason C<downsample> does:
 everything after it then happens to the grid rather than to the photograph,
@@ -254,7 +296,24 @@ DOC
             doc     => 'Which colours the states are painted in. defrag and '
                 . 'scandisk are sixteen-colour tables with chequered blocks; '
                 . 'mono, amber and phos are one ink on one paper, where a '
-                . 'cluster glows in proportion to how dark it was',
+                . 'cluster glows in proportion to how dark it was. The rest '
+                . 'are the program\'s own palettes spent on the blocks, on '
+                . 'the white paper the window had -- amber and phos are the '
+                . 'exceptions, being a monitor rather than a window',
+        },
+        dither => {
+            label   => 'Colour diffusion',
+            order   => 25,
+            default => 0.75,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            doc     => 'How much of what a cluster could not say is carried '
+                . 'into the ones beside it. At 0 every cluster is rounded on '
+                . 'its own and most of a photograph lands on whichever state '
+                . 'sits in the middle of it; turning it up brings the rest of '
+                . 'the palette back, and reads as a disk shuffled together '
+                . 'rather than sorted into continents',
         },
         free => {
             label   => 'Free space',
@@ -278,6 +337,20 @@ DOC
                 . 'it follows the picture exactly, which reads as posterised '
                 . 'rather than as a disk; turning it up strands clusters out '
                 . 'on their own the way a fragmented one does',
+        },
+        detail => {
+            label   => 'Keep detail',
+            order   => 45,
+            default => 0.4,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            needs   => { free => 1 },
+            doc     => 'How much the picture\'s own edges decide which '
+                . 'clusters survive. At 0 the emptiest cells are simply the '
+                . 'palest ones, which deletes a bright subject along with the '
+                . 'sky behind it; turning it up keeps whatever sits on an '
+                . 'edge and empties the flat ground instead',
         },
         window => {
             label   => 'Window',
@@ -307,6 +380,49 @@ DOC
             doc     => 'Which of the schemes from the Appearance tab the '
                 . 'window is painted in',
         },
+        status => {
+            label   => 'Progress bar',
+            order   => 90,
+            default => 1,
+            type    => 'bool',
+            needs   => { window => 1 },
+            doc     => 'The band under the map: a gauge and how far along it '
+                . 'says the disk is. Turned off, the map runs to the bottom '
+                . 'of the window',
+        },
+        progress => {
+            label   => 'Progress',
+            order   => 100,
+            default => 0.4,
+            type    => 'num',
+            min     => 0,
+            max     => 1,
+            needs   => { window => 1, status => 1 },
+            doc     => 'How far along the whole job is, which is what the '
+                . 'gauge reads: a pass adds what it has done to this as it '
+                . 'runs, since one sweep over the disk is a part of the work '
+                . 'rather than all of it. The percentage beside the bar is '
+                . 'this and not a setting of its own, because a gauge and a '
+                . 'number that disagreed would be a bug only the picture '
+                . 'could show',
+        },
+        advance => {
+            label     => 'Pass',
+            order     => 55,
+            default   => 0,
+            type      => 'num',
+            min       => 0,
+            max       => 1,
+            animation => 1,
+            doc       => 'How much of the disk the defragmenter works '
+                . 'through over one loop. The pass starts at the beginning '
+                . 'of the disk each time round: the clusters behind the head '
+                . 'are packed down to the front and what they came from goes '
+                . 'empty, which is what that window actually did, and the '
+                . 'gauge adds what the pass has done to Progress. Nothing on '
+                . 'a still, where there is no pass to be part of the way '
+                . 'through',
+        },
         seed => {
             label   => 'Layout seed',
             order   => 50,
@@ -323,6 +439,11 @@ DOC
     },
     apply => \&_defrag,
 );
+
+# Where the edge scale is read off. The busiest twentieth of the grid is
+# taken as 'as much detail as this picture has', so the control means the same
+# thing on a portrait against a wall as on a photograph of a forest.
+use constant DETAIL_TOP => 0.95;
 
 sub _defrag
 {
@@ -353,7 +474,23 @@ sub _defrag
     # where the picture underneath it had not moved.
     my $rng = $ctx->rng_fixed( 'defrag' . ( $p->{ seed } || 0 ) );
 
-    my $used = _used_cells( $avg, $p, $rng );
+    # Only when it is asked for: the edges are a second pass over the whole
+    # picture, and a setting at nought should not cost a render anything.
+    my $detail =
+        $p->{ detail } > 0 ? _cluster_detail( $ctx, $cols, $rows ) : undef;
+
+    my $pass = _pass( $ctx, $p );
+
+    my $used = _used_cells(
+        states => $map->{ states },
+        avg    => $avg,
+        detail => $detail,
+        cols   => $cols,
+        rows   => $rows,
+        params => $p,
+        rng    => $rng,
+        front  => $pass,
+    );
 
     # One stamp per state, built once and written straight into the buffer.
     # A cluster map is tens of thousands of cells, and the alternative is
@@ -402,9 +539,49 @@ sub _defrag
         }
     );
 
-    _put_in_a_window( $ctx, $p ) if $p->{ window };
+    _put_in_a_window( $ctx, $p, $pass ) if $p->{ window };
 
     return;
+}
+
+# How much of the disk this pass has worked through by this frame, or undef
+# where there is no pass.
+#
+# It starts at the beginning of the disk every time round, because that is
+# where a pass starts. Beginning it at C<progress> instead was tried and is
+# wrong twice over: the head is then already a third of the way down the map
+# with a slab of packed clusters over everything above it, so the loop opens
+# on the least interesting part of the pass and on the most of the photograph
+# already covered. What C<progress> counts is the job, and a job is more than
+# one pass -- see L</_gauge>.
+#
+# Nought on a still, and that is what makes this an animation setting rather
+# than a second progress control: a defragmenter caught at one instant is a
+# cluster map, which is what the rest of the effect already draws.
+sub _pass
+{
+    my ( $ctx, $p ) = @_;
+
+    return unless $ctx->frames > 1 && $p->{ advance } > 0;
+
+    return $p->{ advance } * $ctx->phase;
+}
+
+# What the gauge under the map reads.
+#
+# The job rather than the pass, which is why the two numbers are added rather
+# than being one number: the map is one sweep over the disk and the gauge is
+# the whole of the work, of which a sweep is a part. So C<progress> is what
+# had been done before this loop started, and it still moves the bar while an
+# animation is running -- a control that went dead the moment Animate was
+# switched on would be the worst of both.
+sub _gauge
+{
+    my ( $p, $pass ) = @_;
+
+    my $done = $p->{ progress } + ( $pass || 0 );
+
+    return $done > 1 ? 1 : $done;
 }
 
 # The defragmenter's own window, built around the map the way a maximised one
@@ -425,7 +602,7 @@ sub _defrag
 # wrong.
 sub _put_in_a_window
 {
-    my ( $ctx, $p ) = @_;
+    my ( $ctx, $p, $pass ) = @_;
 
     $ctx->image(
         GlitchVape::Chicago::wrap(
@@ -434,11 +611,22 @@ sub _put_in_a_window
             caption => $p->{ title },
             font    => GlitchVape::Fonts::resolve( 'ui' ),
 
+            # The band under the map, which is the one piece of chrome
+            # 'maximised' has no use for: a window around a photograph is not
+            # doing anything, and this one is.
+            # What the pass has done is added to it rather than replacing
+            # it, so the bar advances with the disk: a gauge that sat still
+            # while the map packed itself would be the plainest possible way
+            # of saying the two had come apart.
+            progress => $p->{ status } ? _gauge( $p, $pass ) : undef,
+
             # Not settings. The defragmenter had no menu bar and no scroll
             # bars -- the map was however big the window was -- and the icon
-            # is the one the chrome was scavenged from. Anyone who wants a
-            # window they can dress differently already has 'maximised'.
-            icon       => 'notepad',
+            # is its own rather than the document page the chrome was
+            # scavenged from, because what is in the caption of a program is
+            # that program. Anyone who wants a window they can dress
+            # differently already has 'maximised'.
+            icon       => 'defrag',
             menu       => undef,
             scrollbars => 0,
         )
@@ -471,6 +659,45 @@ sub _cluster_colours
     return [ map { [ @v[ $_ * 3 .. $_ * 3 + 2 ] ] } 0 .. $cols * $rows - 1 ];
 }
 
+# How much is going on inside each cell, as 0..1.
+#
+# The picture's own edges, averaged down to the grid: a cell that a contour
+# runs through comes back near one and a cell of flat sky comes back near
+# nought. That is the question 'is there anything here worth a cluster', and
+# it is asked of the picture at full size rather than of the grid, because by
+# the time the picture is one pixel per cell the edge has been averaged into
+# the very flatness being looked for.
+#
+# Normalised against a high percentile and not the maximum: one specular
+# highlight -- a chrome fitting, a reflection off water -- is a cell an order
+# of magnitude above everything else, and dividing by it would flatten the
+# rest of the picture to nothing and leave the setting looking broken.
+sub _cluster_detail
+{
+    my ( $ctx, $cols, $rows ) = @_;
+
+    my $edge = $ctx->image->Clone;
+    $edge->Set( colorspace => 'Gray' );
+
+    GlitchVape::Magick::check( $edge->Edge( radius => 1 ),
+        'defrag: could not find the picture\'s edges' );
+
+    GlitchVape::Magick::check(
+        $edge->Resize( geometry => "${cols}x$rows!", filter => 'Box' ),
+        'defrag: could not reduce the edges to the cluster grid'
+    );
+
+    my $px = GlitchVape::Pixels->from_image( $edge );
+    my @v  = unpack 'C*', $px->data;
+
+    my @found = map { $v[ $_ * 3 ] } 0 .. $cols * $rows - 1;
+
+    my @sorted = sort { $a <=> $b } @found;
+    my $top    = $sorted[ int( $#sorted * DETAIL_TOP ) ] || 1;
+
+    return [ map { $_ > $top ? 1 : $_ / $top } @found ];
+}
+
 # Which cells carry a block, and which state each of them is.
 #
 # Returns one number per cell: 0 for free space, otherwise the state's place
@@ -478,14 +705,18 @@ sub _cluster_colours
 # free space is the stamp before the first state.
 sub _used_cells
 {
-    my ( $avg, $p, $rng ) = @_;
+    my ( %arg ) = @_;
 
-    my $states = GlitchVape::Defrag::map_for( $p->{ palette } )->{ states };
+    my ( $states, $avg, $detail ) = @arg{ qw(states avg detail) };
+    my ( $cols, $rows ) = @arg{ qw(cols rows) };
+    my ( $p,    $rng )  = @arg{ qw(params rng) };
 
-    # How bright each cell is, with the scattering already mixed in. Doing it
-    # here rather than after the threshold is what frays the boundary instead
-    # of speckling the whole grid: a cell near the edge of being empty is the
-    # one a nudge moves, and one in the middle of the data stays put.
+    # How bright each cell is, with the scattering and the detail already
+    # mixed in. Doing it here rather than after the threshold is what frays
+    # the boundary instead of speckling the whole grid: a cell near the edge
+    # of being empty is the one a nudge moves, and one in the middle of the
+    # data stays put. The detail is the same kind of nudge with the picture
+    # doing the nudging instead of the dice.
     my @lit;
     for my $n ( 0 .. $#$avg )
     {
@@ -495,6 +726,12 @@ sub _used_cells
             0.114 * $avg->[ $n ][ 2 ];
 
         $l += ( $rng->rand( 2 ) - 1 ) * $p->{ scatter } * 110;
+
+        # Towards the dark end, which is the end that survives. A whole range
+        # at full strength, so a cell on an edge outranks a flat cell of any
+        # brightness rather than merely being helped along -- half of it and
+        # the setting would do nothing at all on a light photograph.
+        $l -= $detail->[ $n ] * $p->{ detail } * 255 if $detail;
 
         push @lit, $l;
     }
@@ -516,13 +753,33 @@ sub _used_cells
 
     my @out = ( 0 ) x scalar @order;
 
+    # Matched over the whole grid rather than a cell at a time, because the
+    # error one cell could not say is carried into the ones after it and a
+    # cell left out of the walk is a hole in that. Which cells are free is a
+    # question about space and this is a question about colour; the free ones
+    # are blanked below, after both have been answered.
+    my $state = GlitchVape::Defrag::match_grid(
+        states => $states,
+        grid   => $avg,
+        cols   => $cols,
+        rows   => $rows,
+        spread => $p->{ dither },
+    );
+
     for my $at ( 0 .. $#order - $empty )
     {
         my $n = $order[ $at ];
-        $out[ $n ] = 1 + GlitchVape::Defrag::nearest( $states, $avg->[ $n ] );
+        $out[ $n ] = 1 + $state->[ $n ];
     }
 
-    return \@out;
+    # And then the pass over the top of it, which moves clusters rather than
+    # choosing them: what is on the disk was settled above, and this is the
+    # defragmenter finding it there.
+    return GlitchVape::Defrag::sweep(
+        cells  => \@out,
+        states => $states,
+        front  => $arg{ front },
+    );
 }
 
 # ---------------------------------------------------------------------------

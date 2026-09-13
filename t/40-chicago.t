@@ -387,14 +387,15 @@ sub wandering
 # builds: the hole is the client area asked for, exactly, where they said.
 sub fits_around
 {
-    my ( $menu, $bars ) = @_;
+    my ( $menu, $bars, $progress ) = @_;
 
     my ( $cw, $ch ) = ( 90, 70 );
 
     my ( $ww, $wh ) = GlitchVape::Chicago::around(
         client     => [ $cw, $ch ],
         menu       => $menu,
-        scrollbars => $bars
+        scrollbars => $bars,
+        progress   => $progress
     );
 
     my ( $hx, $hy ) = GlitchVape::Chicago::client_origin( menu => $menu );
@@ -409,9 +410,12 @@ sub fits_around
         grip       => 1,
         scroll     => 0,
         thumb      => 0.5,
+        progress   => $progress,
     );
 
-    my $said = sprintf 'menu %s, bars %d', defined $menu ? 'on' : 'off', $bars;
+    my $said = sprintf 'menu %s, bars %d, band %s',
+        defined $menu ? 'on' : 'off',
+        $bars, defined $progress ? 'on' : 'off';
 
     is join( 'x', $win->Get( 'width' ), $win->Get( 'height' ) ), "${ww}x${wh}",
         "around() says how big the window is ($said)";
@@ -423,6 +427,54 @@ sub fits_around
 
     is substr( art( $win, $hx - 1, $hy, 1, 1 )->[ 0 ], 0, 1 ), 'K',
         "with the well drawn right up to its edge ($said)";
+
+    return;
+}
+
+# A small window with the status band under it, at whatever the gauge is
+# reading. Undef for one that is not doing anything and so has no band.
+sub gauge_window
+{
+    my ( $progress ) = @_;
+
+    return GlitchVape::Chicago::render(
+        width     => 200,
+        height    => 120,
+        caption   => undef,
+        font      => undef,
+        maximised => 1,
+        progress  => $progress,
+    );
+}
+
+# A row straight through the middle of that band, in ink letters. Found from
+# the metrics rather than counted off, so it does not have to be edited every
+# time the window learns another part.
+sub gauge_row
+{
+    my ( $progress ) = @_;
+
+    my $m   = GlitchVape::Chicago::metrics();
+    my $win = gauge_window( $progress );
+
+    my ( $w, $h ) = ( $win->Get( 'width' ), $win->Get( 'height' ) );
+
+    return art( $win, 0, $h - $m->{ frame } - int( $m->{ status } / 2 ), $w, 1 )
+        ->[ 0 ];
+}
+
+# That each quarter of the way along lights more blocks than the last. The
+# count and not the length, because the count is what a person reads off it.
+sub lights_more_than_before
+{
+    my @count =
+        map { scalar( () = gauge_row( $_ ) =~ /B+/gx ) } 0.25, 0.5, 0.75, 1;
+
+    for my $at ( 1 .. $#count )
+    {
+        cmp_ok $count[ $at - 1 ], '<', $count[ $at ],
+            "and each quarter lights more blocks than the one before ($at)";
+    }
 
     return;
 }
@@ -1131,8 +1183,13 @@ SKIP:
 # the way to catch that is to build a window from around() and then measure
 # the hole render() actually left.
 {
-    fits_around( $_->[ 0 ], $_->[ 1 ] )
-        for [ undef, 0 ], [ undef, 1 ], [ 'File', 0 ], [ 'File', 1 ];
+    fits_around( @$_ )
+        for [ undef, 0 ], [ undef, 1 ], [ 'File', 0 ], [ 'File', 1 ],
+
+        # And with the band under it, which is the one part that comes out of
+        # the client area's own height rather than out of the frame: a window
+        # that forgot to make room for it would put the picture behind it.
+        [ undef, 0, 0.5 ], [ 'File', 1, 0.5 ];
 }
 
 # ---------------------------------------------------------------------------
@@ -1182,6 +1239,58 @@ SKIP:
     my $corner = join q{}, @{ art( $flat, 466, 307, 8, 8 ) };
 
     unlike $corner, qr/W/, 'and there is no sizing grip to take hold of';
+}
+
+# ---------------------------------------------------------------------------
+# The band under the well, for a window that is doing something
+
+# A gauge that is a picture of a gauge rather than a gauge is easy to end up
+# with, and it looks right in a screenshot at one setting: the failures are
+# all at the ends. So the questions here are asked at nought and at one, and
+# about the count of blocks rather than about a length -- because the count is
+# what a person reads off it.
+{
+    my $m = GlitchVape::Chicago::metrics();
+
+    # Nought is not 'nearly nothing'. A gauge that lit one block at nought
+    # would say a disk nobody had started on was under way.
+    unlike gauge_row( 0 ), qr/B/x, 'nothing is lit at nought';
+
+    lights_more_than_before();
+
+    # And one fills the trough. The last block ends where the trough does,
+    # give or take the gap that would have followed it -- a gauge that stopped
+    # a block short at one would say a finished disk was not.
+    my $full = gauge_row( 1 );
+
+    my ( $lit )    = $full =~ /(B [BF]* B)/x;
+    my ( $trough ) = $full =~ /K ([BF]+) W/x;
+
+    ok $trough, 'the trough is drawn as a well with the blocks inside it';
+
+    cmp_ok length( $trough ) - length( $lit ), '<', 4,
+        'and at one they run to the end of it';
+
+    # The band is the window's, not the picture's: a window without one is
+    # shorter by exactly the band and the same width, which is what stops the
+    # client area being asked to give up room for it.
+    my @plain = GlitchVape::Chicago::around( client => [ 200, 150 ] );
+    my @with =
+        GlitchVape::Chicago::around( client => [ 200, 150 ], progress => 0 );
+
+    is $with[ 0 ], $plain[ 0 ], 'a band does not change how wide a window is';
+    is $with[ 1 ] - $plain[ 1 ], $m->{ status },
+        'and makes it taller by exactly the band';
+
+    # Undef rather than nought is what means 'no band', because nought is a
+    # gauge that has not started and that is a different picture.
+    my $bare = gauge_window( undef );
+    my ( $bw, $bh ) = ( $bare->Get( 'width' ), $bare->Get( 'height' ) );
+
+    unlike join( q{},
+        @{ art( $bare, 0, $bh - $m->{ status }, $bw, $m->{ status } ) } ),
+        qr/B/x,
+        'and a window that is not doing anything has no gauge at all';
 }
 
 # ---------------------------------------------------------------------------
