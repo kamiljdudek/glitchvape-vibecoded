@@ -296,6 +296,28 @@ sub disc_source
     return $path;
 }
 
+# What the effect makes of how much is going on in each cell, asked of the
+# measurement itself rather than of what the ranking then did with it.
+#
+# Its own block, because this is the half that broke: the measurement was
+# ImageMagick's edge detector, which came back at 26 of 255 here and at
+# nothing at all on the ImageMagick in Fedora's container -- so the setting
+# worked on one machine and silently did nothing on another, and the test
+# that noticed could only say that no cells had moved.
+sub detail_of
+{
+    my ( $src, $cols, $rows ) = @_;
+
+    my $img = Image::Magick->new;
+    $img->Read( $src );
+
+    my $ctx = GlitchVape::Context->new( image => $img, seed => 3 );
+
+    ## no critic (Subroutines::ProtectPrivateSubs)
+    return GlitchVape::Effect::Texture::_cluster_detail( $ctx, $cols, $rows );
+    ## use critic
+}
+
 # Which cells of the disc picture come back with a block on them, as cell
 # numbers across a 40 by 24 grid.
 sub disc_cells
@@ -326,6 +348,35 @@ sub disc_cells
     }
 
     return \@on;
+}
+
+# That the measurement itself answers, and answers about the edge: one value
+# per cell, not all the same, and the busiest cells on the circle.
+sub detail_finds_the_edge
+{
+    my ( $src, $round ) = @_;
+
+    my $detail = detail_of( $src, 40, 24 );
+
+    is scalar @$detail, 40 * 24, 'the detail map has one value per cell';
+
+    my %seen = map { $_ => 1 } @$detail;
+
+    cmp_ok scalar keys %seen, '>', 1,
+        'a picture with an edge in it does not measure as flat everywhere'
+        or diag 'every cell came back as '
+        . ( keys %seen )[ 0 ]
+        . ' -- the measurement found nothing, which is what an edge '
+        . 'detector did on another machine';
+
+    # The busiest twenty cells, which on this picture can only be the circle.
+    my @quiet   = sort { $detail->[ $a ] <=> $detail->[ $b ] } 0 .. $#$detail;
+    my @busiest = ( reverse @quiet )[ 0 .. 19 ];
+
+    is on_rim( \@busiest, $round ), scalar @busiest,
+        'and the cells it finds busiest are the ones the circle runs through';
+
+    return;
 }
 
 # How many of those cells the circle passes through. Measured in cells, and a
@@ -1090,6 +1141,8 @@ sub brightness_is_spread
 {
     my $round = 60;
     my $src   = disc_source( $round );
+
+    detail_finds_the_edge( $src, $round );
 
     my $flat = disc_cells( $src, 0 );
     my $edgy = disc_cells( $src, 0.8 );

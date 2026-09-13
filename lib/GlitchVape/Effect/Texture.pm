@@ -445,6 +445,12 @@ DOC
 # thing on a portrait against a wall as on a photograph of a forest.
 use constant DETAIL_TOP => 0.95;
 
+# How many samples across one cell the spread is measured over. Four, so a
+# contour crossing a corner of the cell still lands in a sample of its own: at
+# two the samples are half a cell each and a thin edge is averaged into one of
+# them, which is the flatness the measurement is trying to tell it from.
+use constant DETAIL_SAMPLES => 4;
+
 sub _defrag
 {
     my ( $ctx, $p ) = @_;
@@ -661,12 +667,23 @@ sub _cluster_colours
 
 # How much is going on inside each cell, as 0..1.
 #
-# The picture's own edges, averaged down to the grid: a cell that a contour
-# runs through comes back near one and a cell of flat sky comes back near
-# nought. That is the question 'is there anything here worth a cluster', and
-# it is asked of the picture at full size rather than of the grid, because by
-# the time the picture is one pixel per cell the edge has been averaged into
-# the very flatness being looked for.
+# The spread of the picture inside the cell: its brightest sample less its
+# darkest, from a reduction of the picture to several samples across every
+# cell. A cell a contour runs through has samples on both sides of it and a
+# wide spread; a cell of flat sky has none. That is the question 'is there
+# anything here worth a cluster', and it is asked of the picture above the
+# grid rather than of the grid, because by the time the picture is one pixel
+# per cell the edge has been averaged into the very flatness being looked for.
+#
+# It used to be ImageMagick's own edge detector and that was a mistake worth
+# recording. C<-edge> is a convolution, and what it yields depends on the
+# quantum depth, on whether the build has HDRI and on the version: on the
+# machine this was written on, a soft edge came back at 26 of 255 with a
+# ninety-fifth percentile of 3, and on the ImageMagick in Fedora's container
+# the same picture came back at nothing at all -- so the setting worked here
+# and silently did nothing there, which is the worst way for a control to be
+# broken. The same edge measured as a spread is 76, and a subtraction is the
+# same subtraction on every machine.
 #
 # Normalised against a high percentile and not the maximum: one specular
 # highlight -- a chrome fitting, a reflection off water -- is a cell an order
@@ -676,26 +693,67 @@ sub _cluster_detail
 {
     my ( $ctx, $cols, $rows ) = @_;
 
-    my $edge = $ctx->image->Clone;
-    $edge->Set( colorspace => 'Gray' );
+    my $fine = $ctx->image->Clone;
 
-    GlitchVape::Magick::check( $edge->Edge( radius => 1 ),
-        'defrag: could not find the picture\'s edges' );
+    my $fw = $cols * DETAIL_SAMPLES;
+    my $fh = $rows * DETAIL_SAMPLES;
 
     GlitchVape::Magick::check(
-        $edge->Resize( geometry => "${cols}x$rows!", filter => 'Box' ),
-        'defrag: could not reduce the edges to the cluster grid'
+        $fine->Resize( geometry => "${fw}x$fh!", filter => 'Box' ),
+        'defrag: could not reduce the picture to the detail grid'
     );
 
-    my $px = GlitchVape::Pixels->from_image( $edge );
-    my @v  = unpack 'C*', $px->data;
+    my $px = GlitchVape::Pixels->from_image( $fine );
 
-    my @found = map { $v[ $_ * 3 ] } 0 .. $cols * $rows - 1;
+    my @found = _spreads( [ unpack 'C*', $px->data ], $fw, $cols, $rows );
 
     my @sorted = sort { $a <=> $b } @found;
     my $top    = $sorted[ int( $#sorted * DETAIL_TOP ) ] || 1;
 
     return [ map { $_ > $top ? 1 : $_ / $top } @found ];
+}
+
+# The brightest sample less the darkest, cell by cell.
+#
+# Weighted the way the eye is rather than taken off one channel, because a
+# contour between two colours of the same brightness is an edge a person sees
+# and a green channel does not. In whole numbers, which is what the weights
+# being 77, 150 and 29 out of 256 is for: this runs sixteen times per cell.
+sub _spreads
+{
+    my ( $v, $fw, $cols, $rows ) = @_;
+
+    my @out;
+
+    for my $y ( 0 .. $rows - 1 )
+    {
+        for my $x ( 0 .. $cols - 1 )
+        {
+            my ( $low, $high ) = ( 255, 0 );
+
+            for my $dy ( 0 .. DETAIL_SAMPLES - 1 )
+            {
+                my $row = ( $y * DETAIL_SAMPLES + $dy ) * $fw;
+
+                for my $dx ( 0 .. DETAIL_SAMPLES - 1 )
+                {
+                    my $at = ( $row + $x * DETAIL_SAMPLES + $dx ) * 3;
+
+                    my $lit =
+                        ( 77 * $v->[ $at ] +
+                            150 * $v->[ $at + 1 ] +
+                            29 * $v->[ $at + 2 ] ) >> 8;
+
+                    $low  = $lit if $lit < $low;
+                    $high = $lit if $lit > $high;
+                }
+            }
+
+            push @out, $high - $low;
+        }
+    }
+
+    return @out;
 }
 
 # Which cells carry a block, and which state each of them is.
