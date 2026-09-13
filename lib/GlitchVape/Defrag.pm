@@ -21,8 +21,14 @@ L<GlitchVape::Effect::Texture>.
 Measured off a screenshot, and it is three things rather than one: a black
 outline a pixel thick, an interior of two colours in a checkerboard, and a
 pixel of paper along the right and the bottom that separates it from the next
-one. At the size it was drawn -- eight pixels of pitch -- that leaves five
-pixels of interior, which is where the checkerboard is visible at all.
+one.
+
+And it is a I<rectangle>, not a square. The grid is eight pixels across and
+ten down, which leaves a block of seven by nine and an interior of five by
+seven. That is the first thing the eye picks up about the real window and the
+easiest thing to get wrong, because square is what "a grid of small blocks"
+sounds like -- so the proportion is kept whatever C<block> is set to rather
+than being a size anyone can get wrong.
 
 The checkerboard is not decoration. A 1995 display had sixteen colours, and
 every colour between them was made by dithering two of them at fifty per cent;
@@ -276,6 +282,28 @@ sub _luma
     return 0.299 * $rgb->[ 0 ] + 0.587 * $rgb->[ 1 ] + 0.114 * $rgb->[ 2 ];
 }
 
+# The cell as it was drawn: eight across, ten down, gap included.
+use constant {
+    CELL_W => 8,
+    CELL_H => 10,
+};
+
+=head2 cell( $block )
+
+The whole cell at that pitch, as C<< ( $width, $height ) >>. C<$block> is the
+width, because that is what anyone setting it means by the size of a block;
+the height follows from the proportion and is never anyone's to get wrong.
+
+=cut
+
+sub cell
+{
+    my ( $block ) = @_;
+
+    my $h = int( $block * CELL_H / CELL_W + 0.5 );
+    return ( $block, $h > 2 ? $h : 2 );
+}
+
 =head2 unit( $block )
 
 The pixel the block is drawn in, at that pitch.
@@ -297,20 +325,20 @@ sub unit
 {
     my ( $block ) = @_;
 
-    my $unit = int( $block / 8 );
+    my $unit = int( $block / CELL_W );
     return $unit > 1 ? $unit : 1;
 }
 
 =head2 stamp( %arg )
 
     state  => one entry from map_for's states, or undef for free space
-    block  => the pitch, in pixels
+    block  => the pitch across, in pixels
     paper  => the palette's paper
     edge   => its outline, or undef
 
-One cell, as C<$block> rows of C<$block * 3> bytes: the block itself, its
-outline if there is room for one, and the paper that separates it from its
-neighbours. Ready to be written straight into a L<GlitchVape::Pixels> buffer,
+One cell, at the size L</cell( $block )> gives: the block itself, its outline
+if there is room for one, and the paper along its right and bottom that
+separates it from its neighbours. Ready to be written straight into a L<GlitchVape::Pixels> buffer,
 because a cluster map is tens of thousands of cells and drawing each one
 through ImageMagick would be tens of thousands of subprocess-free but
 still-per-call operations.
@@ -331,17 +359,19 @@ sub stamp
 {
     my ( %arg ) = @_;
 
-    my $n     = $arg{ block };
+    my ( $cw, $ch ) = cell( $arg{ block } );
     my $paper = pack 'C3', @{ $arg{ paper } };
 
-    return $paper x ( $n * $n ) unless $arg{ state };
+    return $paper x ( $cw * $ch ) unless $arg{ state };
 
-    my $unit = unit( $n );
-    my $size = $n - $unit;
+    my $unit = unit( $arg{ block } );
 
-    # How big the block is in its own pixels, which is what decides whether
-    # there is room for each part of it.
-    my $design = int( $size / $unit );
+    my $wide = $cw - $unit;
+    my $tall = $ch - $unit;
+
+    # How big the block is in its own pixels, across -- the narrower way, and
+    # so the one that decides whether there is room for each part of it.
+    my $design = int( $wide / $unit );
 
     my $edge  = $arg{ edge } && $design >= EDGE_MIN ? $arg{ edge } : undef;
     my $inner = $edge                               ? $unit        : 0;
@@ -356,11 +386,11 @@ sub stamp
 
     my $out = q{};
 
-    for my $y ( 0 .. $n - 1 )
+    for my $y ( 0 .. $ch - 1 )
     {
-        for my $x ( 0 .. $n - 1 )
+        for my $x ( 0 .. $cw - 1 )
         {
-            if ( $x >= $size || $y >= $size )
+            if ( $x >= $wide || $y >= $tall )
             {
                 $out .= $paper;
             }
@@ -368,8 +398,8 @@ sub stamp
                 $inner
                 && (   $x < $inner
                     || $y < $inner
-                    || $x >= $size - $inner
-                    || $y >= $size - $inner )
+                    || $x >= $wide - $inner
+                    || $y >= $tall - $inner )
                 )
             {
                 $out .= $rim;

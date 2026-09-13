@@ -493,13 +493,14 @@ A few worth knowing about:
   horizontally while edges stay sharp. Done properly in YCbCr, blurring only
   Cb and Cr.
 - **`defrag`** — redraws the picture as the cluster map from the disk
-  defragmenter that shipped with Windows 95: a grid of small blocks, each one
-  the state of what is supposed to be in it, most of the grid left as bare
-  white paper because most of that window always was. Fourteen states, eight
-  of them off the window's own legend. `palette` picks between two
-  sixteen-colour tables with chequered blocks and three one-ink phosphor
-  screens; `free` says how much of the disk is empty and `scatter` how ragged
-  the edge of it is.
+  defragmenter that shipped with Windows 95, inside the defragmenter's own
+  window: a grid of blocks eight pixels across and ten down, each one the
+  state of what is supposed to be in it, most of the grid left as bare white
+  paper because most of that window always was. Fourteen states, eight of them
+  off the window's own legend. `palette` picks between two sixteen-colour
+  tables with chequered blocks and three one-ink phosphor screens; `free` says
+  how much of the disk is empty and `scatter` how ragged the edge of it is;
+  `window: 0` leaves the map bare.
 - **`crop`** — reframes to a shape (square, 4:3, 16:9, 2.39:1, 4:5, 9:16, or
   the picture's own) and chooses what is inside it. `zoom` magnifies rather
   than shrinks: the frame that comes out is the same size at every setting, so

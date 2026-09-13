@@ -1,14 +1,12 @@
 name: defrag
 title: The disk defragmenter, mid-pass, with your photograph on the disk
 
-# The cluster map is the picture and the window is the frame, which is the
-# whole look: 'defrag' at the front of the chain so that everything after it
-# happens to the grid rather than to the photograph, and 'maximised' at the
-# back so the window is built around whatever came out.
-#
 # Saturated first, because the grid can only be as colourful as what it is
 # matching against -- fourteen states is a small palette, and a pastel
 # photograph lands most of itself on the greys between them.
+#
+# The window comes with the effect, so there is no 'maximised' here: adding one
+# would put a second window around the first.
 
 output:
   max_dim: 1280
@@ -23,11 +21,4 @@ effects:
     palette: defrag
     free: 0.4
     scatter: 0.35
-
-  # No menu bar and no scroll bars: the defragmenter had neither, and the
-  # caption is the one part of the window that says what it is.
-  maximised:
     title: Defragmenting Drive C
-    menu: ''
-    scrollbars: 0
-    icon: notepad

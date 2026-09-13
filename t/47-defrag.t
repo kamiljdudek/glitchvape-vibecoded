@@ -10,8 +10,10 @@ use File::Temp ();
 use Test::More;
 
 use GlitchVape                  ();
+use GlitchVape::Chicago         ();
 use GlitchVape::Context         ();
 use GlitchVape::Defrag          ();
+use GlitchVape::Fonts           ();
 use GlitchVape::Effect::Texture ();
 use GlitchVape::Pipeline        ();
 use GlitchVape::Registry        ();
@@ -63,8 +65,11 @@ sub render
         seed   => 11,
     );
 
-    GlitchVape::Pipeline->new( effects => { defrag => { %given } } )
-        ->run( $ctx );
+    # Bare, unless the caller says otherwise: a window round the map moves
+    # every cell of it, and all but one of the blocks below is reading pixels
+    # off the grid at a known offset.
+    GlitchVape::Pipeline->new(
+        effects => { defrag => { window => 0, %given } } )->run( $ctx );
 
     return $ctx->image;
 }
@@ -142,6 +147,31 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
 }
 
 # ---------------------------------------------------------------------------
+# A cell is a rectangle
+
+# The first thing the eye picks up about the real window, and the easiest
+# thing to get wrong: 'a grid of small blocks' sounds square and this one is
+# not. Eight across and ten down, and the proportion holds at every pitch
+# because the height is worked out rather than set.
+{
+    is_deeply [ GlitchVape::Defrag::cell( 8 ) ], [ 8, 10 ],
+        'the cell is the size it was drawn at: eight across, ten down';
+
+    for my $block ( 4, 8, 12, 16, 24, 48 )
+    {
+        my ( $w, $h ) = GlitchVape::Defrag::cell( $block );
+
+        is $w, $block, "a pitch of $block is $block across";
+
+        cmp_ok $h, '>', $w, "and taller than it is wide";
+
+        cmp_ok abs( $h / $w - 10 / 8 ), '<', 0.13,
+            'in about the proportion the real one was'
+            or diag "got ${w}x$h";
+    }
+}
+
+# ---------------------------------------------------------------------------
 # A block is an outline, a chequer and a gap
 
 # The three things measured off the screenshot. Asked at the pitch it was
@@ -161,17 +191,20 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
         edge  => $map->{ edge },
     );
 
-    is length $stamp, 8 * 8 * 3, 'a stamp is exactly one cell of pixels';
+    is length $stamp, 8 * 10 * 3, 'a stamp is exactly one cell of pixels';
 
-    my @px   = map { [ unpack 'C3', substr $stamp, $_ * 3, 3 ] } 0 .. 63;
+    my @px   = map { [ unpack 'C3', substr $stamp, $_ * 3, 3 ] } 0 .. 79;
     my $cell = sub { return $px[ $_[ 1 ] * 8 + $_[ 0 ] ] };
 
     is_deeply $cell->( 7, 0 ), $map->{ paper },
         'the last column is paper, which is the gap to the next block';
-    is_deeply $cell->( 0, 7 ), $map->{ paper }, 'and so is the last row';
+    is_deeply $cell->( 0, 9 ), $map->{ paper }, 'and so is the last row';
+
+    is_deeply $cell->( 0, 8 ), $map->{ edge },
+        'the row above that one is the block, which is nine deep and not seven';
 
     is_deeply $cell->( 0, 0 ), $map->{ edge }, 'the block has an outline';
-    is_deeply $cell->( 6, 6 ), $map->{ edge }, 'on all four sides';
+    is_deeply $cell->( 6, 8 ), $map->{ edge }, 'on all four sides';
 
     # The interior is the two inks in a checkerboard, which is what a
     # sixteen-colour display did to make a colour it did not have.
@@ -205,11 +238,12 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
         edge  => $map->{ edge },
     );
 
-    my @px   = map { [ unpack 'C3', substr $big, $_ * 3, 3 ] } 0 .. 16 * 16 - 1;
+    my @px   = map { [ unpack 'C3', substr $big, $_ * 3, 3 ] } 0 .. 16 * 20 - 1;
     my $cell = sub { return $px[ $_[ 1 ] * 16 + $_[ 0 ] ] };
 
-    is_deeply $cell->( 14, 0 ), $map->{ paper }, 'the gap is two pixels wide';
-    is_deeply $cell->( 15, 0 ), $map->{ paper }, 'not one';
+    is_deeply $cell->( 14, 0 ),  $map->{ paper }, 'the gap is two pixels wide';
+    is_deeply $cell->( 15, 0 ),  $map->{ paper }, 'not one';
+    is_deeply $cell->( 0,  18 ), $map->{ paper }, 'and two deep at the bottom';
 
     is_deeply $cell->( 1, 1 ), $map->{ edge }, 'and the outline two deep';
 
@@ -234,13 +268,15 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
     # Counted a cell at a time, at the corner of each one, which is the
     # outline on a block and paper on free space.
     my $empty = sub {
-        my ( $img, $cell ) = @_;
+        my ( $img, $block ) = @_;
 
         my ( $px, $w, $h ) = pixels( $img );
-        my ( $cols, $rows ) = ( int( $w / $cell ), int( $h / $cell ) );
+        my ( $cw, $ch ) = GlitchVape::Defrag::cell( $block );
 
-        my $ox = int( ( $w - $cols * $cell ) / 2 );
-        my $oy = int( ( $h - $rows * $cell ) / 2 );
+        my ( $cols, $rows ) = ( int( $w / $cw ), int( $h / $ch ) );
+
+        my $ox = int( ( $w - $cols * $cw ) / 2 );
+        my $oy = int( ( $h - $rows * $ch ) / 2 );
 
         my $free = 0;
         for my $y ( 0 .. $rows - 1 )
@@ -248,7 +284,7 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
             for my $x ( 0 .. $cols - 1 )
             {
                 $free++
-                    if same( at( $px, $w, $ox + $x * $cell, $oy + $y * $cell ),
+                    if same( at( $px, $w, $ox + $x * $cw, $oy + $y * $ch ),
                     $paper );
             }
         }
@@ -299,7 +335,8 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
             )
         );
 
-        my ( $cols, $rows ) = ( 40, 30 );
+        # 320 by 240 at a cell of 8 by 10, which divides exactly both ways.
+        my ( $cols, $rows ) = ( 40, 24 );
 
         my @free;
         for my $y ( 0 .. $rows - 1 )
@@ -307,7 +344,7 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
             for my $x ( 0 .. $cols - 1 )
             {
                 $free[ $y ][ $x ] =
-                    same( at( $px, $w, $x * 8, $y * 8 ), $paper ) ? 1 : 0;
+                    same( at( $px, $w, $x * 8, $y * 10 ), $paper ) ? 1 : 0;
             }
         }
 
@@ -379,6 +416,53 @@ sub same { return "@{ $_[ 0 ] }" eq "@{ $_[ 1 ] }" }
 
     is_deeply $after, $before,
         'a picture with no room for a grid comes back untouched';
+}
+
+# ---------------------------------------------------------------------------
+# The window comes with the map
+
+# A cluster map without the window round it is a mosaic, so the window is part
+# of the effect rather than something to remember to add afterwards -- and it
+# is GlitchVape::Chicago::wrap, the same call 'maximised' makes, because a
+# second window-drawing implementation would be a second place for a bevel to
+# go wrong.
+{
+    my $src = source( 320, 240 );
+
+    my $bare = render( $src, window => 0 );
+    my ( $bw, $bh ) = $bare->Get( 'width', 'height' );
+
+    is $bw . 'x' . $bh, '320x240',
+        'without the window the map is the size of the picture';
+
+    my $framed = render( $src, window => 1 );
+    my ( $fw, $fh ) = $framed->Get( 'width', 'height' );
+
+    cmp_ok $fw, '>', $bw, 'with it the picture grows by the frame';
+    cmp_ok $fh, '>', $fw - $bw + $bh,
+        'and by more down than across, which is the caption bar';
+
+    # Whatever 'maximised' would have made of the same map, to the pixel. The
+    # claim is not that the two look alike but that there is one of them.
+    my $again = GlitchVape::Chicago::wrap(
+        image      => $bare,
+        theme      => 'default',
+        caption    => 'Defragmenting Drive C',
+        font       => GlitchVape::Fonts::resolve( 'ui' ),
+        icon       => 'notepad',
+        menu       => undef,
+        scrollbars => 0,
+    );
+
+    is_deeply [ ( pixels( $framed ) )[ 0 ] ], [ ( pixels( $again ) )[ 0 ] ],
+        'and the window is the one Chicago draws, not a copy of it';
+
+    # The caption is settable, since what the drive is called is not a fact
+    # about defragmenting; the rest of the chrome is not, because it is.
+    my $named = render( $src, window => 1, title => 'Checking Drive D' );
+
+    ok !eq_array( ( pixels( $named ) )[ 0 ], ( pixels( $framed ) )[ 0 ] ),
+        'the caption is settable';
 }
 
 done_testing;

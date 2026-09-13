@@ -128,7 +128,7 @@ DOC
             default => 0,
             type    => 'num',
             min     => -0.5,
-            max     =>  2,
+            max     => 2,
             doc     => 'Extra space between lines as a fraction of the type '
                 . 'size; 0 is what the face itself asks for',
         },
@@ -177,7 +177,7 @@ DOC
             default => 4,
             type    => 'num',
             min     => -100,
-            max     =>  100,
+            max     => 100,
             doc     => 'Shadow displacement in pixels',
         },
         opacity => {
@@ -191,21 +191,21 @@ DOC
             default => 0.04,
             type    => 'num',
             min     => -1,
-            max     =>  1,
+            max     => 1,
             doc     => 'Horizontal inset as a fraction of width',
         },
         y => {
             default => 0.04,
             type    => 'num',
             min     => -1,
-            max     =>  1,
+            max     => 1,
             doc     => 'Vertical inset as a fraction of height',
         },
         rotate => {
             default => 0,
             type    => 'num',
             min     => -180,
-            max     =>  180,
+            max     => 180,
             doc     => 'Rotation in degrees',
         },
         spacing => {
@@ -286,8 +286,7 @@ sub _text
 # stop or a closing bracket pushed onto the next line reads as belonging to
 # nothing. The set is the common half of kinsoku shori; the long vowel mark is
 # in it because a line starting with one is a syllable cut in half.
-my $NO_LINE_START =
-    qr/[、。，．・？！：；）］｝」』〕】ー〜…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ]/;
+my $NO_LINE_START = qr/[、。，．・？！：；）］｝」』〕】ー〜…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ]/;
 
 # One character wide, and where a line may be broken after it. A script that
 # writes without spaces gets a break opportunity between every pair of
@@ -326,8 +325,7 @@ sub _lay_out
     my @lines;
     for my $para ( split /\n/, $str, -1 )
     {
-        push @lines,
-            $limit
+        push @lines, $limit
             ? _wrapped( $ctx, $para, $p, $font, $size, $limit )
             : $para;
     }
@@ -881,7 +879,7 @@ DOC
             default   => 0,
             type      => 'num',
             min       => -64,
-            max       =>  64,
+            max       => 64,
             doc       => 'Grid lines travelled per loop; negative recedes',
         },
         sun => {
@@ -1425,7 +1423,7 @@ DOC
             default => -30,
             type    => 'num',
             min     => -180,
-            max     =>  180,
+            max     => 180,
             doc     => 'Rotation of the tiled text',
         },
         spacing => {
@@ -1440,7 +1438,7 @@ DOC
             default   => 0,
             type      => 'num',
             min       => -32,
-            max       =>  32,
+            max       => 32,
             doc       => 'Tiles the pattern slides per loop; negative reverses',
         },
         direction => {
@@ -1567,13 +1565,13 @@ sub _watermark
 # decoded every time it is read, and a preset is read far more often than it
 # is written.
 my %COMPASS = (
-    north     => [  0, -1 ],
-    northeast => [  1, -1 ],
-    east      => [  1,  0 ],
-    southeast => [  1,  1 ],
-    south     => [  0,  1 ],
-    southwest => [ -1,  1 ],
-    west      => [ -1,  0 ],
+    north     => [ 0,  -1 ],
+    northeast => [ 1,  -1 ],
+    east      => [ 1,  0 ],
+    southeast => [ 1,  1 ],
+    south     => [ 0,  1 ],
+    southwest => [ -1, 1 ],
+    west      => [ -1, 0 ],
     northwest => [ -1, -1 ],
 );
 
@@ -1727,8 +1725,8 @@ DOC
             default => 0,
             type    => 'num',
             min     => -1,
-            max     =>  1,
-            order   =>  4,
+            max     => 1,
+            order   => 4,
             doc     => 'Horizontal inset from that anchor, as a fraction '
                 . 'of the width',
         },
@@ -1736,8 +1734,8 @@ DOC
             default => 0,
             type    => 'num',
             min     => -1,
-            max     =>  1,
-            order   =>  5,
+            max     => 1,
+            order   => 5,
             doc     => 'Vertical inset, as a fraction of the height',
         },
         zoom => {
@@ -1965,14 +1963,7 @@ sub _chicago_dance
 # window. The picture is treated as a screen 480 pixels tall -- the height of
 # the screenshot every measurement in GlitchVape::Chicago came off -- and the
 # zoom is however many times bigger than that it is.
-sub _chicago_zoom
-{
-    my ( $height ) = @_;
-
-    my $zoom = _round( $height / 480 );
-
-    return $zoom < 1 ? 1 : $zoom;
-}
+sub _chicago_zoom { return GlitchVape::Chicago::zoom_for( $_[ 0 ] ) }
 
 # Insets from the anchor rather than plain offsets, which is what the rest of
 # the overlay effects mean by x and y: at NorthEast a positive x moves the
@@ -2351,76 +2342,28 @@ DOC
 sub _maximised
 {
     my ( $ctx, $p ) = @_;
-    require Image::Magick;
 
     my ( $iw, $ih ) = $ctx->dims;
     return unless $iw && $ih;
 
-    my $zoom = int( $p->{ zoom } || 0 ) || _chicago_zoom( $ih );
-
-    my $menu = $p->{ menu };
-
-    # The window is drawn a pixel at a time and then enlarged whole, so every
-    # measurement in it is a multiple of the zoom -- the client area included.
-    # Rounded up rather than down, so the picture is never cropped to make it
-    # fit its own frame.
-    my $cw = int( ( $iw + $zoom - 1 ) / $zoom );
-    my $ch = int( ( $ih + $zoom - 1 ) / $zoom );
-
-    my $win = GlitchVape::Chicago::render(
-        client     => [ $cw, $ch ],
-        maximised  => 1,
-        theme      => $p->{ theme },
-        icon       => $p->{ icon },
-        caption    => $p->{ title },
-        menu       => $menu,
-        font       => GlitchVape::Fonts::resolve( $p->{ font } ),
-        type_size  => $p->{ type_size },
-        scrollbars => $p->{ scrollbars },
-        thumb      => $p->{ thumb },
-        scroll     => $p->{ scroll },
+    # The whole of this effect is GlitchVape::Chicago::wrap, which is also
+    # what defrag reaches for once it has drawn its cluster map. The window
+    # arithmetic lives there so that the two cannot come to disagree about it.
+    $ctx->image(
+        GlitchVape::Chicago::wrap(
+            image      => $ctx->image,
+            zoom       => $p->{ zoom },
+            theme      => $p->{ theme },
+            icon       => $p->{ icon },
+            caption    => $p->{ title },
+            menu       => $p->{ menu },
+            font       => GlitchVape::Fonts::resolve( $p->{ font } ),
+            type_size  => $p->{ type_size },
+            scrollbars => $p->{ scrollbars },
+            thumb      => $p->{ thumb },
+            scroll     => $p->{ scroll },
+        )
     );
-
-    my ( $ww, $wh ) = ( $win->Get( 'width' ), $win->Get( 'height' ) );
-
-    if ( $zoom > 1 )
-    {
-        # Sample, not Resize: see the note in _chicago.
-        GlitchVape::Magick::check(
-            $win->Sample(
-                geometry => sprintf '%dx%d!',
-                $ww * $zoom, $wh * $zoom
-            ),
-            'maximised: could not enlarge the window'
-        );
-    }
-
-    my ( $hx, $hy ) = GlitchVape::Chicago::client_origin( menu => $menu );
-
-    # The sliver: the client area rounded up to whole window pixels is at most
-    # zoom-1 bigger than the picture, and the picture sits in the middle of it.
-    my $out = Image::Magick->new(
-        size => sprintf '%dx%d',
-        $ww * $zoom, $wh * $zoom
-    );
-    $out->Read( 'xc:' . GlitchVape::Chicago::ink( $p->{ theme }, 'F' ) );
-
-    GlitchVape::Magick::check(
-        $out->Composite(
-            image   => $ctx->image->[ 0 ],
-            compose => 'Over',
-            x       => $hx * $zoom + int( ( $cw * $zoom - $iw ) / 2 ),
-            y       => $hy * $zoom + int( ( $ch * $zoom - $ih ) / 2 ),
-        ),
-        'maximised: could not place the picture in the window'
-    );
-
-    GlitchVape::Magick::check(
-        $out->Composite( image => $win->[ 0 ], compose => 'Over' ),
-        'maximised: could not draw the window around it'
-    );
-
-    $ctx->image( $out );
 
     return;
 }

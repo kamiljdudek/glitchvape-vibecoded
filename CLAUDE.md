@@ -219,6 +219,13 @@ a font nobody here has seen gets the same answer.
 `GlitchVape::Defrag` is its palette and the anatomy of one block. Three things
 in it are the difference between a drawing of that window and a mosaic:
 
+- **A cell is a rectangle.** Eight pixels across and ten down, which leaves a
+  block of seven by nine. It is the first thing the eye picks up about the real
+  window and the easiest thing to get wrong, because "a grid of small blocks"
+  sounds square — this was square for one draft and looked like a mosaic.
+  `Defrag::cell` works the height out from the width, so the proportion is not
+  anyone's to set.
+
 - **A block is an outline, a chequer and a gap.** The interior is two colours
   in a checkerboard, not one flat fill, because a 1995 display had sixteen
   colours and made every colour between them by dithering two of them at fifty
@@ -245,9 +252,21 @@ disturbs each cell's brightness *before* the ranking rather than flipping cells
 after it, so what frays is the boundary — a cell near the edge of being empty
 is the one a nudge moves, and one in the middle of the data stays put.
 
-The window around it is `maximised`, unchanged: `presets/defrag.yml` is the two
-of them wired together with the caption and no menu bar. There is no second
-window-drawing implementation and there should not be one.
+**The window comes with the effect**, because a cluster map without one is a
+mosaic rather than a defragmenter — it is not furniture the picture happens to
+be sitting in, it is the other half of the thing being drawn. That is why
+`defrag` draws it at `format` rather than leaving it to `maximised` at
+`framing`, and the cost is real and worth stating: the chrome is in place
+before the rest of the chain runs, so scanlines and grain land on it too.
+Which is what is wanted here, since what is being imitated is a photograph of
+a screen rather than a screenshot. `window: 0` gives the bare map for anyone
+who would rather frame it themselves.
+
+It is drawn by `GlitchVape::Chicago::wrap`, which is where `maximised`'s body
+moved to when `defrag` needed the same thing: the arithmetic that rounds a
+client area up to whole window pixels, centres the picture in the sliver that
+leaves, enlarges the chrome by replication and composites the two is one
+behaviour, and a second copy of it is a second place for a rounding to drift.
 
 aalib and libcaca were considered and are not used. What they do is map
 luminance to glyphs, or to coloured characters from a terminal's palette; what

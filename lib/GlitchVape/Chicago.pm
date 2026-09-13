@@ -974,6 +974,103 @@ sub _image
 # over four-pixel bevels is a photograph of a window with a caption pasted on;
 # the whole illusion is that this is a small picture somebody has zoomed into.
 
+=head2 zoom_for( $height )
+
+How many image pixels one window pixel should become, for a picture that tall,
+on the reading that the picture is a screen 480 pixels high. Never below one.
+
+=cut
+
+sub zoom_for
+{
+    my ( $height ) = @_;
+
+    my $zoom = int( $height / 480 + 0.5 );
+    return $zoom < 1 ? 1 : $zoom;
+}
+
+=head2 wrap( %arg )
+
+    image  => the Image::Magick to put inside
+    zoom   => image pixels per window pixel, or 0 to work it out
+    ... and everything render() takes bar width, height and client
+
+A new image: that one with a maximised window built around it. The inverse of
+C<render>'s hole, and the thing two effects want -- C<maximised>, which is
+this and nothing else, and C<defrag>, which draws a cluster map and then puts
+the defragmenter's own window round it.
+
+Here rather than in either of them because it is one behaviour: the arithmetic
+that rounds a client area up to whole window pixels, centres the picture in
+the sliver that leaves, enlarges the chrome by replication and composites the
+two is the same arithmetic whichever effect is asking, and a second copy of it
+is a second place for a rounding to drift.
+
+=cut
+
+sub wrap
+{
+    my ( %arg ) = @_;
+    require Image::Magick;
+
+    my $img = $arg{ image };
+    my ( $iw, $ih ) = $img->Get( 'width', 'height' );
+
+    my $zoom = int( $arg{ zoom } || 0 ) || zoom_for( $ih );
+    my $menu = $arg{ menu };
+
+    # The window is drawn a pixel at a time and then enlarged whole, so every
+    # measurement in it is a multiple of the zoom -- the client area included.
+    # Rounded up rather than down, so the picture is never cropped to make it
+    # fit its own frame.
+    my $cw = int( ( $iw + $zoom - 1 ) / $zoom );
+    my $ch = int( ( $ih + $zoom - 1 ) / $zoom );
+
+    my $win = render( %arg, client => [ $cw, $ch ], maximised => 1 );
+
+    my ( $ww, $wh ) = ( $win->Get( 'width' ), $win->Get( 'height' ) );
+
+    if ( $zoom > 1 )
+    {
+        # Sample, not Resize: see L</WHY IT IS DRAWN AND NOT SCALED>.
+        GlitchVape::Magick::check(
+            $win->Sample(
+                geometry => sprintf '%dx%d!',
+                $ww * $zoom,
+                $wh * $zoom
+            ),
+            'chicago: could not enlarge the window'
+        );
+    }
+
+    my ( $hx, $hy ) = client_origin( menu => $menu );
+
+    # The sliver: the client area rounded up to whole window pixels is at most
+    # zoom-1 bigger than the picture, and the picture sits in the middle of it.
+    my $out = Image::Magick->new(
+        size => sprintf '%dx%d',
+        $ww * $zoom, $wh * $zoom
+    );
+    $out->Read( 'xc:' . ink( $arg{ theme }, 'F' ) );
+
+    GlitchVape::Magick::check(
+        $out->Composite(
+            image   => $img->[ 0 ],
+            compose => 'Over',
+            x       => $hx * $zoom + int( ( $cw * $zoom - $iw ) / 2 ),
+            y       => $hy * $zoom + int( ( $ch * $zoom - $ih ) / 2 ),
+        ),
+        'chicago: could not place the picture in the window'
+    );
+
+    GlitchVape::Magick::check(
+        $out->Composite( image => $win->[ 0 ], compose => 'Over' ),
+        'chicago: could not draw the window around it'
+    );
+
+    return $out;
+}
+
 =head2 type_size( $font, $wanted )
 
 The pointsize to set the window's lettering at: C<$wanted>, or the twelve the

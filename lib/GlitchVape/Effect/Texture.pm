@@ -8,6 +8,8 @@ use GlitchVape::Pixels   ();
 use GlitchVape::Palette  ();
 use GlitchVape::Defrag   ();
 use GlitchVape::Magick   ();
+use GlitchVape::Chicago  ();
+use GlitchVape::Fonts    ();
 
 our $VERSION = '0.01';
 
@@ -219,10 +221,18 @@ there is an outline and a chequer inside it; below seven the chequer goes and
 below five the outline does too, because at that size an outline is most of
 the block.
 
+C<window> puts the defragmenter's own window round the map, built around it
+the way a maximised one is built around whatever it is showing -- the same
+window C<maximised> draws, because there is one implementation of it. Turned
+off, what comes out is the bare cluster map, which is what to use to frame it
+with C<maximised> or C<chicago> yourself.
+
 It runs at C<format>, first in the chain, for the reason C<downsample> does:
 everything after it then happens to the grid rather than to the photograph,
 which is what makes scanlines over this look like scanlines over a screen
-showing it.
+showing it. The window goes on at the same point and for the same reason: it
+is part of what is being photographed rather than a mount around the
+photograph, so the grain belongs on it too.
 DOC
     params => {
         block => {
@@ -269,6 +279,34 @@ DOC
                 . 'rather than as a disk; turning it up strands clusters out '
                 . 'on their own the way a fragmented one does',
         },
+        window => {
+            label   => 'Window',
+            order   => 60,
+            default => 1,
+            type    => 'bool',
+            doc     => 'Put the defragmenter\'s own window round it, built '
+                . 'around the map the way a maximised one is built around '
+                . 'what it is showing',
+        },
+        title => {
+            label       => 'Caption',
+            order       => 70,
+            default     => 'Defragmenting Drive C',
+            type        => 'str',
+            placeholder => 'no caption text',
+            needs       => { window => 1 },
+            doc         => 'What the title bar says',
+        },
+        theme => {
+            label   => 'Window colours',
+            order   => 80,
+            default => 'default',
+            type    => 'enum',
+            values  => [ GlitchVape::Chicago::themes() ],
+            needs   => { window => 1 },
+            doc     => 'Which of the schemes from the Appearance tab the '
+                . 'window is painted in',
+        },
         seed => {
             label   => 'Layout seed',
             order   => 50,
@@ -294,9 +332,13 @@ sub _defrag
     my ( $w, $h ) = $ctx->dims;
     return unless $w && $h;
 
-    my $cell = $p->{ block };
-    my $cols = int( $w / $cell );
-    my $rows = int( $h / $cell );
+    # Across and down are different numbers: the grid is eight pixels wide
+    # and ten tall, which is what the real one was and the first thing the eye
+    # picks up about it.
+    my ( $cw, $ch ) = GlitchVape::Defrag::cell( $p->{ block } );
+
+    my $cols = int( $w / $cw );
+    my $rows = int( $h / $ch );
 
     # Nothing to draw a grid on. Two cells across is not a cluster map, and
     # what it would be instead is four coloured rectangles.
@@ -320,7 +362,7 @@ sub _defrag
     my @stamp = map {
         GlitchVape::Defrag::stamp(
             state => $_,
-            block => $cell,
+            block => $p->{ block },
             paper => $map->{ paper },
             edge  => $map->{ edge },
         )
@@ -329,8 +371,8 @@ sub _defrag
     # Centred, so the remainder of a picture that is not a whole number of
     # clusters across shows as paper on both sides rather than as a margin
     # down one.
-    my $ox = int( ( $w - $cols * $cell ) / 2 );
-    my $oy = int( ( $h - $rows * $cell ) / 2 );
+    my $ox = int( ( $w - $cols * $cw ) / 2 );
+    my $oy = int( ( $h - $rows * $ch ) / 2 );
 
     my $paper = pack 'C3', @{ $map->{ paper } };
 
@@ -351,13 +393,55 @@ sub _defrag
                     next unless $used->[ $n ];
 
                     $px->set_rect(
-                        $ox + $x * $cell,
-                        $oy + $y * $cell,
-                        $cell, $cell, $stamp[ $used->[ $n ] ]
+                        $ox + $x * $cw,
+                        $oy + $y * $ch,
+                        $cw, $ch, $stamp[ $used->[ $n ] ]
                     );
                 }
             }
         }
+    );
+
+    _put_in_a_window( $ctx, $p ) if $p->{ window };
+
+    return;
+}
+
+# The defragmenter's own window, built around the map the way a maximised one
+# is built around whatever it is showing.
+#
+# Drawn from here rather than left to the 'maximised' effect, which would be
+# the tidier place for it, because this window is not furniture the picture
+# happens to be sitting in -- it is the other half of the thing being drawn,
+# and a cluster map without it is a mosaic.
+#
+# What that costs is worth saying rather than hiding: the window is in place
+# before the rest of the chain runs, so scanlines and grain land on the chrome
+# as well as on the grid. Which is what is wanted here, since what is being
+# imitated is a photograph of a screen rather than a screenshot.
+#
+# It is GlitchVape::Chicago::wrap, the same call 'maximised' makes. A second
+# window-drawing implementation would be a second place for a bevel to go
+# wrong.
+sub _put_in_a_window
+{
+    my ( $ctx, $p ) = @_;
+
+    $ctx->image(
+        GlitchVape::Chicago::wrap(
+            image   => $ctx->image,
+            theme   => $p->{ theme },
+            caption => $p->{ title },
+            font    => GlitchVape::Fonts::resolve( 'ui' ),
+
+            # Not settings. The defragmenter had no menu bar and no scroll
+            # bars -- the map was however big the window was -- and the icon
+            # is the one the chrome was scavenged from. Anyone who wants a
+            # window they can dress differently already has 'maximised'.
+            icon       => 'notepad',
+            menu       => undef,
+            scrollbars => 0,
+        )
     );
 
     return;
