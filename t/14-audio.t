@@ -319,6 +319,119 @@ unless ( $made == 0 && -s $source )
         'and the estimate the wizard showed matches what was rendered';
 }
 
+# The same slowdown on a source that is not at the working rate. asetrate
+# relabels rather than converts, so a 48kHz file relabelled as 0.8 of 44.1
+# played at 0.735 -- longer than promised, with the fade-out landing where the
+# promise ended and silence for the rest.
+{
+    my $wide = File::Spec->catfile( "$dir", 'wide.wav' );
+    my $out  = File::Spec->catfile( "$dir", 'wide-slow.wav' );
+
+    system( GlitchVape::Tools::find( 'ffmpeg' ),
+        '-y', '-loglevel',              'error', '-f',        'lavfi',
+        '-i', 'sine=f=440:r=48000:d=5', '-c:a',  'pcm_s16le', $wide );
+
+    my $spec = {
+        path    => $wide,
+        start   => 0,
+        end     => 4,
+        filters => { slowed => 0.8 },
+    };
+
+    GlitchVape::Audio::render( spec => $spec, output => $out );
+
+    cmp_ok abs( GlitchVape::Audio::probe( $out )->{ duration } - 5 ), '<',
+        0.05, 'a 48kHz source slowed to 0.8 is slowed to 0.8';
+
+    my $pcm = _samples( $out );
+    my $end = int( 44_100 * 4.8 );
+    cmp_ok _peak( @$pcm[ $end .. $end + 441 ] ), '>', 1000,
+        'and is still playing a fifth of a second before the end';
+}
+
+# An MP3 frame borrows bits from the frames before it, so a decoder started
+# cold at the crop point gave about 35ms of silence and smear before the
+# first real sample. The crop has to be the file's own samples from the very
+# first one, which is checked against a decode of the whole file with the
+# fades taken out of the way.
+SKIP:
+{
+    my $mp3 = File::Spec->catfile( "$dir", 'noise.mp3' );
+
+    my $rc = system(
+        GlitchVape::Tools::find( 'ffmpeg' ),
+        '-y',  '-loglevel', 'error', '-f', 'lavfi',
+        '-i',  'anoisesrc=r=44100:d=8:seed=7:a=0.3,lowpass=f=3000',
+        '-ac', 2, '-c:a', 'libmp3lame', '-b:a', '192k', $mp3
+    );
+    skip 'this ffmpeg cannot encode MP3', 2 unless $rc == 0 && -s $mp3;
+
+    my $whole = File::Spec->catfile( "$dir", 'noise-whole.wav' );
+    system( GlitchVape::Tools::find( 'ffmpeg' ),
+        '-y', '-loglevel', 'error', '-i', $mp3, '-c:a', 'pcm_s16le', $whole );
+
+    my $out = File::Spec->catfile( "$dir", 'noise-crop.wav' );
+    {
+        no warnings 'redefine';    ## no critic (ProhibitNoWarnings)
+
+        # The fades are the one thing the crop is meant to differ by.
+        local *GlitchVape::Audio::_fades = sub { return () };    ## no critic (ProtectPrivateVars)
+
+        GlitchVape::Audio::render(
+            spec   => { path => $mp3, start => 3.2, end => 4.2 },
+            output => $out,
+        );
+    }
+
+    my $want = _samples( $whole );
+    my $got  = _samples( $out );
+    my $base = int( 3.2 * 44_100 );
+
+    my $wrong = grep { abs( $got->[ $_ ] - $want->[ $base + $_ ] ) > 2 }
+        0 .. int( 44_100 * 0.1 );
+
+    is $wrong, 0, 'an MP3 crop is the file\'s own samples from the first one';
+    cmp_ok abs( scalar @$got - 44_100 ), '<=', 1, 'and is as long as asked';
+}
+
+# ffmpeg's vibrato reads its 5ms delay line before writing it, and never
+# clears it, so its first output was whatever the heap held -- which the
+# reverb then repeated four times. glibc's malloc perturbation fills every
+# allocation with a known byte, which turns "whatever the heap held" from
+# usually zero into always not; elsewhere the setting is ignored and this
+# passes without proving anything.
+{
+    my $quiet = File::Spec->catfile( "$dir", 'quiet.wav' );
+    my $out   = File::Spec->catfile( "$dir", 'quiet-wobble.wav' );
+
+    system(
+        GlitchVape::Tools::find( 'ffmpeg' ), '-y',
+        '-loglevel',                         'error',
+        '-f',                                'lavfi',
+        '-i',                                'anullsrc=r=44100:cl=stereo',
+        '-t',                                2,
+        '-c:a',                              'pcm_s16le',
+        $quiet
+    );
+
+    {
+        local $ENV{ GLIBC_TUNABLES } = 'glibc.malloc.perturb=165';
+
+        GlitchVape::Audio::render(
+            spec => {
+                path    => $quiet,
+                start   => 0.5,
+                end     => 1.5,
+                filters => { wobble => 0.25, reverb => 0.4 },
+            },
+            output => $out,
+        );
+    }
+
+    is _peak( @{ _samples( $out ) } ), 0,
+        'silence through wow and flutter and a reverb comes out silent';
+}
+
 {
     local $@;
     ok !eval {
@@ -557,3 +670,29 @@ unless ( $made == 0 && -s $source )
 }
 
 done_testing;
+
+# The first channel of a 16-bit WAV, as a list of integers. ffmpeg writes a
+# LIST chunk ahead of the data, so the data is found by name rather than
+# assumed to start at byte 44.
+sub _samples
+{
+    my ( $path ) = @_;
+
+    open my $fh, '<:raw', $path or die "$path: $!";
+    my $bytes = do { local $/; <$fh> };
+    close $fh;
+
+    my $at       = index $bytes, 'data';
+    my $channels = unpack 'v',   substr $bytes, 22, 2;
+    my @all      = unpack 's<*', substr $bytes, $at + 8;
+
+    return [ @all[ grep { $_ % $channels == 0 } 0 .. $#all ] ];
+}
+
+sub _peak
+{
+    my $peak = 0;
+    for ( @_ ) { $peak = abs if abs > $peak }
+
+    return $peak;
+}

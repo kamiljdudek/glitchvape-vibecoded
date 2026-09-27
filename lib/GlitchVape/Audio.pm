@@ -86,8 +86,25 @@ number and becomes two detuned sine waves.
 
 # Everything is rendered at CD rate. The source may be anything; resampling
 # once here means the filter chain, the muxer and the preview player all agree
-# on a rate rather than each guessing.
+# on a rate rather than each guessing. L</filter_chain> does that resample at
+# its head, and the filters after it are entitled to assume this rate.
 use constant RATE => 44_100;
+
+# How far before the crop the decoder is started. A compressed frame is not
+# self-contained -- an MP3 frame borrows from the ones before it through the
+# bit reservoir, and AAC and Vorbis overlap their windows -- so a decoder
+# started cold at the crop point spends its first few tens of milliseconds on
+# silence and smear. Measured on a 192k MP3 it was 35ms; half a second covers
+# every codec with room to spare and costs nothing that can be heard.
+use constant PREROLL => 0.5;
+
+# Longer than vibrato's delay line, which is 5ms whatever the rate. ffmpeg
+# allocates that line without clearing it and reads it before it has written
+# it, so its first 5ms of output are whatever the heap held -- up to 1e127
+# under glibc's malloc perturbation, which the reverb then repeats four times.
+# Feeding it this much silence first and cutting it back off means the line is
+# full of zeros by the time anything that is kept comes out.
+use constant VIBRATO_PRIME => 0.01;
 
 # Long enough that a crop boundary in the middle of a waveform does not click,
 # short enough not to be heard as a fade. The out-fade is longer because a
@@ -137,6 +154,11 @@ my %FILTER = (
             # still cost a resample pass.
             return () if $value >= 0.999;
 
+            # asetrate relabels the samples rather than converting them, so it
+            # is only 0.8 of the speed if RATE is what they were at -- which
+            # the aresample at the head of filter_chain is what guarantees. A
+            # 48kHz source relabelled as 0.8 of 44.1 plays at 0.735.
+
             return ( sprintf( 'asetrate=%d*%.4f', RATE, $value ),
                 sprintf( 'aresample=%d', RATE ) );
         },
@@ -161,8 +183,17 @@ my %FILTER = (
             return () if $value <= 0.01;
 
             # vibrato's depth is 0..1 and is already extreme at 0.3, so the
-            # slider covers the part of the range that is usable.
-            return ( sprintf 'vibrato=f=0.8:d=%.3f', $value * 0.3 );
+            # slider covers the part of the range that is usable. The silence
+            # either side of it is VIBRATO_PRIME, and is trimmed by sample
+            # rather than by time so that the cut is exactly what was added.
+            my $prime = int( RATE * VIBRATO_PRIME );
+
+            return (
+                sprintf( 'adelay=%dS:all=1',      $prime ),
+                sprintf( 'vibrato=f=0.8:d=%.3f',  $value * 0.3 ),
+                sprintf( 'atrim=start_sample=%d', $prime ),
+                'asetpts=PTS-STARTPTS',
+            );
         },
     },
 
@@ -316,7 +347,9 @@ sub resolve_filters
 =head2 filter_chain( $filters )
 
 The C<-af> argument for a resolved filter hash, or the empty string when
-nothing is switched on.
+nothing is switched on. It begins by resampling to L</RATE>, because
+C<slowed> changes only what the samples are said to be at, and so means what it says
+only when it knows what they were at before.
 
 =cut
 
@@ -336,7 +369,9 @@ sub filter_chain
         push @parts, $FILTER{ $name }{ build }->( $filters->{ $name } );
     }
 
-    return join ',', @parts;
+    return q{} unless @parts;
+
+    return join ',', sprintf( 'aresample=%d', RATE ), @parts;
 }
 
 =head2 speed( $filters )
@@ -867,19 +902,27 @@ sub _render_file
     my $filters = resolve_filters( $spec->{ filters } );
     my $chain   = filter_chain( $filters );
 
+    # -ss before -i seeks by keyframe before decoding, which is the
+    # difference between instant and decoding the whole file to reach minute
+    # four of it. It lands PREROLL early and the atrim cuts the rest of the
+    # way, so the decoder's cold start is thrown away rather than being the
+    # first thing heard. The cut is in the graph rather than an -ss after -i
+    # because an output -t would then have to be the length of the *result*,
+    # which the slowing and the reverb tail both change.
+    my $start = $spec->{ start } || 0;
+    my $seek  = $start > PREROLL ? $start - PREROLL : 0;
+
     my @chain;
+    push @chain, sprintf( 'atrim=start=%.3f', $start - $seek ),
+        'asetpts=PTS-STARTPTS'
+        if $start > $seek;
     push @chain, $chain if length $chain;
     push @chain, _fades( $spec );
 
     my @argv = (
-        $ffmpeg, '-y', '-loglevel', 'error',
-
-        # -ss before -i seeks by keyframe before decoding, which is the
-        # difference between instant and decoding the whole file to reach
-        # minute four of it.
-        '-ss', sprintf( '%.3f', $spec->{ start } || 0 ),
-        '-t',  sprintf( '%.3f', $length ),
-        '-i',  $path,
+        $ffmpeg, '-y', '-loglevel', 'error', '-ss', sprintf( '%.3f', $seek ),
+        '-t',    sprintf( '%.3f', $length + $start - $seek ),
+        '-i',    $path,
     );
 
     push @argv, '-af', join( ',', @chain ) if @chain;
