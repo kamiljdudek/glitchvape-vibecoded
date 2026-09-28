@@ -33,6 +33,7 @@ use GlitchVape::Generator ();
 use GlitchVape::Fonts     ();
 use GlitchVape::Licenses  ();
 use GlitchVape::Palette   ();
+use GlitchVape::Plugins   ();
 use GlitchVape::Registry  ();
 use GlitchVape::Tools     ();
 use GlitchVape::IO        ();
@@ -129,6 +130,7 @@ GetOptions(
     'list-palettes'      => \&list_palettes,
     'list-audio-filters' => \&list_audio_filters,
     'list-generators'    => \&list_generators,
+    'list-plugins'       => \&list_plugins,
     'explain=s'          => \&explain_effect,
     'check-deps'         => \&check_deps,
     'check-fonts'        => \&check_fonts,
@@ -569,8 +571,8 @@ sub list_generators
     {
         my $declared = GlitchVape::Generator::get( $kind );
 
-        printf "\n%s  --  %s\n%s\n", $kind, $declared->{ label },
-            $declared->{ summary };
+        printf "\n%s  --  %s%s\n%s\n", $kind, $declared->{ label },
+            from_plugin( $declared->{ plugin } ), $declared->{ summary } // q{};
 
         my $params = $declared->{ params };
 
@@ -578,17 +580,7 @@ sub list_generators
         {
             my $field = $params->{ $name };
 
-            my $range = $field->{ type };
-            if ( $field->{ type } eq 'enum' )
-            {
-                $range = join '|', @{ $field->{ values } };
-            }
-            elsif ( defined $field->{ min } )
-            {
-                $range = "$field->{min}..$field->{max}";
-            }
-
-            printf "  %-18s %-22s default %s\n", $name, $range,
+            printf "  %-18s %-22s default %s\n", $name, range_of( $field ),
                 $field->{ default };
         }
     }
@@ -620,11 +612,43 @@ sub list_effects
         printf "\n%s  -- %s\n", uc $stage, $info->{ title };
         for my $name ( @{ $by->{ $stage } } )
         {
-            printf "  %-14s %s\n", $name, $all->{ $name }{ summary };
+            printf "  %-14s %s%s\n", $name, $all->{ $name }{ summary },
+                from_plugin( $all->{ $name }{ plugin } );
         }
     }
     print "\nUse --explain <effect> for parameters.\n";
     exit 0;
+}
+
+# "  (from Muffins)", for a listing line whose subject came from a plug-in,
+# and nothing for one of the program's own -- which is most of them, and
+# would otherwise be noise on every line.
+sub from_plugin
+{
+    my ( $module ) = @_;
+
+    return q{} unless defined $module;
+
+    ( my $short = $module ) =~ s/\AGlitchVape::Plugin:://;
+    return "  (from $short)";
+}
+
+# How a parameter's range is written in a listing. Both ends where there are
+# both -- and one where there is one, which a plug-in may declare and which
+# used to print as "0.." followed by a warning.
+sub range_of
+{
+    my ( $d ) = @_;
+
+    return join '|', @{ $d->{ values } } if $d->{ type } eq 'enum';
+
+    my ( $min, $max ) = @$d{ qw(min max) };
+
+    return "$min..$max" if defined $min && defined $max;
+    return ">= $min"    if defined $min;
+    return "<= $max"    if defined $max;
+
+    return $d->{ type };
 }
 
 sub explain_effect
@@ -635,6 +659,16 @@ sub explain_effect
         or die "glitchvape: no effect named '$name'. Try --list-effects.\n";
 
     printf "%s  (stage: %s)\n%s\n", $name, $spec->{ stage }, $spec->{ summary };
+
+    if ( defined( my $module = $spec->{ plugin } ) )
+    {
+        my ( $from ) =
+            grep { $_->{ module } eq $module } GlitchVape::Plugins::loaded();
+
+        my $version = $from ? $from->{ version } : undef;
+        printf "From plug-in %s%s\n", $module,
+            defined $version ? " $version" : q{};
+    }
 
     if ( length $spec->{ doc } )
     {
@@ -661,18 +695,64 @@ sub explain_effect
     {
         my $d = $params->{ $p };
 
-        my $range =
-              $d->{ type } eq 'enum' ? join( '|', @{ $d->{ values } } )
-            : defined $d->{ min }    ? "$d->{min}..$d->{max}"
-            :                          $d->{ type };
-
         printf "  %-14s %-22s default %-10s %s\n",
-            $p, $range, $d->{ default }, ( $d->{ doc } // '' );
+            $p, range_of( $d ), $d->{ default }, ( $d->{ doc } // '' );
     }
 
     printf "\nExample:\n  glitchvape --set %s.%s=<value> input.heic\n",
         $name, $order[ 0 ];
     exit 0;
+}
+
+sub list_plugins
+{
+    my @loaded  = GlitchVape::Plugins::loaded();
+    my @refused = GlitchVape::Plugins::refused();
+
+    my $choice = GlitchVape::Plugins::selection( $ENV{ GLITCHVAPE_PLUGINS } );
+
+    if ( $choice->{ none } )
+    {
+        print "Plug-ins are switched off: GLITCHVAPE_PLUGINS=none.\n";
+        exit 0;
+    }
+
+    unless ( @loaded || @refused )
+    {
+        # Nothing found is the one answer that needs the question explained:
+        # where a plug-in would have had to be for this to have found it.
+        my $drop = GlitchVape::Plugins::lib_dir() // '(no home directory)';
+
+        print "No plug-ins found. A plug-in is a module called\n"
+            . "GlitchVape::Plugin::<Name>, looked for under GlitchVape/Plugin/\n"
+            . "in every directory on \@INC, and in\n\n    $drop\n";
+        exit 0;
+    }
+
+    for my $plugin ( @loaded )
+    {
+        printf "%s %s\n  %s\n", $plugin->{ name },
+            $plugin->{ version } // '(no version)', $plugin->{ file };
+
+        my $adds = $plugin->{ adds };
+        for my $what ( sort keys %$adds )
+        {
+            printf "  %-20s %s\n", $what, join( ', ', @{ $adds->{ $what } } );
+        }
+
+        print "  (adds nothing)\n" unless %$adds;
+        print "\n";
+    }
+
+    for my $plugin ( @refused )
+    {
+        printf "%s -- not loaded\n  %s\n  %s\n\n", $plugin->{ name },
+            $plugin->{ file }, $plugin->{ reason };
+    }
+
+    # A refused plug-in is a problem somebody asked to be told about, so it is
+    # the exit status as well as the text: `--list-plugins || ...` works.
+    exit( @refused ? 1 : 0 );
 }
 
 sub list_presets
@@ -898,6 +978,7 @@ glitchvape - apply vaporwave and glitch-art transformations to an image
        --list-palettes     named palettes and duotone ramps
        --list-audio-filters  audio filters and their ranges
        --list-generators   generated track kinds and their parameters
+       --list-plugins      plug-ins found, what each adds, and any refused
        --check-deps        report on external tools and Perl modules
        --check-fonts       report which font roles resolve
        --licenses          print this program's licence and every bundled font's
@@ -919,6 +1000,13 @@ commitment:
 
 C<--enable> switches on an effect the preset did not mention, using its
 defaults; C<--disable> switches one off.
+
+C<--preset> takes a name, looked for in C<$GLITCHVAPE_PRESETS>, then
+F<~/.local/share/glitchvape/presets> -- where the window saves one, and so the
+place a preset of your own shadows a shipped one of the same name -- then
+F<./presets>, then F<glitchvape/presets> under each system data directory and
+the presets that shipped, and last those plug-ins brought. A name containing
+a slash is taken as a path. C<--list-presets> prints what was found.
 
 =head2 Seeds
 
@@ -1045,6 +1133,24 @@ C<--licenses> prints the program's licence followed by every licence file
 found beside a font, read from the files themselves. Anything you drop into
 the directories above is included on the same terms.
 
+=head2 Plug-ins
+
+Effects, generated tracks, palettes, font roles and presets can come from
+plug-ins as well as from the program. A plug-in is a Perl module called
+C<GlitchVape::Plugin::I<Name>>, installed anywhere Perl looks for modules or
+in F<~/.local/share/glitchvape/lib/perl5>; there is nothing to configure. What
+it adds is listed, explained and set exactly as the program's own are, with
+its name beside it in C<--list-effects>.
+
+A plug-in that fails to load, breaks a rule, or wants a name something else
+already has is refused on its own, with a warning naming it and the reason,
+and everything else carries on. C<--list-plugins> prints what was loaded,
+what each added, and why anything was refused, and exits 1 if anything was.
+
+C<$GLITCHVAPE_PLUGINS> chooses: C<none> for none, C<Muffins:Frosting> for only
+those, C<-Muffins> for all but that one. How to write one is in
+L<GlitchVape::Plugins>.
+
 =head1 EXAMPLES
 
 Look at what a preset would do, without rendering:
@@ -1072,6 +1178,6 @@ An anaglyph loop with a number being dialled over television static:
 
 =head1 SEE ALSO
 
-L<GlitchVape>, L<glitchvape-batch>
+L<GlitchVape>, L<glitchvape-batch>, L<GlitchVape::Plugins>
 
 =cut

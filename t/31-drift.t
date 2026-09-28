@@ -6,7 +6,6 @@ use warnings;
 use FindBin ();
 use lib "$FindBin::Bin/../lib";
 
-use File::Temp ();
 use Test::More;
 
 use GlitchVape                  ();
@@ -18,6 +17,7 @@ use GlitchVape::Effect::Screen  ();
 use GlitchVape::Effect::Texture ();
 use GlitchVape::Random          ();
 use GlitchVape::Pipeline        ();
+use GlitchVape::Test            ();
 use GlitchVape::Tools           ();
 
 plan skip_all => 'ImageMagick is not installed'
@@ -44,24 +44,6 @@ plan skip_all => 'Image::Magick is not installed'
 # parameter is covered the day it is declared and not the day somebody
 # remembers this file.
 
-my $dir = File::Temp->newdir( 'gv_drift_XXXXXX', TMPDIR => 1 );
-
-# Structure rather than a flat wash: several of these move edges around, and
-# an edge is the only thing that shows it.
-my $src = "$dir/src.png";
-{
-    my $img = Image::Magick->new( size => '240x180' );
-    $img->Read( 'gradient:#101040-#FFE0A0' );
-    $img->Draw(
-        primitive => 'rectangle',
-        points    => '45,38 165,120',
-        fill      => '#FF2090',
-    );
-    my $err = $img->Write( $src );
-    BAIL_OUT( "could not build the test source image: $err" )
-        if "$err" && "$err" =~ /^Exception (\d+)/ && $1 >= 400;
-}
-
 my $registry = 'GlitchVape::Registry';
 
 my @drifters =
@@ -70,71 +52,12 @@ my @drifters =
 ok scalar @drifters, 'some effects declare a drift' or BAIL_OUT( 'none found' );
 diag "drift is declared by: @drifters";
 
-# One frame of one effect, as ImageMagick's signature of its pixels.
-#
-# The signature and not the written file: a PNG carries a creation time, so two
-# encodings of one identical picture differ as bytes while being the same
-# image. Comparing files here reported a jolt in effects that did not have one.
-sub render_frame
-{
-    my ( $effect, $drift, $frame, $frames ) = @_;
-
-    my $img = Image::Magick->new;
-    $img->Read( $src );
-
-    my $ctx = GlitchVape::Context->new(
-        image  => $img,
-        source => $src,
-        seed   => 99,
-    );
-    $ctx->frames( $frames );
-    $ctx->frame( $frame );
-
-    GlitchVape::Pipeline->new( effects => { $effect => { drift => $drift } } )
-        ->run( $ctx );
-
-    return $ctx->image->Get( 'signature' );
-}
-
-my $frames = 12;
-
-# Deliberately unhelpful: none of these is a whole number of any period the
-# effects use, which is the case that used to jolt.
-my @awkward = ( 1, 3, 7, 10, 0.5 );
-
-for my $effect ( @drifters )
-{
-    my $spec = $registry->get( $effect )->{ params }{ drift };
-
-    for my $drift ( @awkward )
-    {
-        next if defined $spec->{ max } && $drift > $spec->{ max };
-
-        my $first = render_frame( $effect, $drift, 0,       $frames );
-        my $wrap  = render_frame( $effect, $drift, $frames, $frames );
-
-        ok $first eq $wrap,
-            "$effect at drift $drift comes back to the first frame";
-    }
-}
-
-# A drift is an animation parameter and must leave a still alone, whatever it
-# is set to: presets carry it, and rendering one as a still should give the
-# same picture it gave before the parameter existed.
-for my $effect ( @drifters )
-{
-    my $spec = $registry->get( $effect )->{ params }{ drift };
-
-    # The largest this effect will take, so the test is asking the parameter
-    # for everything it has rather than for a number that happens to be small.
-    my $most = $spec->{ max };
-    $most = 10 if !defined $most || $most > 10;
-
-    my $off = render_frame( $effect, 0,     0, 1 );
-    my $on  = render_frame( $effect, $most, 0, 1 );
-
-    ok $off eq $on, "$effect ignores drift when there is only one frame";
-}
+# Both halves -- the frame after the last is the first again, at values chosen
+# to be awkward, and a still ignores the setting whatever it is -- are asked by
+# GlitchVape::Test, where a plug-in's own tests can ask them of its effects.
+# The picture they are asked on has structure rather than a flat wash: several
+# of these move edges around, and an edge is the only thing that shows it.
+GlitchVape::Test::drift_ok( $_ ) for @drifters;
 
 # ---------------------------------------------------------------------------
 # The stream a drift can be random from and still close

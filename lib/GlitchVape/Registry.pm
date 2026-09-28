@@ -6,6 +6,8 @@ use warnings;
 use List::Util   qw(any);
 use Scalar::Util qw(looks_like_number);
 
+use GlitchVape::Plugins ();
+
 our $VERSION = '0.01';
 
 =head1 NAME
@@ -152,6 +154,31 @@ use constant STAGES =>
 
 my %EFFECT;
 
+# What a name may look like, for an effect and for each of its parameters. It
+# is spelled on the command line, in preset files and in cache keys, and
+# `--set effect.param=value` splits on the first dot -- so a dot in either
+# would make a setting nobody could reach.
+use constant NAME => qr/\A[a-z][a-z0-9_]*\z/;
+
+# Everything a declaration may say. A key outside these is a typo, and a typo
+# in a declaration is ignored in silence by everything that reads it: `mn => 0`
+# is a slider with no bottom, and nobody would ever find out why.
+my %EFFECT_KEY =
+    map { $_ => 1 } qw(name title stage summary doc params apply requires);
+
+my %PARAM_KEY = map { $_ => 1 } qw(
+    type default min max values doc label order needs placeholder
+    suggest choose stops animation
+);
+
+# The types _coerce knows. Anything else would be passed through as a string
+# while the interface guessed at a widget for it.
+my %TYPE = map { $_ => 1 } qw(num int bool enum str list);
+
+# Named lists a parameter can offer with `suggest` or `choose` -- see
+# L</SUGGESTION LISTS>. Each is { values => code, plugin => owner }.
+my %SOURCE;
+
 =head2 register( %spec )
 
     GlitchVape::Registry->register(
@@ -201,6 +228,24 @@ Naming a parameter the effect does not declare is fatal at load time. Left
 unchecked it would produce a control greyed out for ever, which looks exactly
 like a bug in the widget rather than a typo in the declaration.
 
+=head2 A DECLARATION IS CHECKED WHEN IT IS MADE
+
+Everything that reads a declaration -- the option parser, C<--explain>, the
+preset loader, the window -- trusts it, and each would fail in its own way at
+its own moment if it were wrong: an C<enum> with no values made C<--explain>
+die and could never resolve its own default, a stage left out quietly became
+C<optics>, and a name with a dot in it could not be set from the command line
+at all. So it is checked once, here, and a declaration that would break one of
+them is refused with a sentence saying which rule it broke.
+
+Which also means C<register> dies rather than warns. For an effect that ships
+with the program that is a broken build; for one from a plug-in,
+L<GlitchVape::Plugins> catches it and refuses the plug-in instead.
+
+C<requires> names external tools, and each must be one L<GlitchVape::Tools>
+knows about. A tool it has never heard of could only ever be reported missing,
+installed or not -- so a plug-in that needs one registers it there first.
+
 =cut
 
 sub register
@@ -208,24 +253,100 @@ sub register
     my ( $class, %spec ) = @_;
     $class = ref $class || $class;
 
-    my $name = $spec{ name }
-        or die "GlitchVape::Registry: effect registered without a name\n";
+    my $name = $spec{ name } // q{};
 
-    die "GlitchVape::Registry: effect '$name' registered twice\n"
-        if $EFFECT{ $name };
+    die "GlitchVape::Registry: effect registered without a name\n"
+        unless length $name;
+
+    die "GlitchVape::Registry: effect name '$name' must be lower case "
+        . "letters, digits and underscores, starting with a letter\n"
+        unless $name =~ NAME;
+
+    if ( my $had = $EFFECT{ $name } )
+    {
+        die "GlitchVape::Registry: effect '$name' registered twice -- "
+            . _whose( $had->{ plugin } )
+            . " already has it\n";
+    }
+
+    _check_keys( "effect '$name'", \%spec, \%EFFECT_KEY );
 
     die "GlitchVape::Registry: effect '$name' has no apply coderef\n"
         unless ref $spec{ apply } eq 'CODE';
 
-    my $stage = $spec{ stage } // 'optics';
+    # No default. Every effect that ships says where it runs, and one that
+    # does not has not decided -- landing it in optics would be deciding for
+    # it, somewhere it would never think to look.
+    my $stage = $spec{ stage };
+    die "GlitchVape::Registry: effect '$name' does not say which stage it "
+        . 'runs at. One of: '
+        . join( ', ', stages() ) . "\n"
+        unless defined $stage && length $stage;
+
     my $order = STAGES->{ $stage }
         or die
         "GlitchVape::Registry: effect '$name' has unknown stage '$stage'\n";
 
     my $params = $spec{ params } || {};
+    check_params( 'GlitchVape::Registry', $name, $params );
+
+    _check_needs( $name, $params );
+
+    my $requires = $spec{ requires } || [];
+    _check_requires( $name, $requires );
+
+    $EFFECT{ $name } = {
+        name     => $name,
+        title    => $spec{ title } // _titlecase( $name ),
+        stage    => $stage,
+        order    => $order,
+        summary  => $spec{ summary } // '',
+        params   => $params,
+        apply    => $spec{ apply },
+        requires => $requires,
+        doc      => $spec{ doc } // '',
+
+        # Which plug-in said so, or undef for the program itself. Read by the
+        # listings, and by the preview cache, which has to know whose code
+        # drew a picture before it can say the picture is still current.
+        plugin => GlitchVape::Plugins::owner( scalar caller ),
+    };
+
+    return $EFFECT{ $name };
+}
+
+=head2 check_params( $who, $name, $params )
+
+Validate a parameter hash in place, filling in inferred types -- the checks
+C<register> makes of each parameter, for the other registry that uses the same
+shape. C<$who> and C<$name> are only for the message: they are how a refusal
+says which declaration it came from.
+
+=cut
+
+sub check_params
+{
+    my ( $who, $name, $params ) = @_;
+
+    die "$who: '$name' declares its parameters as something other than "
+        . "a hash\n"
+        unless ref $params eq 'HASH';
+
     for my $p ( sort keys %$params )
     {
         my $d = $params->{ $p };
+
+        die "$who: $name.$p must be a hash of what the parameter is\n"
+            unless ref $d eq 'HASH';
+
+        die "$who: parameter name '$name.$p' must be lower case letters, "
+            . "digits and underscores, starting with a letter\n"
+            unless $p =~ NAME;
+
+        _check_keys( "$name.$p", $d, \%PARAM_KEY, $who );
+
+        die "$who: $name.$p has no default\n"
+            unless exists $d->{ default };
 
         # A parameter that omits its type is inferred from the shape of its
         # default: anything numeric is treated as a number, everything else
@@ -241,25 +362,161 @@ sub register
                 $d->{ type } = 'str';
             }
         }
-        die "GlitchVape::Registry: $name.$p has no default\n"
-            unless exists $d->{ default };
+
+        die "$who: $name.$p has unknown type '$d->{type}'. One of: "
+            . join( ', ', sort keys %TYPE ) . "\n"
+            unless $TYPE{ $d->{ type } };
+
+        _check_shape( $who, $name, $p, $d );
     }
 
-    _check_needs( $name, $params );
+    return $params;
+}
 
-    $EFFECT{ $name } = {
-        name     => $name,
-        title    => $spec{ title } // _titlecase( $name ),
-        stage    => $stage,
-        order    => $order,
-        summary  => $spec{ summary } // '',
-        params   => $params,
-        apply    => $spec{ apply },
-        requires => $spec{ requires } || [],
-        doc      => $spec{ doc } // '',
-    };
+# The parts of a parameter that depend on its type, and the one question that
+# covers all of them: whether the parameter accepts its own default. A default
+# the parameter would refuse is an effect nobody can use without first
+# overriding it, and the refusal would arrive at render time naming a value
+# the user never typed.
+sub _check_shape
+{
+    my ( $who, $name, $p, $d ) = @_;
 
-    return $EFFECT{ $name };
+    my $label = "$name.$p";
+
+    if ( $d->{ type } eq 'enum' )
+    {
+        die "$who: $label is an enum and lists no values\n"
+            unless ref $d->{ values } eq 'ARRAY' && @{ $d->{ values } };
+    }
+
+    _check_range( $who, $label, $d );
+    _check_offers( $who, $label, $d );
+    _check_stops( $who, $label, $d->{ stops } );
+
+    die "$who: $label.order must be a number\n"
+        if defined $d->{ order } && !looks_like_number( $d->{ order } );
+
+    my $ok = eval { _coerce( $name, $p, $d->{ default }, $d ); 1 };
+    unless ( $ok )
+    {
+        my $why = $@;
+        $why =~ s/\AGlitchVape: //;
+        $why =~ s/\s+\z//;
+
+        die "$who: $label refuses its own default ($why)\n";
+    }
+
+    return;
+}
+
+sub _check_range
+{
+    my ( $who, $label, $d ) = @_;
+
+    for my $bound ( qw(min max) )
+    {
+        next unless defined $d->{ $bound };
+
+        die "$who: $label.$bound must be a number, got '$d->{$bound}'\n"
+            unless looks_like_number( $d->{ $bound } );
+    }
+
+    return unless defined $d->{ min } && defined $d->{ max };
+
+    die "$who: $label runs from $d->{min} to $d->{max}, which is backwards\n"
+        if $d->{ min } > $d->{ max };
+
+    return;
+}
+
+sub _check_offers
+{
+    my ( $who, $label, $d ) = @_;
+
+    # Both would be two answers to one question -- the combo either takes
+    # what you type or it does not.
+    die "$who: $label says both suggest and choose; it is one or the "
+        . "other\n"
+        if defined $d->{ suggest } && defined $d->{ choose };
+
+    for my $offer ( qw(suggest choose) )
+    {
+        my $from = $d->{ $offer };
+        next unless defined $from;
+        next if ref $from eq 'ARRAY';
+
+        die "$who: $label.$offer names '$from', which is not a list the "
+            . 'program knows. One of: '
+            . join( ', ', sources() ) . "\n"
+            unless $SOURCE{ $from };
+    }
+
+    return;
+}
+
+sub _check_stops
+{
+    my ( $who, $label, $stops ) = @_;
+
+    return unless defined $stops;
+
+    my @range = ref $stops eq 'ARRAY' ? @$stops : ( $stops, $stops );
+
+    my $counts = @range == 2
+        && !any { !defined || !/\A[1-9][0-9]*\z/ } @range;
+
+    die "$who: $label.stops must be a count, or a [least, most] pair\n"
+        unless $counts && $range[ 0 ] <= $range[ 1 ];
+
+    return;
+}
+
+sub _check_keys
+{
+    my ( $what, $spec, $known, $who ) = @_;
+    $who //= 'GlitchVape::Registry';
+
+    my @odd = grep { !$known->{ $_ } } sort keys %$spec;
+    return unless @odd;
+
+    die "$who: $what declares "
+        . join( ', ', map { "'$_'" } @odd )
+        . ', which means nothing here. Known: '
+        . join( ', ', sort keys %$known ) . "\n";
+}
+
+sub _check_requires
+{
+    my ( $name, $requires ) = @_;
+
+    die "GlitchVape::Registry: effect '$name' lists its requirements as "
+        . "something other than a list\n"
+        unless ref $requires eq 'ARRAY';
+
+    return unless @$requires;
+
+    require GlitchVape::Tools;
+
+    for my $tool ( @$requires )
+    {
+        next if GlitchVape::Tools::known( $tool );
+
+        die "GlitchVape::Registry: effect '$name' requires '$tool', which "
+            . "GlitchVape::Tools has never heard of -- register it there "
+            . "first, or it can only ever be reported missing\n";
+    }
+
+    return;
+}
+
+# Who holds a name, for a message about a collision over it.
+sub _whose
+{
+    my ( $plugin ) = @_;
+
+    return 'the program itself' unless defined $plugin;
+    return "plug-in $plugin";
 }
 
 sub _check_needs
@@ -328,6 +585,194 @@ The full registry as a hashref, keyed by name.
 =cut
 
 sub all { \%EFFECT }
+
+=head2 retract( $plugin ) / contributions( $plugin )
+
+Everything one plug-in registered here -- effects and suggestion lists --
+taken back, or listed as C<< { effects => [...], 'suggestion lists' => [...] } >>.
+L<GlitchVape::Plugins> asks every registry both questions, the first when a
+plug-in fails half way through loading and the second for C<--list-plugins>.
+
+=cut
+
+sub retract
+{
+    my ( $class, $plugin ) = @_;
+    $plugin = $class unless ref $class || $class eq __PACKAGE__;
+
+    for my $table ( \%EFFECT, \%SOURCE )
+    {
+        delete @$table{ _from( $table, $plugin ) };
+    }
+
+    return;
+}
+
+sub contributions
+{
+    my ( $class, $plugin ) = @_;
+    $plugin = $class unless ref $class || $class eq __PACKAGE__;
+
+    return {
+        effects            => [ _from( \%EFFECT, $plugin ) ],
+        'suggestion lists' => [ _from( \%SOURCE, $plugin ) ],
+    };
+}
+
+sub _from
+{
+    my ( $table, $plugin ) = @_;
+
+    my @names = sort grep { ( $table->{ $_ }{ plugin } // q{} ) eq $plugin }
+        keys %$table;
+
+    return @names;
+}
+
+=head2 SUGGESTION LISTS
+
+A parameter can offer values with C<suggest> (typeable) or C<choose> (closed),
+and either can be an inline list or the name of one of these. The named ones
+are program-wide facts -- every registered palette, every duotone ramp -- and
+the inline form is for everything else: three tape speeds are nobody else's
+business, and requiring a named list for them would mean an effect that wants
+to offer three strings has to edit somewhere else to do it.
+
+They live here rather than in the window, where they started, because which
+lists exist is a fact about the declarations: C<register> refuses a parameter
+that names a list nobody has, which used to be a combo that quietly offered
+nothing.
+
+=cut
+
+%SOURCE = (
+
+    # A parameter opts in by declaring `suggest => 'palette'`, and the combo
+    # then offers these while the entry still takes anything -- a palette
+    # parameter also accepts an inline '#FF71CE,#01CDFE' list, so the values
+    # are an offer, not a set.
+    palette => {
+        values => sub {
+            require GlitchVape::Palette;
+            return GlitchVape::Palette::names();
+        },
+    },
+
+    # 'custom' first, because it is the one that is not a name -- it is the
+    # answer for when none of the names is what you meant.
+    duotone => {
+        values => sub {
+            require GlitchVape::Palette;
+            return ( 'custom', GlitchVape::Palette::duotone_names() );
+        },
+    },
+
+    # 'native' first, because leaving the shape alone is what most renders
+    # want: three of the four presets that letterbox do it for the border
+    # and nothing else.
+    ratio => { values => sub { return qw(native 16:9 2.35:1 4:3 1:1 9:16) } },
+
+    # The same names again with 'custom' in front of them, for the two effects
+    # that can be handed colours instead of a name. A second list rather than
+    # 'custom' added to the first, because offering it is a claim the effect
+    # has somewhere to put the colours: bitmap.palette has not, and a
+    # drop-down offering an answer the render cannot use is the ambiguity this
+    # whole arrangement exists to remove.
+    palette_custom => {
+        values => sub {
+            require GlitchVape::Palette;
+            return ( 'custom', GlitchVape::Palette::names() );
+        },
+    },
+);
+
+=head2 register_source( name => $name, values => sub { ... } )
+
+A named list for C<suggest> and C<choose> to point at. C<values> is called
+each time the list is shown, so a list of things that can change -- palettes
+that plug-ins add, say -- is never stale. An array reference is taken as a
+fixed list.
+
+=cut
+
+sub register_source
+{
+    my ( $class, %arg ) = @_;
+
+    my $name = $arg{ name } // q{};
+
+    die "GlitchVape::Registry: a suggestion list needs a name made of "
+        . "lower case letters, digits and underscores\n"
+        unless $name =~ NAME;
+
+    if ( my $had = $SOURCE{ $name } )
+    {
+        die "GlitchVape::Registry: suggestion list '$name' registered twice "
+            . '-- '
+            . _whose( $had->{ plugin } )
+            . " already has it\n";
+    }
+
+    my $values = $arg{ values };
+    if ( ref $values eq 'ARRAY' )
+    {
+        my @fixed = @$values;
+        $values = sub { return @fixed };
+    }
+
+    die "GlitchVape::Registry: suggestion list '$name' has no values\n"
+        unless ref $values eq 'CODE';
+
+    $SOURCE{ $name } = {
+        values => $values,
+        plugin => GlitchVape::Plugins::owner( scalar caller ),
+    };
+
+    return $name;
+}
+
+=head2 sources()
+
+The names of every suggestion list, sorted.
+
+=cut
+
+sub sources
+{
+    my @names = sort keys %SOURCE;
+    return @names;
+}
+
+=head2 offered( $spec, $key )
+
+What one parameter offers under C<suggest> or C<choose> (C<$key>), as an array
+reference, or undef if it offers nothing. Two spellings, and the difference is
+what typing something else would mean:
+
+    suggest => ...   these, or anything else you can think of
+    choose  => ...   these, and there is nothing else to say
+
+Which of the two a parameter wants is a fact about the parameter and not about
+the widget, so it is declared rather than decided by the window. bitmap.palette
+chooses: five settings make a bitmap look like a machine, and the palette is
+which machine, so a list is the whole question. palette.name suggests: that
+effect is I<about> the colours, so an inline '#FF71CE,#01CDFE' that no list
+could enumerate is exactly what somebody might mean.
+
+=cut
+
+sub offered
+{
+    my ( $spec, $key ) = @_;
+
+    my $offer = $spec->{ $key };
+    return undef unless defined $offer;
+
+    return [ @$offer ] if ref $offer eq 'ARRAY';
+
+    my $source = $SOURCE{ $offer } or return undef;
+    return [ $source->{ values }->() ];
+}
 
 =head2 by_stage()
 

@@ -9,6 +9,8 @@ use lib "$FindBin::Bin/../lib";
 use Test::More;
 use GlitchVape ();
 use GlitchVape::Registry;
+use GlitchVape::Test  ();
+use GlitchVape::Tools ();
 
 {
     my $spec = GlitchVape::Registry->get( 'scanlines' );
@@ -22,39 +24,11 @@ use GlitchVape::Registry;
 }
 
 # Every registered effect must be fully described, or --explain and the
-# override parser have nothing to work from.
+# override parser have nothing to work from. The check itself is in
+# GlitchVape::Test, where a plug-in's tests can make it too.
 {
-    my $all = GlitchVape::Registry->all;
-    for my $name ( sort keys %$all )
-    {
-        my $spec = $all->{ $name };
-        ok length $spec->{ summary }, "$name has a summary";
-        ok length $spec->{ title },   "$name has a title";
-        ok( GlitchVape::Registry->stage_info( $spec->{ stage } ),
-            "$name sits in a declared stage" );
-
-        for my $p ( sort keys %{ $spec->{ params } } )
-        {
-            my $d = $spec->{ params }{ $p };
-            ok exists $d->{ default },      "$name.$p has a default";
-            ok length( $d->{ doc } // '' ), "$name.$p is documented";
-
-            if ( $d->{ type } eq 'enum' )
-            {
-                ok @{ $d->{ values } || [] }, "$name.$p lists its enum values";
-                ok scalar( grep { $_ eq $d->{ default } } @{ $d->{ values } } ),
-                    "$name.$p default is one of its own enum values";
-            }
-
-            if ( defined $d->{ min } && defined $d->{ max } )
-            {
-                cmp_ok $d->{ default }, '>=', $d->{ min },
-                    "$name.$p default is not below its minimum";
-                cmp_ok $d->{ default }, '<=', $d->{ max },
-                    "$name.$p default is not above its maximum";
-            }
-        }
-    }
+    GlitchVape::Test::declared_ok( $_ )
+        for sort keys %{ GlitchVape::Registry->all };
 }
 
 {
@@ -307,6 +281,134 @@ use GlitchVape::Registry;
 
     is_deeply( GlitchVape::Registry->without_animation( 'vignette', $flat ),
         $flat, 'so its values come back untouched' );
+}
+
+# ---------------------------------------------------------------------------
+# A declaration is checked when it is made
+
+# Everything that reads a declaration trusts it, and each of these used to be
+# accepted and then fail somewhere else, later, in its own way: an enum with no
+# values made --explain die, a stage left out quietly became optics, a name
+# with a dot in it could never be reached by --set. Every effect that ships
+# passes all of it, which loading them at the top of this file shows; what is
+# pinned here is that each is refused, with a sentence saying which rule, and
+# that a refused declaration leaves nothing registered.
+{
+    my $n = 0;
+
+    my $refusal = sub {
+        my ( %spec ) = @_;
+
+        my %declared = (
+            name    => 'test_refused_' . $n++,
+            stage   => 'colour',
+            summary => 'A declaration with something wrong with it',
+            apply   => sub { return },
+            %spec,
+        );
+
+        my $ok = eval { GlitchVape::Registry->register( %declared ); 1 };
+        return 'accepted' if $ok;
+
+        my $why = $@;
+        return "registered anyway: $why"
+            if $declared{ name } ne 'grain'
+            && GlitchVape::Registry->get( $declared{ name } // q{} );
+
+        return $why;
+    };
+
+    my $param = sub {
+        my ( %d ) = @_;
+        return ( params => { p => { doc => 'one parameter', %d } } );
+    };
+
+    like $refusal->( name => 'with.dot' ), qr/must be lower case letters/,
+        'a name with a dot in it, which --set could never reach';
+    like $refusal->( name => 'Upper' ), qr/must be lower case letters/,
+        'and one in capitals, which a preset key would not match';
+    like $refusal->( stage => undef ), qr/does not say which stage it runs at/,
+        'a declaration that does not say where it runs';
+    like $refusal->( stage => 'lens' ), qr/unknown stage 'lens'/,
+        'or says somewhere that does not exist';
+    like $refusal->( sumary => 'typo' ), qr/'sumary', which means nothing here/,
+        'a key the declaration does not have, which would be ignored in silence';
+    like $refusal->( $param->( default => 1, mn => 0 ) ),
+        qr/'mn', which means nothing here/,
+        'and the same inside a parameter';
+    like $refusal->( params => { 'with.dot' => { default => 1 } } ),
+        qr/parameter name '\S+[.]with[.]dot' must be lower/,
+        'a parameter name with a dot in it';
+    like $refusal->( $param->( default => 'a', type => 'enum' ) ),
+        qr/is an enum and lists no values/,
+        'an enum with no values, which made --explain die';
+    like $refusal->( $param->( default => '#fff', type => 'colour' ) ),
+        qr/unknown type 'colour'/,
+        'a type nothing knows, which was passed through as a string';
+    like $refusal->( $param->( default => 1, min => 2, max => 0 ) ),
+        qr/runs from 2 to 0, which is backwards/,
+        'a range that runs backwards';
+    like $refusal->(
+        $param->( default => 5, type => 'num', min => 0, max => 1 ) ),
+        qr/refuses its own default/,
+        'a default outside its own range, which nobody could use unchanged';
+    like $refusal->(
+        $param->( default => 'c', type => 'enum', values => [ qw(a b) ] ) ),
+        qr/refuses its own default/,
+        'an enum default that is not one of its values';
+    like $refusal->( $param->( default => 'x', suggest => 'palettes' ) ),
+        qr/names 'palettes', which is not a list the program knows/,
+        'a suggestion list nobody has, which used to be a combo offering nothing';
+    like $refusal->(
+        $param->( default => 'x', suggest => [ 'x' ], choose => [ 'x' ] ) ),
+        qr/says both suggest and choose/,
+        'suggest and choose at once, which are two answers to one question';
+    like $refusal->( $param->( default => '#000,#fff', stops => [ 3, 2 ] ) ),
+        qr/stops must be a count, or a \[least, most\] pair/,
+        'a colour count that runs backwards';
+    like $refusal->( requires => [ 'no_such_tool' ] ),
+        qr/'no_such_tool', which GlitchVape::Tools has never/,
+        'a requirement on a tool that could only ever be reported missing';
+    like $refusal->( name => 'grain' ),
+        qr/'grain' registered twice -- the program itself/,
+        'and a name that is taken, saying whose it is';
+
+    # A tool registered first is one requires may name.
+    GlitchVape::Tools->register( name => 'test_tool', bins => [ 'perl' ] );
+    is $refusal->( requires => [ 'test_tool' ] ), 'accepted',
+        'a tool GlitchVape::Tools has been told about can be required';
+}
+
+# ---------------------------------------------------------------------------
+# What a parameter offers
+
+# Inline, or a named list -- which is the registry's to keep now, and the
+# window only asks it.
+{
+    is_deeply GlitchVape::Registry::offered( { suggest => [ qw(a b) ] },
+        'suggest' ), [ qw(a b) ], 'an inline list is offered as it stands';
+
+    my $ratios =
+        GlitchVape::Registry::offered( { choose => 'ratio' }, 'choose' );
+    is $ratios->[ 0 ], 'native', 'a named list is offered from its source';
+
+    is GlitchVape::Registry::offered( { choose => 'ratio' }, 'suggest' ), undef,
+        'and nothing is offered under the key a parameter does not use';
+
+    GlitchVape::Registry->register_source(
+        name   => 'test_list',
+        values => [ qw(one two) ]
+    );
+    is_deeply GlitchVape::Registry::offered( { suggest => 'test_list' },
+        'suggest' ), [ qw(one two) ], 'a registered list is a named list';
+
+    ok !eval {
+        GlitchVape::Registry->register_source(
+            name   => 'palette',
+            values => [ 'x' ]
+        );
+        1;
+    }, 'and a name that is taken is refused';
 }
 
 done_testing;

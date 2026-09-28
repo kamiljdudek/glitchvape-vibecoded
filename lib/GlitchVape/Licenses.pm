@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use File::Spec ();
+use List::Util qw(any);
 
 use GlitchVape::Fonts ();
 use GlitchVape::Paths ();
@@ -257,6 +258,57 @@ sub _fonts_beside
     closedir $dh;
 
     return @fonts;
+}
+
+=head2 unlicensed( $dir )
+
+The font files under C<$dir> that have no licence file in their own directory
+or in any directory between it and C<$dir> -- empty when every font is
+covered. A licence covers what is beside it and below it, which is how a
+release is laid out: one F<OFL.txt> at the top of a folder of weights.
+
+This is C<make check-licenses> for a directory the build never saw: a plug-in
+that ships a font adds its directory through L<GlitchVape::Fonts/add_dir>,
+which asks this first.
+
+=cut
+
+sub unlicensed
+{
+    my ( $dir ) = @_;
+
+    my @bare;
+    my @queue = ( [ $dir, 0 ] );
+
+    while ( @queue )
+    {
+        my ( $current, $covered ) = @{ shift @queue };
+
+        opendir my $dh, $current or next;
+        my @entries = sort readdir $dh;
+        closedir $dh;
+
+        my $here = $covered
+            || any { $_ =~ $LICENCE_FILE && -f "$current/$_" } @entries;
+
+        for my $entry ( @entries )
+        {
+            next if $entry eq '.' || $entry eq '..';
+
+            my $path = File::Spec->catfile( $current, $entry );
+
+            if ( -d $path )
+            {
+                push @queue, [ $path, $here ] unless -l $path;
+                next;
+            }
+
+            push @bare, $path
+                if !$here && $entry =~ /[.](?:ttf|otf|ttc|pcf|bdf)\z/i;
+        }
+    }
+
+    return @bare;
 }
 
 # Breadth-first, like the font walk it parallels, and for the same reason: a

@@ -10,12 +10,18 @@ use GlitchVape::Config    ();
 use GlitchVape::Context   ();
 use GlitchVape::IO        ();
 use GlitchVape::Pipeline  ();
+use GlitchVape::Plugins   ();
 use GlitchVape::Registry  ();
 use GlitchVape::Random    ();
 use GlitchVape::Watermark ();
 
 # Loading these registers every effect. Order does not matter; the registry
 # sorts by declared stage.
+#
+# A list rather than a search of GlitchVape::Effect::*, which is what plug-ins
+# get: a missing file here is a broken build and should fail as one, where a
+# broken plug-in should fail alone. See GlitchVape::Plugins for why the two
+# are kept in different namespaces.
 use GlitchVape::Effect::Color   ();
 use GlitchVape::Effect::Texture ();
 use GlitchVape::Effect::Signal  ();
@@ -352,8 +358,9 @@ sub _render_animation
 
 =head2 effect_list()
 
-C<< [ { name, title, stage, summary, params }, ... ] >> for every registered
-effect.
+C<< [ { name, title, stage, summary, params, plugin }, ... ] >> for every
+registered effect. C<plugin> is the plug-in the effect came from, or undef for
+one of the program's own.
 
 =cut
 
@@ -369,10 +376,16 @@ sub effect_list
                 summary => $all->{ $_ }{ summary },
                 doc     => $all->{ $_ }{ doc },
                 params  => $all->{ $_ }{ params },
+                plugin  => $all->{ $_ }{ plugin },
             }
         } GlitchVape::Registry->names
     ];
 }
+
+# Last, so that everything above -- the program's own effects above all -- is
+# in place before a plug-in can ask for any of it. Anything that loads the
+# program loads its plug-ins; see GlitchVape::Plugins.
+GlitchVape::Plugins::load();
 
 1;
 

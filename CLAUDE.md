@@ -23,11 +23,14 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 | `lib/GlitchVape.pm` | the façade — `render()`, which every front end calls |
 | `lib/GlitchVape/Effect/*.pm` | the forty-seven effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
+| `lib/GlitchVape/Plugins.pm` | finding, trying and loading plug-ins — `GlitchVape::Plugin::*`; see invariant 8 |
+| `lib/GlitchVape/Test.pm` | the checks every effect owes, installed so that a plug-in's tests can make them too |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
 | `package/` | the spec, `debian/`, the desktop entry and the AppStream metadata |
 | `build/` | everything the packaging targets produce; disposable, gitignored |
 | `t/` | the suite; GUI tests skip themselves without a display |
+| `t/lib/` | fixture plug-ins for `t/48-plugins.t`: one that breaks no rule, and one for each rule |
 
 ## The invariants
 
@@ -74,9 +77,21 @@ the window and by `--explain` alike — never by the render:
 | `label` | what to call the row, where the key is not the clearest English |
 | `needs` | which other parameters must hold before this one means anything |
 | `placeholder` | the grey text an empty entry or typeable combo shows, since what empty *means* is the parameter's fact |
-| `suggest` | values to offer, typeable: a named source or an inline list |
+| `suggest` | values to offer, typeable: a named list (`Registry->register_source`) or an inline one |
 | `choose` | the same, but closed — a plain drop-down with nothing to type into (`palette_custom`, `duotone`) |
 | `stops` | how many colours a colour list may hold, where it may vary: a count, or a `[least, most]` pair |
+
+**A declaration is checked when it is made.** `register()` refuses one that
+any reader of it would trip over later — a name `--set` could not reach, a
+missing stage, an `enum` with no values, a type nothing knows, a key nobody
+reads (`mn => 0` is a typo, and a typo in a declaration is ignored in silence
+by everything downstream), a range that runs backwards, a default the
+parameter would itself refuse, a `suggest` naming a list nobody has, a
+`requires` naming a tool `GlitchVape::Tools` has never heard of. Every effect
+that ships passes all of it; the checks exist for the next one, and for
+plug-ins. `GlitchVape::Generator::register` holds kinds to the same parameter
+rules, and refuses a second registration of a name instead of letting it
+replace the first in silence, which is what it used to do.
 
 `needs => { timestamp => 1, invent => 0 }` greys the control until both hold,
 without hiding it and without touching the value — `osd` is what these exist
@@ -138,11 +153,77 @@ which is a cache hit, because `GUI/Cache.pm` is content-addressed on the
 resolved configuration. One Apply is one history entry, so dragging a slider
 does not produce fifty near-identical steps.
 
+The configuration is not all that decides a picture, and the key says so: it
+carries the program's version, and for each effect a plug-in drew, that
+plug-in's fingerprint — its version and the size and modification time of its
+files. The preview directory outlives the program that filled it; without
+these an upgrade was shown the previous version's renders, and a plug-in being
+worked on, whose version never moves, its own old ones.
+
 ### 7. A preset is a look
 
 Presets carry effects and parameters. They do **not** carry a path to a file
 on somebody's machine, so the audio spec and the frame count live in the GUI
 object rather than in the state that gets written to a preset.
+
+A preset saved from the window goes to `Config::save_dir` —
+`$XDG_DATA_HOME/glitchvape/presets`, or the first `$GLITCHVAPE_PRESETS`
+directory when that is set — which is also the first place `--preset` looks,
+so what was saved under a name is what that name finds. It used to go to the
+first directory on the search path: from a checkout the checkout's own
+`presets/`, and installed the package's data directory, where saving failed
+with "Permission denied". `t/21-paths.t` and `t/49-save-preset.t` pin it.
+
+### 8. A plug-in is declarations, tried in a child before it is trusted
+
+A plug-in is a module called `GlitchVape::Plugin::Name` anywhere on `@INC`
+(or in `~/.local/share/glitchvape/lib/perl5`, appended so it can add to the
+program and never replace a part of it). It registers things through the same
+calls the program's own modules use — effects, suggestion lists, kinds of
+track, tools, palettes and duotone ramps, font roles and font directories,
+preset directories — and every front end is already made from those
+registries, so there is nothing else to change. `GlitchVape::Plugins` is the
+contract and the loader; its POD is the manual for writing one.
+
+Its own namespace, not `GlitchVape::Effect::*`. Site directories come before
+vendor ones on `@INC`, so a plug-in that happened to name a file
+`GlitchVape/Effect/Color.pm` would silently replace ten packaged effects;
+files left by an older install would load as plug-ins; and a broken effect
+that ships must stop the build while a broken plug-in must stop nothing but
+itself — which needs the two told apart. So the program's own effects and
+kinds stay explicit lists, and only `GlitchVape::Plugin::*` is searched.
+
+What the loader guarantees, and `t/48-plugins.t` checks with one fixture per
+rule in `t/lib`:
+
+- **The program's own register first**, so a collision over a name is always
+  the plug-in's, and every registry refuses a taken name.
+- **Each plug-in is tried in a forked child before it is loaded here.**
+  Invariant 5's damage cannot be undone: a plug-in that does image work while
+  loading starts OpenMP's pool, and refusing it afterwards would find the pool
+  and not remove it. A fork keeps only the calling thread, so the child starts
+  with exactly one whatever the parent was doing — the window has GLib's — and
+  a count of `/proc/$$/task` after the `require` says whether it started any.
+  The child also refuses one that reaches for Gtk3 or Glib (`check-split`, run
+  on code the build never saw), ends the process, or hangs.
+- **A refused plug-in is taken back whole.** Every place a plug-in can add to
+  answers `contributions($plugin)` and `retract($plugin)`, stamped by
+  `Plugins::owner`, so a plug-in that fails half way through — in the child
+  or, having passed there, in the parent — leaves nothing registered. A
+  warning names it; `--list-plugins` (exit 1) and the about window give the
+  reason; everything else carries on.
+- **A plug-in declares its API**: `use GlitchVape::Plugins api => 1`, or it is
+  refused. Both packagings provide the number as a virtual package.
+
+The consequence for anyone writing one: a plug-in's module is loaded twice,
+once in each process, and must do nothing while loading but declare things.
+
+`make test` runs with `GLITCHVAPE_PLUGINS=none`, so a plug-in installed on the
+machine cannot fail the program's suite. The suite's registry-wide sweeps —
+declarations complete, drifts close, rerolls hold, animation settings move —
+live in `GlitchVape::Test`, which `t/03`, `t/31`, `t/38` and `t/42` call and a
+plug-in's own tests call as `GlitchVape::Test::plugin_ok('Name')`, so the two
+cannot become two slightly different sets of questions.
 
 ## Fonts
 
@@ -164,6 +245,12 @@ split is invisible outside the packaging. A font ships only if a licence file
 sits beside it — `make check-licenses` re-reads the directories and fails if
 one arrived without. Adding a font is a line in `.gitignore` plus its licence
 beside it; there is no list of font names anywhere to keep up to date.
+
+A plug-in can add a font directory, searched after everything else, and the
+same rule is applied to it at load time instead of build time:
+`Fonts->add_dir` refuses a directory holding a font with no licence file
+beside it or above it (`Licenses::unlicensed`), and the plug-in with it. What
+it ships then shows up in `--licenses` and the about window like any other.
 
 Promoting a font from restricted to bundled is moving its directory. VCR OSD
 Mono is the worked example: its terms were unverified until its author was
@@ -416,6 +503,18 @@ finds `package/glitchvape.spec` inside it, and `make deb` unpacks it and moves
 tarball rather than in the tree means a file `make dist` failed to include is
 a build failure rather than a package quietly missing something.
 
+The base package provides the plug-in API as a virtual package —
+`glitchvape-plugin-api-1` and `glitchvape(plugin-api) = 1` — so that a
+packaged plug-in depends on the API it was written for rather than on a
+version of the program.
+
+A plain `make install` puts the modules in `PERLDIR`, which defaults to
+`$(PREFIX)/share/perl5` — on neither Debian's nor Fedora's `@INC`. `fix-inc`
+therefore replaces the checkout's `use lib` with one naming `PERLDIR` when
+`PERLDIR` is not somewhere perl looks, and removes it when it is, which is
+what the packagings get. Before that, a default install left scripts that died
+with "Can't locate GlitchVape.pm".
+
 `package/debian/rules` installs one package at a time from the Makefile's own
 targets rather than staging everything and splitting it back out with
 `.install` globs — the split already exists and `check-split` proves it.
@@ -490,11 +589,14 @@ perl -Ilib bin/glitchvape --check-deps    # what external tools are present
 perl -Ilib bin/glitchvape --check-fonts   # what each font role resolved to
 perl -Ilib bin/glitchvape --list-effects  # all of them, by stage
 perl -Ilib bin/glitchvape --explain NAME  # one effect's parameters
+perl -Ilib bin/glitchvape --list-plugins  # plug-ins, what each adds, any refused
 ```
 
 Three environment variables override where things are found, which is how the
 tests run against the checkout regardless of what is installed:
-`GLITCHVAPE_ASSETS`, `GLITCHVAPE_PRESETS`, `GLITCHVAPE_FONTS`.
+`GLITCHVAPE_ASSETS`, `GLITCHVAPE_PRESETS`, `GLITCHVAPE_FONTS`. A fourth,
+`GLITCHVAPE_PLUGINS`, chooses rather than locates: `none`, a list of names, or
+`-Name` to leave one out.
 
 Two escape hatches exist for building where the toolchain is not fully
 installed — `make deb DPKGFLAGS=-d` skips `dpkg-checkbuilddeps`, and
@@ -616,7 +718,10 @@ says what it does and this says what else was tried.
 `--list-generators` entry, the widgets in the wizard and the row in the Add
 popover. Five kinds so far — `dtmf`, `static`, `geiger`, `heart`, `drive` —
 each a module beside it exposing `params`, `param_order`, `duration`, `pcm`,
-`render` and `describe`.
+`render` and `describe`, and each declaring itself with `register` at its own
+foot, which is where a plug-in's kind has to be declared too. The order they
+are offered in is `@BUILTIN` in `Generator.pm` rather than the order they
+registered, which used to depend on which module somebody loaded first.
 
 **Adding a kind must not require editing the GUI.** The icon is part of the
 declaration for exactly that reason: it used to be a mapping keyed on kind
@@ -926,3 +1031,10 @@ half again as long as the one that follows.
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first
   frame rather than after twenty-four renders.
+
+- **`perl -c lib/GlitchVape/Noise.pm` warns that every sub is redefined.** A
+  file named on the command line is compiled without its `%INC` entry, so when
+  it loads `GlitchVape::Generator`, whose foot requires the five kinds, the
+  same file is loaded a second time under its module name. It is an artefact
+  of compiling a kind by path; `perl -Ilib -MGlitchVape::Noise -e1` is the
+  check that means something.

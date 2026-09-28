@@ -1,0 +1,4 @@
+This directory is a test fixture for GlitchVape's plug-in loader, and holds
+no font. The file is here because a plug-in's font directory has to carry a
+licence for its fonts, and t/48-plugins.t checks that the about window and
+`glitchvape --licenses` find it.

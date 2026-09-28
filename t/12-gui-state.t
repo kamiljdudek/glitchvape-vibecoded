@@ -214,6 +214,18 @@ SKIP:
     $state->param( 'scanlines', 'opacity', 0.35 );
     is $state->cache_key( size => 720 ), $before,
         'and changing it back returns the original key';
+
+    # The preview directory outlives the program that filled it, and an
+    # upgrade used to be shown the previous version's pictures for every
+    # setting it had seen before. What drew a picture is part of what it is.
+    {
+        local $GlitchVape::VERSION = '99.99';
+        isnt $state->cache_key( size => 720 ), $before,
+            'the same settings in another version of the program are another key';
+    }
+
+    is $state->cache_key( size => 720 ), $before,
+        'and the same version gives the same key again';
 }
 
 {

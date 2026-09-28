@@ -3,6 +3,8 @@ package GlitchVape::Paths;
 use strict;
 use warnings;
 
+use File::Spec ();
+
 our $VERSION = '0.01';
 
 =head1 NAME
@@ -53,12 +55,72 @@ sub data_root
     return $dir;
 }
 
+=head1 THE DROP-IN DIRECTORIES
+
+Three kinds of thing can be added without touching an installed package --
+fonts, presets and plug-ins -- and all three are looked for in the same two
+places the XDG base directory specification names, so that there is one
+answer to "where do I put it" rather than three.
+
+=head2 data_home()
+
+F<$XDG_DATA_HOME>, or F<~/.local/share> when that is unset. undef only when
+there is no home directory to hang it off, which is a system account rather
+than a person.
+
+A relative C<$XDG_DATA_HOME> is ignored rather than resolved, as the
+specification says it should be -- and it is right: relative to what?
+
+=cut
+
+sub data_home
+{
+    my $base = $ENV{ XDG_DATA_HOME };
+
+    if ( !defined $base || !length $base || $base !~ m{\A/} )
+    {
+        my $home = $ENV{ HOME };
+        return undef unless defined $home && length $home;
+
+        $base = File::Spec->catdir( $home, '.local', 'share' );
+    }
+
+    return $base;
+}
+
+=head2 data_dirs()
+
+The system data directories: C<$XDG_DATA_DIRS> unioned with the defaults
+rather than replaced by them. The specification says a set variable replaces
+the default, but desktop sessions routinely set it to a list that has dropped
+F</usr/local/share>, and a documented drop-in directory that silently stops
+being searched depending on which session started the program is worse than
+searching two directories that are usually empty.
+
+=cut
+
+sub data_dirs
+{
+    my @dirs;
+
+    push @dirs, grep { length } split /:/, $ENV{ XDG_DATA_DIRS }
+        if defined $ENV{ XDG_DATA_DIRS };
+
+    push @dirs, File::Spec->catdir( q{}, 'usr', 'local', 'share' ),
+        File::Spec->catdir( q{}, 'usr', 'share' );
+
+    my %seen;
+    return grep { !$seen{ $_ }++ } @dirs;
+}
+
 1;
 
 __END__
 
 =head1 SEE ALSO
 
-L<GlitchVape::Assets> and L<GlitchVape::Config>, the two callers.
+L<GlitchVape::Assets> and L<GlitchVape::Config>, the two callers of
+L</data_root>; L<GlitchVape::Fonts>, L<GlitchVape::Config> and
+L<GlitchVape::Plugins> for the drop-in directories.
 
 =cut

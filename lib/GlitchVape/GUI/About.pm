@@ -12,6 +12,7 @@ use GlitchVape           ();
 use GlitchVape::Assets   ();
 use GlitchVape::Config   ();
 use GlitchVape::Licenses ();
+use GlitchVape::Plugins  ();
 use GlitchVape::Registry ();
 
 our $VERSION = '0.01';
@@ -28,10 +29,13 @@ does, and an application that disagrees with them about its about box is
 disagreeing about nothing worth disagreeing about.
 
 The one thing added to it is a count of what this copy can actually see:
-effects registered and presets found. Both are discovered at run time rather
-than compiled in -- a preset dropped into F<presets/> is a preset, and an
-effect is whatever called C<register> -- so the numbers are worth stating
-rather than assuming.
+effects registered, presets found and plug-ins loaded. All three are
+discovered at run time rather than compiled in -- a preset dropped into
+F<presets/> is a preset, an effect is whatever called C<register>, and a
+plug-in is whatever was on C<@INC> -- so the numbers are worth stating rather
+than assuming. The credits page names the plug-ins, and any that were refused
+with the reason, since this is the one place in the window that can say why
+an effect somebody installed is not in the list.
 
 =head1 THE LICENCE PAGE IS READ OFF DISK
 
@@ -182,10 +186,18 @@ sub _comments
         $presets = scalar @$found;
     }
 
+    my $counts = sprintf '%d effects · %d presets', $effects, $presets;
+
+    # Only when there are any: most copies have none, and "0 plug-ins" on
+    # every about box would be a count of nothing.
+    my $plugins = scalar GlitchVape::Plugins::loaded();
+    $counts .= sprintf ' · %d plug-in%s', $plugins, $plugins == 1 ? q{} : 's'
+        if $plugins;
+
     return
-          sprintf "Vaporwave and glitch-art transformations for photographs\n"
+          "Vaporwave and glitch-art transformations for photographs\n"
         . "Vibe-coded but uses no AI-generated visuals, just photo filter presets\n"
-        . "%d effects · %d presets", $effects, $presets;
+        . $counts;
 }
 
 # The licence page: the real files if they are there, the built-in MIT text if
@@ -238,6 +250,8 @@ sub _add_credits
         $about->add_credit_section( 'Bundled fonts', \@fonts );
     }
 
+    _credit_plugins( $about );
+
     $about->add_credit_section(
         'Also',
         [
@@ -246,6 +260,41 @@ sub _add_credits
             'Every other typeface is whatever fontconfig could see',
         ]
     );
+
+    return;
+}
+
+# The plug-ins this copy loaded, and the ones it refused with the reason --
+# which is the one place in the window that says why an effect somebody
+# installed is not in the Add list. The reason is the first sentence, since a
+# credits page is a column of names and the whole of it is in the terminal
+# and in --list-plugins.
+sub _credit_plugins
+{
+    my ( $about ) = @_;
+
+    my @loaded;
+    for my $plugin ( GlitchVape::Plugins::loaded() )
+    {
+        my $line = $plugin->{ name };
+        $line .= " $plugin->{version}" if defined $plugin->{ version };
+
+        push @loaded, $line;
+    }
+
+    $about->add_credit_section( 'Plug-ins', \@loaded ) if @loaded;
+
+    my @refused;
+    for my $plugin ( GlitchVape::Plugins::refused() )
+    {
+        my ( $why ) = split /(?<=[.;])\s|\s--\s/, $plugin->{ reason };
+        $why =~ s/[.;]\z//;
+
+        push @refused, "$plugin->{name} -- not loaded: $why";
+    }
+
+    $about->add_credit_section( 'Plug-ins not loaded', \@refused )
+        if @refused;
 
     return;
 }

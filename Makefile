@@ -104,8 +104,11 @@ all:
 	@echo "make deb       build the Debian packages"
 	@echo "make rpm       build the RPM packages (make rpms for the srpm too)"
 
+# With the machine's plug-ins switched off: one installed here has no business
+# failing the program's own tests, and t/48-plugins.t loads the fixtures it
+# means to by name. See GlitchVape::Plugins.
 test check:
-	$(PROVE) -Ilib -r t/
+	GLITCHVAPE_PLUGINS=none $(PROVE) -Ilib -r t/
 
 # The base package must not need Gtk3. A module that reaches for it from
 # outside the GUI set would make that false silently, so it is asserted here
@@ -322,22 +325,42 @@ install-man:
 # checkout's `use lib` has to go. Left in, it would put a directory that does
 # not exist -- or worse, one that does -- ahead of the installed library.
 #
+# Unless PERLDIR is not on @INC, which is what the default is: nothing on
+# Debian or Fedora searches /usr/local/share/perl5, so a plain `make install`
+# used to put the modules somewhere perl never looks and leave scripts that
+# died with "Can't locate GlitchVape.pm". Then the line is not removed but
+# replaced, with one naming PERLDIR -- the same fact baked in at install time
+# that GlitchVape::Paths::DATADIR is. The packagings pass their vendor
+# directory, which is on @INC, and get no line at all, as before.
+#
 # FindBin itself is a separate question, and conflating the two broke every
 # install of the window: glitchvape-gui asks FindBin where it is so that Open
 # can start a second instance of *this* program, which is a fact it needs
-# whether it was installed or not. So the `use lib` line always goes, and the
-# `use FindBin ()` beside it goes only when nothing else in the script names
-# the package -- and both halves are asserted, because a script left using
-# FindBin without loading it does not fail to compile. $FindBin::RealBin is
-# simply undef, and the program spawns /RealScript out of the root directory.
+# whether it was installed or not. So the `use FindBin ()` beside the line
+# goes only when nothing else in the script names the package -- and both
+# halves are asserted, because a script left using FindBin without loading it
+# does not fail to compile. $FindBin::RealBin is simply undef, and the program
+# spawns /RealScript out of the root directory.
 .PHONY: fix-inc
 fix-inc:
-	set -e; for s in $(SCRIPT_LIST); do \
+	set -e; \
+	onpath=$$($(PERL) -e '($$d = shift) =~ s{/+\z}{}; \
+	    print scalar grep { !ref && $$_ eq $$d } @INC' '$(PERLDIR)'); \
+	for s in $(SCRIPT_LIST); do \
 	    f=$(DESTDIR)$(BINDIR)/$$s; \
-	    sed -i -e '\|^use lib "\$$FindBin::Bin/\.\./lib";$$|d' $$f; \
+	    if [ "$$onpath" = 0 ]; then \
+	        $(PERL) -i -pe 's{^use lib "\$$FindBin::Bin/\.\./lib";$$}{use lib \x27$(PERLDIR)\x27;}' $$f; \
+	        want=1; \
+	    else \
+	        sed -i -e '\|^use lib "\$$FindBin::Bin/\.\./lib";$$|d' $$f; \
+	        want=0; \
+	    fi; \
 	    grep -q 'FindBin::' $$f || sed -i -e '/^use FindBin ();$$/d' $$f; \
-	    ! grep -q '^use lib ' $$f \
-	        || { echo "install: $$s still adds a lib directory of its own" >&2; \
+	    [ "$$(grep -c '^use lib ' $$f || true)" = "$$want" ] \
+	        || { echo "install: $$s adds the wrong lib directories" >&2; \
+	             exit 1; }; \
+	    [ "$$want" = 0 ] || grep -qxF "use lib '$(PERLDIR)';" $$f \
+	        || { echo "install: $$s does not name $(PERLDIR)" >&2; \
 	             exit 1; }; \
 	    ! grep -q 'FindBin::' $$f || grep -q '^use FindBin ();' $$f \
 	        || { echo "install: $$s uses FindBin but no longer loads it" >&2; \

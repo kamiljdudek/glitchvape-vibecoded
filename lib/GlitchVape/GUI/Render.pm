@@ -355,9 +355,13 @@ sub source_key
 
     my @stat = stat $source;
 
+    # The version for the reason GlitchVape::GUI::State gives in cache_key:
+    # how a photograph is decoded and shrunk is code too, and an upgrade may
+    # change it.
+    require GlitchVape;
+
     return GlitchVape::GUI::Cache->key(
-        'glitchvape-source-v1',
-        $source,
+        'glitchvape-source-v1', $GlitchVape::VERSION, $source,
         $stat[ 7 ],
         $stat[ 9 ], $size
     );

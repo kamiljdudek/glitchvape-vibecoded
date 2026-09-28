@@ -7,6 +7,7 @@ use utf8;
 use FindBin ();
 use lib "$FindBin::Bin/../lib";
 
+use File::Spec ();
 use Test::More;
 use GlitchVape ();
 use GlitchVape::Config;
@@ -159,8 +160,20 @@ local $ENV{ GLITCHVAPE_PRESETS } = "$FindBin::Bin/../presets";
 # Every shipped preset must resolve completely. This catches a parameter
 # renamed in code but not in the YAML, which would otherwise only appear when
 # someone happened to run that preset.
+#
+# The shipped ones and only those: the search path also holds whatever the
+# person running the suite has saved, and a preset of theirs that uses a
+# plug-in's effect is not the program's to vouch for.
 {
-    for my $entry ( @{ GlitchVape::Config::list_presets() } )
+    my $shipped = File::Spec->rel2abs( "$FindBin::Bin/../presets" );
+
+    my @shipped =
+        grep { File::Spec->rel2abs( $_->{ path } ) =~ m{\A\Q$shipped\E/} }
+        @{ GlitchVape::Config::list_presets() };
+
+    cmp_ok scalar @shipped, '>=', 8, 'the shipped presets are all found';
+
+    for my $entry ( @shipped )
     {
         my $name = $entry->{ name };
         my $ok   = eval {

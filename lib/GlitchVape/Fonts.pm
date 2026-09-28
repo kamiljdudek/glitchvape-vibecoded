@@ -6,6 +6,7 @@ use warnings;
 use File::Spec ();
 
 use GlitchVape::Assets ();
+use GlitchVape::Paths  ();
 
 use GlitchVape::Tools ();
 
@@ -51,8 +52,11 @@ the installed data directory in a package.
 
 =item * F<assets/fonts-nonfree> beside it, which holds the typefaces this
 project may not hand on in its base package -- see L</TWO BUNDLED
-DIRECTORIES>. Last, so that anything dropped in above shadows a bundled font
-of the same name rather than fighting it.
+DIRECTORIES>. After the drop-in directories, so that anything dropped in above
+shadows a bundled font of the same name rather than fighting it.
+
+=item * The directories plug-ins added, in the order they loaded -- see
+L</WHAT A PLUG-IN CAN ADD>.
 
 =back
 
@@ -84,6 +88,21 @@ searched first, so a loose file still wins over one in a folder beneath it.
 Only formats FreeType can actually load are considered: C<ttf>, C<otf>,
 C<ttc>, C<pcf> and C<bdf>. The C<woff> and C<woff2> files that font releases
 carry for the web are ignored, because ImageMagick cannot render from them.
+
+=head1 WHAT A PLUG-IN CAN ADD
+
+A role, and a directory to find fonts in. A role is the whole point of the
+indirection -- a plug-in whose effect wants "a font that looks like a till
+receipt" names one, lists the faces that would do best-first, and a machine
+without any of them renders with whatever comes last rather than failing.
+
+A directory is how a plug-in ships the face itself. It is searched after
+everything else, so nothing a plug-in brings can shadow a font the program or
+its user already chose. It is refused if any font in it has no licence file
+beside it or above it, which is the rule C<make check-licenses> holds the
+bundled fonts to, read at load time instead because nobody's build ever saw
+the plug-in -- and it is what lets the about window quote the licence rather
+than claim one.
 
 =cut
 
@@ -151,6 +170,11 @@ my %CACHE;
 # Each search directory walked once, keyed by path. See _files_under.
 my %SCANNED;
 
+# What plug-ins added: roles as { plugin, hint } beside their %ROLE entry, and
+# font directories as { dir, plugin } in the order they arrived.
+my %ROLE_FROM;
+my @DIR;
+
 =head2 roles()
 
 Sorted list of known role names.
@@ -160,6 +184,140 @@ Sorted list of known role names.
 sub roles
 {
     my @roles = sort keys %ROLE;
+    return @roles;
+}
+
+=head2 register_role( name => $role, fonts => [ ... ], hint => $text )
+
+C<fonts> is the candidate list, best first, as font names or file names.
+C<hint> is the advice L</resolve_or_die> gives when none of them is found; it
+is optional, and without it the advice is the generic one.
+
+=cut
+
+sub register_role
+{
+    my ( $class, %arg ) = @_;
+
+    my $name = $arg{ name } // q{};
+
+    die "GlitchVape::Fonts: a font role needs a name made of lower case "
+        . "letters, digits and underscores\n"
+        unless $name =~ /\A[a-z][a-z0-9_]*\z/;
+
+    if ( $ROLE{ $name } )
+    {
+        my $whose = 'the program itself';
+        $whose = "plug-in $ROLE_FROM{$name}{plugin}"
+            if $ROLE_FROM{ $name } && defined $ROLE_FROM{ $name }{ plugin };
+
+        die "GlitchVape::Fonts: font role '$name' registered twice -- "
+            . "$whose already has it\n";
+    }
+
+    my @fonts = grep { defined && length } @{ $arg{ fonts } || [] };
+
+    die "GlitchVape::Fonts: font role '$name' lists no fonts\n"
+        unless @fonts;
+
+    require GlitchVape::Plugins;
+
+    $ROLE{ $name }      = \@fonts;
+    $ROLE_FROM{ $name } = {
+        plugin => GlitchVape::Plugins::owner( scalar caller ),
+        hint   => $arg{ hint },
+    };
+
+    # A spec that resolved to nothing before may name this role now.
+    %CACHE = ();
+
+    return $name;
+}
+
+=head2 add_dir( $dir )
+
+Search C<$dir> for fonts, after everything else. Dies if the directory is not
+there, or if any font under it has no licence -- see L</WHAT A PLUG-IN CAN
+ADD>.
+
+=cut
+
+sub add_dir
+{
+    my ( $class, $dir ) = @_;
+
+    die "GlitchVape::Fonts: no font directory given\n"
+        unless defined $dir && length $dir;
+    die "GlitchVape::Fonts: font directory $dir is not there\n"
+        unless -d $dir;
+
+    require GlitchVape::Licenses;
+    require GlitchVape::Plugins;
+
+    if ( my @bare = GlitchVape::Licenses::unlicensed( $dir ) )
+    {
+        my $more = @bare > 1 ? sprintf( ' and %d more', @bare - 1 ) : q{};
+
+        die "GlitchVape::Fonts: $bare[0]$more has no licence file beside "
+            . "it or above it, and a font ships only with its licence\n";
+    }
+
+    push @DIR,
+        {
+        dir    => $dir,
+        plugin => GlitchVape::Plugins::owner( scalar caller ),
+        };
+
+    %CACHE = ();
+
+    return $dir;
+}
+
+=head2 retract( $plugin ) / contributions( $plugin )
+
+A plug-in's roles and directories, taken back or listed -- the two questions
+L<GlitchVape::Plugins> asks every place a plug-in can add to.
+
+=cut
+
+sub retract
+{
+    my ( $class, $plugin ) = @_;
+
+    for my $role ( _roles_from( $plugin ) )
+    {
+        delete $ROLE{ $role };
+        delete $ROLE_FROM{ $role };
+    }
+
+    @DIR   = grep { ( $_->{ plugin } // q{} ) ne $plugin } @DIR;
+    %CACHE = ();
+
+    return;
+}
+
+sub contributions
+{
+    my ( $class, $plugin ) = @_;
+
+    return {
+        'font roles'       => [ _roles_from( $plugin ) ],
+        'font directories' => [
+            map  { $_->{ dir } }
+            grep { ( $_->{ plugin } // q{} ) eq $plugin } @DIR
+        ],
+    };
+}
+
+sub _roles_from
+{
+    my ( $plugin ) = @_;
+
+    my @roles = sort grep {
+        defined $ROLE_FROM{ $_ }{ plugin }
+            && $ROLE_FROM{ $_ }{ plugin } eq $plugin
+    } keys %ROLE_FROM;
+
     return @roles;
 }
 
@@ -200,17 +358,7 @@ directory to hang it off, which is a system account rather than a person.
 
 sub user_dir
 {
-    my $base = $ENV{ XDG_DATA_HOME };
-
-    # A relative XDG path is to be ignored rather than resolved, says the
-    # specification, and it is right: relative to what?
-    if ( !defined $base || !length $base || $base !~ m{\A/} )
-    {
-        my $home = $ENV{ HOME };
-        return undef unless defined $home && length $home;
-
-        $base = File::Spec->catdir( $home, '.local', 'share' );
-    }
+    my $base = GlitchVape::Paths::data_home() or return undef;
 
     return File::Spec->catdir( $base, 'glitchvape', 'fonts' );
 }
@@ -235,32 +383,17 @@ sub search_dirs
     }
 
     push @dirs,
-        map { File::Spec->catdir( $_, 'glitchvape', 'fonts' ) } _data_dirs();
+        map { File::Spec->catdir( $_, 'glitchvape', 'fonts' ) }
+        GlitchVape::Paths::data_dirs();
 
     push @dirs, asset_dir(), extra_dir();
 
+    # A plug-in's own fonts come last of all, so that nothing it ships can
+    # shadow a face the program or its user already chose.
+    push @dirs, map { $_->{ dir } } @DIR;
+
     my %seen;
     return grep { -d && !$seen{ $_ }++ } @dirs;
-}
-
-# The system data directories, XDG_DATA_DIRS unioned with the defaults rather
-# than replaced by them. The specification says a set variable replaces the
-# default, but desktop sessions routinely set it to a list that has dropped
-# /usr/local/share, and a documented drop-in directory that silently stops
-# being searched depending on which session started the program is worse than
-# searching two directories that are usually empty.
-sub _data_dirs
-{
-    my @dirs;
-
-    push @dirs, grep { length } split /:/, $ENV{ XDG_DATA_DIRS }
-        if defined $ENV{ XDG_DATA_DIRS };
-
-    push @dirs, File::Spec->catdir( q{}, 'usr', 'local', 'share' ),
-        File::Spec->catdir( q{}, 'usr', 'share' );
-
-    my %seen;
-    return grep { !$seen{ $_ }++ } @dirs;
 }
 
 =head2 resolve( $spec )
@@ -353,6 +486,13 @@ sub resolve_or_die
     );
 
     my $hint = $hint_for{ lc $spec };
+
+    # A role a plug-in registered says for itself what would satisfy it.
+    if ( !defined $hint && $ROLE_FROM{ lc $spec } )
+    {
+        my $said = $ROLE_FROM{ lc $spec }{ hint };
+        $hint = "  $said\n" if defined $said && length $said;
+    }
 
     # An unrecognised spec is a literal font name rather than a role, so there
     # is nothing role-specific to suggest.

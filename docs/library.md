@@ -19,7 +19,9 @@ GlitchVape::render(
 | Module | |
 |---|---|
 | `GlitchVape` | facade: `render()`, `effect_list()` |
-| `GlitchVape::Registry` | effect declaration, stage model, presentable names, parameter validation |
+| `GlitchVape::Registry` | effect declaration, stage model, presentable names, parameter validation, suggestion lists |
+| `GlitchVape::Plugins` | finding, trying and loading plug-ins; the plug-in contract, in its POD |
+| `GlitchVape::Test` | the checks every effect owes, for the suite and for a plug-in's own tests |
 | `GlitchVape::Paths` | where the data files ended up, checkout or installed |
 | `GlitchVape::Pipeline` | ordered execution |
 | `GlitchVape::Config` | preset loading, inheritance, override merging |
@@ -34,9 +36,12 @@ GlitchVape::render(
 | `GlitchVape::VGA` | the 8x16 text-mode font and the CGA palette |
 | `GlitchVape::Animate` | frame sequences to MP4/GIF, and muxing a track |
 | `GlitchVape::Audio` | cropping, filtering and rendering a soundtrack |
-| `GlitchVape::Generator` | the registry of synthesised soundtrack kinds |
+| `GlitchVape::Generator` | the registry of synthesised soundtrack kinds, each declared in its own module |
 | `GlitchVape::DTMF` | spelling a phrase out in dialpad tones |
 | `GlitchVape::Noise` | the hiss of an untuned television |
+| `GlitchVape::Geiger` | a Geiger counter ticking |
+| `GlitchVape::Heart` | a heartbeat |
+| `GlitchVape::Drive` | a hard disk working, under a fan |
 | `GlitchVape::Wav` | packed samples into a RIFF file |
 
 The graphical interface is a separate set of modules that the library does not

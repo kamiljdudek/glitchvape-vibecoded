@@ -47,6 +47,114 @@ my %OPTIONAL =
 # all. The rest widen what it will accept.
 my %REQUIRED_FORMAT = map { $_ => 1 } qw(PNG JPEG);
 
+# Which plug-in taught this module about a tool, keyed by the tool's name.
+my %FROM;
+
+=head2 known( $name )
+
+Whether C<$name> is a tool this module knows how to look for -- one of its
+own, or one a plug-in registered. An effect's C<requires> may only name these:
+a tool that is not in the table can never be found, so it would be reported
+missing whether or not it was installed.
+
+=cut
+
+sub known
+{
+    my ( $name ) = @_;
+
+    return 0 unless defined $name;
+    return exists $TOOL{ $name } ? 1 : 0;
+}
+
+=head2 register( name => $name, bins => [ ... ], pkg => $package )
+
+A tool a plug-in's effects need, so that their C<requires> can name it and
+C<--check-deps> and the dependencies window can report on it. C<bins> is the
+binaries to look for, in preference order; C<pkg> is what to install to get
+one, and defaults to the name.
+
+A plug-in's tool is optional as far as the program is concerned -- everything
+else works without it -- and required only by the effects that name it, which
+say so when they are asked to run.
+
+=cut
+
+sub register
+{
+    my ( $class, %arg ) = @_;
+
+    my $name = $arg{ name } // q{};
+
+    die "GlitchVape::Tools: a tool needs a name made of lower case letters, "
+        . "digits and underscores\n"
+        unless $name =~ /\A[a-z][a-z0-9_]*\z/;
+
+    if ( $TOOL{ $name } )
+    {
+        my $whose = 'the program itself';
+        $whose = "plug-in $FROM{$name}" if defined $FROM{ $name };
+
+        die "GlitchVape::Tools: tool '$name' registered twice -- $whose "
+            . "already has it\n";
+    }
+
+    my @bins = grep { defined && length } @{ $arg{ bins } || [ $name ] };
+
+    die "GlitchVape::Tools: tool '$name' names no binary to look for\n"
+        unless @bins;
+
+    require GlitchVape::Plugins;
+
+    $TOOL{ $name }     = { bins => \@bins, pkg => $arg{ pkg } // $name };
+    $OPTIONAL{ $name } = 1;
+    $FROM{ $name }     = GlitchVape::Plugins::owner( scalar caller );
+
+    # Asked about before it was registered, it was cached as nowhere.
+    delete $CACHE{ $name };
+
+    return $name;
+}
+
+=head2 retract( $plugin ) / contributions( $plugin )
+
+A plug-in's tools, taken back or listed -- the two questions
+L<GlitchVape::Plugins> asks every place a plug-in can add to.
+
+=cut
+
+sub retract
+{
+    my ( $class, $plugin ) = @_;
+
+    for my $name ( _from( $plugin ) )
+    {
+        delete $TOOL{ $name };
+        delete $OPTIONAL{ $name };
+        delete $FROM{ $name };
+        delete $CACHE{ $name };
+    }
+
+    return;
+}
+
+sub contributions
+{
+    my ( $class, $plugin ) = @_;
+
+    return { tools => [ _from( $plugin ) ] };
+}
+
+sub _from
+{
+    my ( $plugin ) = @_;
+
+    my @names =
+        sort grep { defined $FROM{ $_ } && $FROM{ $_ } eq $plugin } keys %FROM;
+
+    return @names;
+}
+
 =head2 find( $name )
 
 Absolute path to the tool, or undef. Cached.

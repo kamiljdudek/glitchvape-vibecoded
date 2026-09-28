@@ -4,8 +4,9 @@ use strict;
 use warnings;
 use utf8;
 
-use GlitchVape::Random ();
-use GlitchVape::Wav    ();
+use GlitchVape::Generator ();
+use GlitchVape::Random    ();
+use GlitchVape::Wav       ();
 
 our $VERSION = '0.01';
 
@@ -508,14 +509,44 @@ sub _mmss
     return sprintf '%d:%04.1f', $minutes, $seconds - $minutes * 60;
 }
 
+# ---------------------------------------------------------------------------
+# The declaration. Here rather than in GlitchVape::Generator, which is where
+# every kind's used to be: a kind is the module that makes the sound, and a
+# plug-in's kind can only be declared beside its code, so the program's own
+# are too -- see GlitchVape::Generator/register.
+
+GlitchVape::Generator->register(
+    kind    => 'heart',
+    label   => 'Heartbeat',
+    icon    => 'emote-love-symbolic',
+    summary => 'Lub-dub, wandering the way a real one does',
+    doc     => <<'DOC',
+Two valve closures a beat, and the gap between them is shorter than the gap to
+the next beat -- which is the difference between a heartbeat and a drum loop.
+As the rate rises it is the pause that disappears rather than both gaps
+shrinking together, which is why a fast one sounds urgent.
+
+The rate wanders within a ceiling you set, at a pace you set, and stays
+irregular at either extreme. It has no natural end.
+DOC
+    params   => GlitchVape::Heart::params(),
+    order    => [ GlitchVape::Heart::param_order() ],
+    duration => \&GlitchVape::Heart::duration,
+    describe => \&GlitchVape::Heart::describe,
+    render   => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Heart::render( %arg );
+    },
+);
+
 1;
 
 __END__
 
 =head1 SEE ALSO
 
-L<GlitchVape::Generator>, which registers this as a kind of track,
-L<GlitchVape::Geiger> for the other one whose timing is the point, and
+L<GlitchVape::Generator>, the registry this declares itself to as a kind of
+track, L<GlitchVape::Geiger> for the other one whose timing is the point, and
 L<GlitchVape::Wav>, where the samples end up.
 
 =cut

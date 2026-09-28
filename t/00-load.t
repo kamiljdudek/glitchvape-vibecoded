@@ -32,9 +32,11 @@ my @modules = qw(
     GlitchVape::Paths
     GlitchVape::Pipeline
     GlitchVape::Pixels
+    GlitchVape::Plugins
     GlitchVape::Random
     GlitchVape::Raster
     GlitchVape::Registry
+    GlitchVape::Test
     GlitchVape::Tools
     GlitchVape::VGA
     GlitchVape::Wav

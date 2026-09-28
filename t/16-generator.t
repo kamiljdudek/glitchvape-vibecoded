@@ -12,6 +12,7 @@ use File::Temp ();
 use Test::More;
 use GlitchVape::Generator ();
 use GlitchVape::Noise     ();
+use GlitchVape::Tools     ();
 use GlitchVape::Wav       ();
 
 # The registry, and the one generator that is not tested anywhere else.
@@ -369,6 +370,101 @@ sub power_at
     is $channels,      2,        'the channel count is honoured';
     is $rate,          8000,     'and the rate';
     is length( $wav ), 44 + 100, 'header plus samples, and nothing else';
+}
+
+# ---------------------------------------------------------------------------
+# A kind is checked when it is registered
+
+# The registry used to take whatever it was given. A second registration of a
+# name replaced the first in silence -- so a plug-in could have swapped the
+# program's static for its own without a word -- and a kind declared without
+# an order became a dialog with no controls in it and no error anywhere.
+{
+    my $n = 0;
+
+    my $refusal = sub {
+        my ( %spec ) = @_;
+
+        my %declared = (
+            kind   => 'test_kind_' . $n++,
+            label  => 'A kind with something wrong with it',
+            params => {
+                level => { default => 0.5, type => 'num', min => 0, max => 1 }
+            },
+            duration => sub { 1 },
+            render   => sub { return },
+            %spec,
+        );
+
+        my $ok = eval { GlitchVape::Generator->register( %declared ); 1 };
+        return $ok ? 'accepted' : $@;
+    };
+
+    my $label = GlitchVape::Generator::label( 'static' );
+
+    like $refusal->( kind => 'static' ),
+        qr/'static' registered twice -- the program itself/,
+        'a kind registered twice is refused';
+    is GlitchVape::Generator::label( 'static' ), $label,
+        'and the first one is still the one there';
+
+    like $refusal->( render => undef ), qr/has no render coderef/,
+        'a kind that cannot render';
+    like $refusal->( duration => undef ), qr/has no duration coderef/,
+        'or has no length';
+    like $refusal->( label => undef ), qr/has no label/,
+        'or no name to be shown by';
+    like $refusal->( kind => 'With Space' ), qr/must be lower case letters/,
+        'or a name --generate could not be given';
+    like $refusal->( lable => 'typo' ), qr/'lable', which means nothing here/,
+        'a key that means nothing, which would be ignored in silence';
+    like $refusal->( order => [ 'level', 'loudness' ] ),
+        qr/names loudness, which it does not declare/,
+        'an order that names a parameter the kind does not have';
+    like $refusal->( order => [] ), qr/leaves out level/,
+        'or leaves one out, which would get no control';
+    like $refusal->( order => [ 'level', 'level' ] ),
+        qr/names level more than once/,
+        'or names one twice';
+    like $refusal->( params =>
+            { level => { default => 2, type => 'num', min => 0, max => 1 } } ),
+        qr/refuses its own default/,
+        'parameters are held to the same rules as an effect\'s';
+
+    is $refusal->( kind => 'test_defaults' ), 'accepted',
+        'a kind that says only what it must is accepted';
+
+    my $declared = GlitchVape::Generator::get( 'test_defaults' );
+    is_deeply $declared->{ order }, [ 'level' ],
+        'its order defaults to every parameter it declares';
+    is_deeply $declared->{ resolve }->( { level => 3 } ), { level => 1 },
+        'and its resolve to clamping against them';
+}
+
+# ---------------------------------------------------------------------------
+# The kinds that ship declare themselves
+
+# In their own modules, beside the code that makes the sound, which is where a
+# plug-in's kind has to be declared -- and in an order that does not depend on
+# which of them somebody happened to load first, which it used to.
+{
+    is GlitchVape::Generator::get( 'static' )->{ module }, 'GlitchVape::Noise',
+        'static is declared by the module that makes it';
+
+    my @kinds = grep { !/\Atest_/ } GlitchVape::Generator::kinds();
+    is_deeply \@kinds, [ qw(dtmf static geiger heart drive) ],
+        'the program\'s kinds come in the order the interface offers them';
+
+    for my $first ( qw(GlitchVape::Drive GlitchVape::Heart GlitchVape::DTMF) )
+    {
+        my $out =
+            GlitchVape::Tools::capture( $^X, "-I$FindBin::Bin/../lib",
+            "-M$first", '-e',
+            'print join q{,}, GlitchVape::Generator::kinds()' );
+
+        is $out, 'dtmf,static,geiger,heart,drive',
+            "and in the same order when $first is the first thing loaded";
+    }
 }
 
 done_testing;

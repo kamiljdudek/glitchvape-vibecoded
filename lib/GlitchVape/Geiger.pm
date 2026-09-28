@@ -4,8 +4,9 @@ use strict;
 use warnings;
 use utf8;
 
-use GlitchVape::Random ();
-use GlitchVape::Wav    ();
+use GlitchVape::Generator ();
+use GlitchVape::Random    ();
+use GlitchVape::Wav       ();
 
 our $VERSION = '0.01';
 
@@ -415,14 +416,46 @@ sub _mmss
     return sprintf '%d:%04.1f', $minutes, $seconds - $minutes * 60;
 }
 
+# ---------------------------------------------------------------------------
+# The declaration. Here rather than in GlitchVape::Generator, which is where
+# every kind's used to be: a kind is the module that makes the sound, and a
+# plug-in's kind can only be declared beside its code, so the program's own
+# are too -- see GlitchVape::Generator/register.
+
+GlitchVape::Generator->register(
+    kind    => 'geiger',
+    label   => 'Geiger counter',
+    icon    => 'radio-symbolic',
+    summary => 'Ticks, clumping as the source comes and goes',
+    doc     => <<'DOC',
+A Geiger-Müller tube ticking. The gaps between clicks are drawn from the
+exponential distribution radioactive decay actually has, which is what makes
+them clump into bursts and pauses rather than sounding like a metronome with a
+fault -- and the tube's dead time is modelled too, so a strong source
+saturates into a buzz instead of merely ticking faster.
+
+The distance to the source wanders, so the rate rises and falls by the inverse
+square law. It has no natural end: under a soundtrack it simply carries on
+wandering.
+DOC
+    params   => GlitchVape::Geiger::params(),
+    order    => [ GlitchVape::Geiger::param_order() ],
+    duration => \&GlitchVape::Geiger::duration,
+    describe => \&GlitchVape::Geiger::describe,
+    render   => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Geiger::render( %arg );
+    },
+);
+
 1;
 
 __END__
 
 =head1 SEE ALSO
 
-L<GlitchVape::Generator>, which registers this as a kind of track,
-L<GlitchVape::Heart> for the other one that wanders, and L<GlitchVape::Wav>,
-where the samples end up.
+L<GlitchVape::Generator>, the registry this declares itself to as a kind of
+track, L<GlitchVape::Heart> for the other one that wanders, and
+L<GlitchVape::Wav>, where the samples end up.
 
 =cut

@@ -2,13 +2,9 @@ package GlitchVape::Generator;
 
 use strict;
 use warnings;
-use utf8;
 
-use GlitchVape::DTMF   ();
-use GlitchVape::Drive  ();
-use GlitchVape::Geiger ();
-use GlitchVape::Heart  ();
-use GlitchVape::Noise  ();
+use GlitchVape::Plugins  ();
+use GlitchVape::Registry ();
 
 our $VERSION = '0.01';
 
@@ -43,7 +39,34 @@ L<GlitchVape::DTMF/render> for the one that has an opinion about it.
 =cut
 
 my %KIND;
-my @ORDER;
+
+# How many kinds have registered, so that ties in the order below go to
+# whichever came first.
+my $SEQ = 0;
+
+# The kinds that ship with the program, as the modules that declare them, in
+# the order the interface offers them. Each module registers its own kind as
+# it loads -- the end of this file loads them -- so this list is what gets
+# loaded as well as where each goes.
+#
+# The order cannot simply be the order of registration, which is what it used
+# to be. Loading one of these modules first loads this one, which loads the
+# other four, which register before the one that started it all -- so the
+# order would depend on which module somebody happened to mention first.
+my @BUILTIN = qw(
+    GlitchVape::DTMF
+    GlitchVape::Noise
+    GlitchVape::Geiger
+    GlitchVape::Heart
+    GlitchVape::Drive
+);
+
+# Everything a kind may declare; a key outside these is a typo, refused for
+# the reason GlitchVape::Registry refuses one in an effect.
+my %KIND_KEY = map { $_ => 1 } qw(
+    kind label icon summary doc ending params order
+    resolve duration describe render readout
+);
 
 =head2 register( %spec )
 
@@ -59,6 +82,18 @@ my @ORDER;
     ending   => bool                           whether that length is intrinsic
     render   => sub { my ( %arg ) = @_ }       spec, output, fill_to
     describe => sub { my ( $spec ) = @_ }      one line for a track row
+    readout  => sub { my ( $spec ) = @_ }      what the dialog shows it will do
+
+C<kind>, C<label>, C<params>, C<duration> and C<render> are required.
+C<resolve> defaults to L</resolve_params> over C<params>, which is what four of
+the five kinds that ship would otherwise write out by hand. C<order> defaults
+to L<GlitchVape::Registry/sorted_params>, and when given has to name every
+parameter exactly once -- one it leaves out gets no control in the dialog,
+which is how a declaration missing a key used to become a window with no
+controls in it and no error anywhere.
+
+A kind registered twice is refused, as an effect is: the second registration
+used to replace the first in silence.
 
 =cut
 
@@ -66,13 +101,148 @@ sub register
 {
     my ( $class, %spec ) = @_;
 
-    my $kind = $spec{ kind }
-        or die "GlitchVape::Generator: a kind needs a name\n";
+    my $kind = $spec{ kind } // q{};
 
-    push @ORDER, $kind unless $KIND{ $kind };
+    die "GlitchVape::Generator: a kind needs a name\n" unless length $kind;
+
+    die "GlitchVape::Generator: kind '$kind' must be lower case letters, "
+        . "digits and underscores, starting with a letter\n"
+        unless $kind =~ GlitchVape::Registry::NAME;
+
+    if ( my $had = $KIND{ $kind } )
+    {
+        my $whose = 'the program itself';
+        $whose = "plug-in $had->{plugin}" if defined $had->{ plugin };
+
+        die "GlitchVape::Generator: kind '$kind' registered twice -- $whose "
+            . "already has it\n";
+    }
+
+    my @odd = grep { !$KIND_KEY{ $_ } } sort keys %spec;
+    die "GlitchVape::Generator: kind '$kind' declares "
+        . join( ', ', map { "'$_'" } @odd )
+        . ', which means nothing here. Known: '
+        . join( ', ', sort keys %KIND_KEY ) . "\n"
+        if @odd;
+
+    die "GlitchVape::Generator: kind '$kind' has no label\n"
+        unless defined $spec{ label } && length $spec{ label };
+
+    for my $code ( qw(duration render) )
+    {
+        die "GlitchVape::Generator: kind '$kind' has no $code coderef\n"
+            unless ref $spec{ $code } eq 'CODE';
+    }
+
+    for my $code ( qw(resolve describe readout) )
+    {
+        die "GlitchVape::Generator: kind '$kind' declares a $code that is "
+            . "not a coderef\n"
+            if defined $spec{ $code } && ref $spec{ $code } ne 'CODE';
+    }
+
+    my $params = $spec{ params };
+    die "GlitchVape::Generator: kind '$kind' declares no params\n"
+        unless defined $params;
+
+    GlitchVape::Registry::check_params( 'GlitchVape::Generator', $kind,
+        $params );
+
+    $spec{ order } = _checked_order( $kind, $params, $spec{ order } );
+
+    $spec{ resolve } //= sub {
+        my ( $given ) = @_;
+        return resolve_params( $params, $given );
+    };
+
+    $spec{ plugin } = GlitchVape::Plugins::owner( scalar caller );
+    $spec{ module } = scalar caller;
+    $spec{ seq }    = $SEQ++;
+
     $KIND{ $kind } = \%spec;
 
     return $kind;
+}
+
+sub _checked_order
+{
+    my ( $kind, $params, $order ) = @_;
+
+    return [ GlitchVape::Registry::sorted_params( $params ) ]
+        unless defined $order;
+
+    die "GlitchVape::Generator: kind '$kind' gives its order as something "
+        . "other than a list\n"
+        unless ref $order eq 'ARRAY';
+
+    my %count;
+    $count{ $_ }++ for @$order;
+
+    my @unknown = grep { !$params->{ $_ } } sort keys %count;
+    my @twice   = grep { $count{ $_ } > 1 } sort keys %count;
+    my @missing = grep { !$count{ $_ } } sort keys %$params;
+
+    my @wrong;
+    push @wrong,
+        'names ' . join( ', ', @unknown ) . ', which it does not declare'
+        if @unknown;
+    push @wrong, 'names ' . join( ', ', @twice ) . ' more than once' if @twice;
+    push @wrong, 'leaves out ' . join( ', ', @missing ) if @missing;
+
+    die "GlitchVape::Generator: kind '$kind' has an order that "
+        . join( '; ', @wrong ) . "\n"
+        if @wrong;
+
+    return [ @$order ];
+}
+
+=head2 retract( $plugin ) / contributions( $plugin )
+
+A plug-in's kinds, taken back or listed -- the two questions
+L<GlitchVape::Plugins> asks every place a plug-in can add to.
+
+=cut
+
+sub retract
+{
+    my ( $class, $plugin ) = @_;
+
+    delete @KIND{ _from( $plugin ) };
+
+    return;
+}
+
+sub contributions
+{
+    my ( $class, $plugin ) = @_;
+
+    return { 'soundtrack kinds' => [ _from( $plugin ) ] };
+}
+
+sub _from
+{
+    my ( $plugin ) = @_;
+
+    my @kinds = sort grep {
+        defined $KIND{ $_ }{ plugin } && $KIND{ $_ }{ plugin } eq $plugin
+    } keys %KIND;
+
+    return @kinds;
+}
+
+=head2 plugin( $kind )
+
+The plug-in a kind came from, or undef for one of the program's own.
+
+=cut
+
+sub plugin
+{
+    my ( $kind ) = @_;
+    $kind = $_[ 1 ] if ( $kind // q{} ) eq __PACKAGE__;
+
+    my $declared = get( $kind ) or return undef;
+    return $declared->{ plugin };
 }
 
 =head2 icon( $kind )
@@ -96,7 +266,8 @@ sub icon
 
 =head2 kinds() / get( $kind ) / all()
 
-The registered kinds in declaration order, one declaration, and the lot.
+The registered kinds -- the program's own in a fixed order, then each
+plug-in's -- one declaration, and the lot.
 
 =cut
 
@@ -122,9 +293,36 @@ sub has_ending
     return 1;
 }
 
-sub kinds { return @ORDER }
-sub get   { return $KIND{ $_[ 0 ] // q{} } }
-sub all   { return { %KIND } }
+sub kinds
+{
+    my %rank;
+    @rank{ @BUILTIN } = 0 .. $#BUILTIN;
+
+    # The program's own in the order @BUILTIN gives, then each plug-in's in
+    # the order it registered them, plug-ins sorted by name.
+    my %by;
+    for my $kind ( keys %KIND )
+    {
+        my $declared = $KIND{ $kind };
+
+        $by{ $kind } = [
+            $rank{ $declared->{ module } } // scalar @BUILTIN,
+            $declared->{ plugin } // q{},
+            $declared->{ seq },
+        ];
+    }
+
+    my @kinds = sort {
+               $by{ $a }[ 0 ] <=> $by{ $b }[ 0 ]
+            || $by{ $a }[ 1 ] cmp $by{ $b }[ 1 ]
+            || $by{ $a }[ 2 ] <=> $by{ $b }[ 2 ]
+    } keys %KIND;
+
+    return @kinds;
+}
+
+sub get { return $KIND{ $_[ 0 ] // q{} } }
+sub all { return { %KIND } }
 
 =head2 resolve_params( $declared, $given )
 
@@ -361,6 +559,15 @@ sub spec_parts
 
     my @parts = ( 'gen', $kind );
 
+    # A plug-in's kind is its code as well as its settings: an upgraded
+    # plug-in makes a different sound from the same values, and a key that
+    # did not say so would serve the old one back. The program's own add
+    # nothing here, so no key that worked before this changes.
+    if ( my $plugin = plugin( $kind ) )
+    {
+        push @parts, GlitchVape::Plugins::fingerprint( $plugin ) // $plugin;
+    }
+
     for my $name ( sort keys %$spec )
     {
         # The leading-underscore keys are what a resolve worked out rather
@@ -374,155 +581,14 @@ sub spec_parts
 }
 
 # ---------------------------------------------------------------------------
-# The kinds
+# The kinds that ship. Each registers itself as it loads; @BUILTIN says why
+# the list is here rather than whatever happened to load first.
 
-__PACKAGE__->register(
-    kind    => 'dtmf',
-    label   => 'Phone dial tones',
-    icon    => 'call-start-symbolic',
-    summary => 'A phrase spelled out in dialpad tones',
-    doc     => <<'DOC',
-Text dialled on a phone keypad, multi-tap style. Under a soundtrack it plays
-once, stops, and after three seconds of silence the line opens again -- rather
-than looping, which would turn a sentence into a stutter.
-DOC
-    ending   => 1,
-    params   => GlitchVape::DTMF::params(),
-    order    => [ GlitchVape::DTMF::param_order() ],
-    resolve  => \&GlitchVape::DTMF::resolve,
-    duration => \&GlitchVape::DTMF::duration,
-    describe => \&GlitchVape::DTMF::describe,
-    render   => sub {
-        my ( %arg ) = @_;
-        return GlitchVape::DTMF::render( %arg );
-    },
-    readout => sub {
-        my ( $spec ) = @_;
-
-        my $keys = GlitchVape::DTMF::keys_of( $spec );
-        return q{} unless length $keys;
-
-        return "dials: $keys";
-    },
-);
-
-__PACKAGE__->register(
-    kind    => 'static',
-    label   => 'TV static',
-    icon    => 'audio-speakers-symbolic',
-    summary => 'The hiss of a set tuned to nothing',
-    doc     => <<'DOC',
-Analogue snow. Pink rather than white, and band-limited to a television's
-audio path, so it is restful in the way rain is rather than fatiguing in the
-way white noise is -- while still being unmistakably static. Mains hum and the
-occasional crackle are what stop it sounding like a synthesiser.
-
-It has no natural end, so under a soundtrack it simply carries on: there is no
-seam to hide.
-DOC
-    params   => GlitchVape::Noise::params(),
-    order    => [ GlitchVape::Noise::param_order() ],
-    duration => \&GlitchVape::Noise::duration,
-    describe => \&GlitchVape::Noise::describe,
-    resolve  => sub {
-        my ( $spec ) = @_;
-        return resolve_params( GlitchVape::Noise::params(), $spec );
-    },
-    render => sub {
-        my ( %arg ) = @_;
-        return GlitchVape::Noise::render( %arg );
-    },
-);
-
-__PACKAGE__->register(
-    kind    => 'geiger',
-    label   => 'Geiger counter',
-    icon    => 'radio-symbolic',
-    summary => 'Ticks, clumping as the source comes and goes',
-    doc     => <<'DOC',
-A Geiger-Müller tube ticking. The gaps between clicks are drawn from the
-exponential distribution radioactive decay actually has, which is what makes
-them clump into bursts and pauses rather than sounding like a metronome with a
-fault -- and the tube's dead time is modelled too, so a strong source
-saturates into a buzz instead of merely ticking faster.
-
-The distance to the source wanders, so the rate rises and falls by the inverse
-square law. It has no natural end: under a soundtrack it simply carries on
-wandering.
-DOC
-    params   => GlitchVape::Geiger::params(),
-    order    => [ GlitchVape::Geiger::param_order() ],
-    duration => \&GlitchVape::Geiger::duration,
-    describe => \&GlitchVape::Geiger::describe,
-    resolve  => sub {
-        my ( $spec ) = @_;
-        return resolve_params( GlitchVape::Geiger::params(), $spec );
-    },
-    render => sub {
-        my ( %arg ) = @_;
-        return GlitchVape::Geiger::render( %arg );
-    },
-);
-
-__PACKAGE__->register(
-    kind    => 'heart',
-    label   => 'Heartbeat',
-    icon    => 'emote-love-symbolic',
-    summary => 'Lub-dub, wandering the way a real one does',
-    doc     => <<'DOC',
-Two valve closures a beat, and the gap between them is shorter than the gap to
-the next beat -- which is the difference between a heartbeat and a drum loop.
-As the rate rises it is the pause that disappears rather than both gaps
-shrinking together, which is why a fast one sounds urgent.
-
-The rate wanders within a ceiling you set, at a pace you set, and stays
-irregular at either extreme. It has no natural end.
-DOC
-    params   => GlitchVape::Heart::params(),
-    order    => [ GlitchVape::Heart::param_order() ],
-    duration => \&GlitchVape::Heart::duration,
-    describe => \&GlitchVape::Heart::describe,
-    resolve  => sub {
-        my ( $spec ) = @_;
-        return resolve_params( GlitchVape::Heart::params(), $spec );
-    },
-    render => sub {
-        my ( %arg ) = @_;
-        return GlitchVape::Heart::render( %arg );
-    },
-);
-
-__PACKAGE__->register(
-    kind    => 'drive',
-    label   => 'Hard disk',
-    icon    => 'drive-harddisk-symbolic',
-    summary => 'A drive working, under the whirr of a fan',
-    doc     => <<'DOC',
-A spinning-platter drive: air noise and a faint blade tone from the fan, the
-spindle turning under it, and on top the chirps of the head being flung across
-the platter and stopped.
-
-Seeks come in bursts rather than scattered evenly, because that is what a
-drive does -- long quiet, then a rattle while something reads a file, then
-quiet again. A seek's pitch and length come from how far the head went, so the
-same drive reading one file and being defragmented sound different: short hops
-tick, a full stroke is a lower and longer chirp.
-
-It has no natural end: under a soundtrack it simply carries on working.
-DOC
-    params   => GlitchVape::Drive::params(),
-    order    => [ GlitchVape::Drive::param_order() ],
-    duration => \&GlitchVape::Drive::duration,
-    describe => \&GlitchVape::Drive::describe,
-    resolve  => sub {
-        my ( $spec ) = @_;
-        return resolve_params( GlitchVape::Drive::params(), $spec );
-    },
-    render => sub {
-        my ( %arg ) = @_;
-        return GlitchVape::Drive::render( %arg );
-    },
-);
+for my $module ( @BUILTIN )
+{
+    ( my $file = "$module.pm" ) =~ s{::}{/}g;
+    require $file;
+}
 
 1;
 

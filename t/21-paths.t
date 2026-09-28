@@ -109,6 +109,7 @@ print "root=",   GlitchVape::Paths::data_root() // 'undef', "\n";
 print "assets=", GlitchVape::Assets::root(), "\n";
 print "logo=",   GlitchVape::Assets::find('artwork','logo.png') // 'undef', "\n";
 print "presets=", join(',', GlitchVape::Config::preset_dirs()), "\n";
+print "save=", GlitchVape::Config::save_dir(), "\n";
 PROBE
 
     # Run from a directory with no assets/ or presets/ under it, so a pass
@@ -128,6 +129,15 @@ PROBE
         'and a file under it is found';
     like $got{ presets }, qr/\Q$data\E/,
         'presets are searched in the installed data directory';
+
+    # The bug this pins: Save as preset wrote into the first directory on the
+    # path, which installed was this one -- owned by root, so it failed with
+    # "Permission denied", and rewritten by the next upgrade had it not.
+    is $got{ save },
+        File::Spec->catdir( "$tmp", 'home', 'glitchvape', 'presets' ),
+        'a preset saved from an installed copy goes under XDG_DATA_HOME';
+    unlike $got{ save }, qr/\Q$data\E/,
+        'and never into the data directory the package owns';
 }
 
 # The child chdirs and sets @INC for itself, so nothing here has to be quoted
@@ -145,6 +155,7 @@ sub _probe
         chdir $dir or exit 127;
         delete $ENV{ GLITCHVAPE_ASSETS };
         delete $ENV{ GLITCHVAPE_PRESETS };
+        local $ENV{ XDG_DATA_HOME } = File::Spec->catdir( $dir, 'home' );
         exec { $^X } $^X, "-I$lib", '-e', $program or exit 127;
     }
 

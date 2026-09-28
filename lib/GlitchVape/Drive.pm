@@ -4,8 +4,9 @@ use strict;
 use warnings;
 use utf8;
 
-use GlitchVape::Random ();
-use GlitchVape::Wav    ();
+use GlitchVape::Generator ();
+use GlitchVape::Random    ();
+use GlitchVape::Wav       ();
 
 our $VERSION = '0.01';
 
@@ -702,14 +703,48 @@ sub _mmss
     return sprintf '%d:%04.1f', $minutes, $seconds - $minutes * 60;
 }
 
+# ---------------------------------------------------------------------------
+# The declaration. Here rather than in GlitchVape::Generator, which is where
+# every kind's used to be: a kind is the module that makes the sound, and a
+# plug-in's kind can only be declared beside its code, so the program's own
+# are too -- see GlitchVape::Generator/register.
+
+GlitchVape::Generator->register(
+    kind    => 'drive',
+    label   => 'Hard disk',
+    icon    => 'drive-harddisk-symbolic',
+    summary => 'A drive working, under the whirr of a fan',
+    doc     => <<'DOC',
+A spinning-platter drive: air noise and a faint blade tone from the fan, the
+spindle turning under it, and on top the chirps of the head being flung across
+the platter and stopped.
+
+Seeks come in bursts rather than scattered evenly, because that is what a
+drive does -- long quiet, then a rattle while something reads a file, then
+quiet again. A seek's pitch and length come from how far the head went, so the
+same drive reading one file and being defragmented sound different: short hops
+tick, a full stroke is a lower and longer chirp.
+
+It has no natural end: under a soundtrack it simply carries on working.
+DOC
+    params   => GlitchVape::Drive::params(),
+    order    => [ GlitchVape::Drive::param_order() ],
+    duration => \&GlitchVape::Drive::duration,
+    describe => \&GlitchVape::Drive::describe,
+    render   => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Drive::render( %arg );
+    },
+);
+
 1;
 
 __END__
 
 =head1 SEE ALSO
 
-L<GlitchVape::Generator>, which registers this as a kind of track,
-L<GlitchVape::Geiger> for the other one whose timing is the point of it, and
-L<GlitchVape::Wav>, where the samples end up.
+L<GlitchVape::Generator>, the registry this declares itself to as a kind of
+track, L<GlitchVape::Geiger> for the other one whose timing is the point of
+it, and L<GlitchVape::Wav>, where the samples end up.
 
 =cut

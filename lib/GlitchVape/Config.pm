@@ -40,12 +40,35 @@ resolution so they cannot be clobbered by inheritance.
 
 my $MAX_EXTEND_DEPTH = 8;
 
+# Preset directories plug-ins added, as { dir, plugin }, in the order they
+# arrived.
+my @DIR;
+
 =head2 preset_dirs()
 
-Search path for presets: C<$GLITCHVAPE_PRESETS>, then C<./presets>, then the
-checkout the module was loaded from, then the directory the packaging
-installed the data into. Every one that exists is searched, so a preset of
-your own shadows one that shipped without replacing it.
+Search path for presets, first match winning:
+
+    $GLITCHVAPE_PRESETS          colon-separated, for pointing somewhere else
+    $XDG_DATA_HOME/glitchvape/presets    yours -- where Save as preset writes
+    ./presets
+    the checkout this module was loaded from
+    glitchvape/presets under each $XDG_DATA_DIRS entry
+    the directory the packaging installed the data into
+    the directories plug-ins added
+
+Every one that exists is searched, so a preset of your own shadows one that
+shipped without replacing it -- and yours comes before everything but an
+explicit override, because a preset somebody saved under a name is the one
+they mean when they ask for that name. Plug-ins come last for the converse
+reason: nothing a plug-in ships can change what a name already meant.
+
+=head2 A SAVED PRESET GOES IN A DIRECTORY THAT IS YOURS
+
+It used to go in whichever directory came first on the path, which from a
+checkout was the checkout's own F<presets/> and from an installed package was
+the package's data directory -- owned by root, so saving failed with
+"Permission denied", and would have been rewritten by the next upgrade had it
+not. See L</save_dir>.
 
 =cut
 
@@ -54,11 +77,21 @@ sub preset_dirs
     my @dirs;
     push @dirs, split /:/, $ENV{ GLITCHVAPE_PRESETS }
         if $ENV{ GLITCHVAPE_PRESETS };
+
+    if ( my $user = user_dir() )
+    {
+        push @dirs, $user;
+    }
+
     push @dirs, 'presets';
 
     my $here = __FILE__;
     $here =~ s{/lib/GlitchVape/Config\.pm$}{};
     push @dirs, File::Spec->catdir( $here, 'presets' );
+
+    push @dirs,
+        map { File::Spec->catdir( $_, 'glitchvape', 'presets' ) }
+        GlitchVape::Paths::data_dirs();
 
     # Installed, the walk-up above lands in vendor_perl, which has no presets
     # under it. See GlitchVape::Paths.
@@ -67,8 +100,103 @@ sub preset_dirs
         push @dirs, File::Spec->catdir( $data, 'presets' );
     }
 
+    push @dirs, map { $_->{ dir } } @DIR;
+
     my %seen;
     return grep { -d && !$seen{ $_ }++ } @dirs;
+}
+
+=head2 user_dir()
+
+F<$XDG_DATA_HOME/glitchvape/presets> -- F<~/.local/share/glitchvape/presets>
+by default -- whether or not it exists yet. undef when there is no home
+directory to hang it off.
+
+=cut
+
+sub user_dir
+{
+    my $base = GlitchVape::Paths::data_home() or return undef;
+
+    return File::Spec->catdir( $base, 'glitchvape', 'presets' );
+}
+
+=head2 save_dir()
+
+Where a preset saved from the window is written: the first directory in
+C<$GLITCHVAPE_PRESETS> when that is set, since whoever set it has said where
+presets live, and L</user_dir> otherwise. Either way it is the first directory
+L</preset_dirs> searches, so what was saved under a name is what that name
+finds. Not created here.
+
+=cut
+
+sub save_dir
+{
+    my ( $first ) = grep { length } split /:/,
+        $ENV{ GLITCHVAPE_PRESETS } // q{};
+    return $first if defined $first;
+
+    return user_dir() // 'presets';
+}
+
+=head2 add_preset_dir( $dir )
+
+A directory of presets a plug-in ships, searched after everything else. The
+plug-in finds its own directory -- beside its module, or through
+L<File::ShareDir> -- and says where it is; nothing here needs to know where a
+plug-in was installed.
+
+=cut
+
+sub add_preset_dir
+{
+    my ( $class, $dir ) = @_;
+
+    die "GlitchVape::Config: no preset directory given\n"
+        unless defined $dir && length $dir;
+    die "GlitchVape::Config: preset directory $dir is not there\n"
+        unless -d $dir;
+
+    # Here rather than at the top: nothing but a plug-in calls this, and the
+    # installed-layout test loads this module with only its own dependencies.
+    require GlitchVape::Plugins;
+
+    push @DIR,
+        {
+        dir    => $dir,
+        plugin => GlitchVape::Plugins::owner( scalar caller ),
+        };
+
+    return $dir;
+}
+
+=head2 retract( $plugin ) / contributions( $plugin )
+
+A plug-in's preset directories, taken back or listed -- the two questions
+L<GlitchVape::Plugins> asks every place a plug-in can add to.
+
+=cut
+
+sub retract
+{
+    my ( $class, $plugin ) = @_;
+
+    @DIR = grep { ( $_->{ plugin } // q{} ) ne $plugin } @DIR;
+
+    return;
+}
+
+sub contributions
+{
+    my ( $class, $plugin ) = @_;
+
+    return {
+        'preset directories' => [
+            map  { $_->{ dir } }
+            grep { ( $_->{ plugin } // q{} ) eq $plugin } @DIR
+        ],
+    };
 }
 
 =head2 list_presets()

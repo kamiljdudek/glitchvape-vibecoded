@@ -67,8 +67,13 @@ Suggests:
  fonts-terminus,
  fonts-ipafont-gothic,
  fonts-hack,
+# A plug-in packaged for Debian depends on the API it was written for rather
+# than on a version of this package: the number moves only when something a
+# plug-in could rely on changes incompatibly. See GlitchVape::Plugins.
+Provides:
+ glitchvape-plugin-api-1,
 Description: apply VHS, CRT and databending effects to photographs
- GlitchVape puts a photograph through a signal chain of thirty-nine effects:
+ GlitchVape puts a photograph through a signal chain of forty-seven effects:
  tape wobble and tracking error, chromatic aberration, pixel sorting and
  databending, film grain, scanlines and phosphor grilles, and the text and
  furniture that sit over the top.
@@ -80,6 +85,11 @@ Description: apply VHS, CRT and databending effects to photographs
  .
  This package contains the command-line tools and the library. For the window,
  install glitchvape-gui.
+ .
+ Plug-ins -- Perl modules in the GlitchVape::Plugin namespace -- can add
+ effects, generated soundtracks, palettes, font roles and presets, and are
+ found wherever Perl modules are installed; glitchvape --list-plugins says
+ what was found and what each added.
  .
  Departure Mono and Fusion Pixel are included under the SIL Open Font License
  and VCR OSD Mono under its author's own grant; glitchvape --licenses prints

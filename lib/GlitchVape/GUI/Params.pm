@@ -8,7 +8,6 @@ use Gtk3 ();
 use List::Util qw(any);
 
 use GlitchVape::Fonts    ();
-use GlitchVape::Palette  ();
 use GlitchVape::Registry ();
 
 our $VERSION = '0.01';
@@ -72,11 +71,11 @@ because what an empty field means is a fact about the parameter: C<osd.date>
 draws no date, C<osd.camera> draws no transport indicator, C<text.string>
 draws nothing at all, and a colour means no colour.
 
-C<suggest> and C<choose> both name the values a parameter offers -- a source
-this module knows, or an inline list -- and differ in what typing something
-else would mean. C<suggest> gives a combo with an entry in it, for a value the
-list cannot enumerate; C<choose> gives a plain drop-down, for one where there
-is nothing else to say.
+C<suggest> and C<choose> both name the values a parameter offers -- a named
+list from L<GlitchVape::Registry/SUGGESTION LISTS>, or an inline one -- and
+differ in what typing something else would mean. C<suggest> gives a combo with
+an entry in it, for a value the list cannot enumerate; C<choose> gives a plain
+drop-down, for one where there is nothing else to say.
 
 Three more keys are read here and nowhere in the render path: C<order>, which
 L<GlitchVape::Registry/sorted_params> sorts by; C<label>, used in place of the
@@ -91,39 +90,6 @@ reason: a table keyed on 'effect.param' means adding an effect edits the GUI.
 # Parameters whose value is a colour. Keyed by name rather than by effect,
 # since every effect spells them the same way.
 my %COLOUR_PARAM = map { $_ => 1 } qw(tint color shadow background);
-
-# Where a suggestion list comes from. A parameter opts in by declaring
-# `suggest => 'palette'` in the registry, and the combo then offers these
-# while the entry still takes anything -- a palette parameter also accepts an
-# inline '#FF71CE,#01CDFE' list, so the values are an offer, not a set.
-#
-# Keyed by the kind of suggestion rather than by 'effect.param', which is what
-# it used to be. That spelling meant every new effect wanting a palette needed
-# a line adding here, so the declaration stopped being the whole story and the
-# GUI had to be edited to add an effect. Now a fifth effect wanting palette
-# names says so where its other parameters are described, and this file does
-# not change.
-my %SUGGEST_SOURCE = (
-    palette => sub { GlitchVape::Palette::names() },
-
-    # 'custom' first, because it is the one that is not a name -- it is the
-    # answer for when none of the names is what you meant.
-    duotone =>
-        sub { return ( 'custom', GlitchVape::Palette::duotone_names() ) },
-
-    # 'native' first, because leaving the shape alone is what most renders
-    # want: three of the four presets that letterbox do it for the border
-    # and nothing else.
-    ratio => sub { qw(native 16:9 2.35:1 4:3 1:1 9:16) },
-
-    # The same names again with 'custom' in front of them, for the two effects
-    # that can be handed colours instead of a name. A second source rather
-    # than 'custom' added to the first, because offering it is a claim the
-    # effect has somewhere to put the colours: bitmap.palette has not, and a
-    # drop-down offering an answer the render cannot use is the ambiguity this
-    # whole arrangement exists to remove.
-    palette_custom => sub { return ( 'custom', GlitchVape::Palette::names() ) },
-);
 
 =head2 split( $params )
 
@@ -297,8 +263,10 @@ sub _kind
     # not a continuous quantity to drag through. A drive spins at 5400 or
     # 7200, not at 6318, and a track between them is a track whose whole
     # length is wrong answers.
-    return 'chosen'    if _offered( $arg->{ spec }, 'choose' );
-    return 'suggested' if _offered( $arg->{ spec }, 'suggest' );
+    return 'chosen'
+        if GlitchVape::Registry::offered( $arg->{ spec }, 'choose' );
+    return 'suggested'
+        if GlitchVape::Registry::offered( $arg->{ spec }, 'suggest' );
 
     return 'numeric' if $type eq 'int' || $type eq 'num';
     return 'colours' if _is_colour_list( $arg );
@@ -536,45 +504,16 @@ sub _suggested
 {
     my ( $arg ) = @_;
 
-    return _combo_with_entry( $arg, _offered( $arg->{ spec }, 'suggest' ) );
+    return _combo_with_entry( $arg,
+        GlitchVape::Registry::offered( $arg->{ spec }, 'suggest' ) );
 }
 
 sub _chosen
 {
     my ( $arg ) = @_;
 
-    return _combo_of( $arg, _offered( $arg->{ spec }, 'choose' ) );
-}
-
-# What a parameter offers, or undef if it offers nothing. Two spellings, and
-# the difference is what typing something else would mean:
-#
-#   suggest => ...   these, or anything else you can think of
-#   choose  => ...   these, and there is nothing else to say
-#
-# Which of the two a parameter wants is a fact about the parameter and not
-# about the widget, so it is declared rather than decided here. bitmap.palette
-# chooses: five settings make a bitmap look like a machine, and the palette is
-# which machine, so a list is the whole question. palette.name suggests: that
-# effect is *about* the colours, so an inline '#FF71CE,#01CDFE' that no list
-# could enumerate is exactly what somebody might mean.
-#
-# Either spelling takes a named source or an inline list, and the difference
-# there is whether the values are a fact about the program or about this one
-# parameter. The inline form matters for invariant 1: a named source needs a
-# line in %SUGGEST_SOURCE, so an effect wanting to offer three strings of its
-# own would otherwise have to edit this file to do it.
-sub _offered
-{
-    my ( $spec, $key ) = @_;
-
-    my $offer = $spec->{ $key };
-    return undef unless defined $offer;
-
-    return [ @$offer ] if ref $offer eq 'ARRAY';
-
-    my $source = $SUGGEST_SOURCE{ $offer } or return undef;
-    return [ $source->() ];
+    return _combo_of( $arg,
+        GlitchVape::Registry::offered( $arg->{ spec }, 'choose' ) );
 }
 
 # A closed list, unlike the palette pickers above it. A palette parameter

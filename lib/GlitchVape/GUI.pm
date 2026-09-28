@@ -2776,20 +2776,47 @@ sub _write_preset
 {
     my ( $self, $name, $title, $keep_seed ) = @_;
 
-    my ( $dir ) = GlitchVape::Config::preset_dirs();
-    $dir = 'presets' unless defined $dir && length $dir;
+    # Never the first directory on the search path, which is what this used to
+    # take: from an installed package that was the package's own data
+    # directory, and saving failed with "Permission denied". See
+    # GlitchVape::Config/A SAVED PRESET GOES IN A DIRECTORY THAT IS YOURS.
+    my $dir = GlitchVape::Config::save_dir();
+
+    my $path = File::Spec->catfile( $dir, "$name.yml" );
+
+    # Asked before the directory is made, so that saying no leaves nothing
+    # behind.
+    if ( -e $path )
+    {
+        return unless $self->_confirm( "Replace the existing preset $path?" );
+    }
+    elsif ( my $other = GlitchVape::Config::find_preset( $name ) )
+    {
+        # The save directory is searched first, so the name will mean the one
+        # being saved from now on. Worth saying before it happens: the other
+        # one is not replaced, only no longer the one the name finds.
+        return
+            unless $self->_confirm( "There is already a preset called "
+                . "“$name”, at $other.\n\n"
+                . "Save yours as well? From now on the name means yours; "
+                . 'the other one is left as it is.' );
+    }
 
     unless ( -d $dir )
     {
         require File::Path;
-        File::Path::make_path( $dir );
-    }
 
-    my $path = File::Spec->catfile( $dir, "$name.yml" );
+        # make_path reports through carp unless asked for the list, and a
+        # warning on a terminal nobody is looking at is not a message.
+        File::Path::make_path( $dir, { error => \my $trouble } );
 
-    if ( -e $path && !$self->_confirm( "Replace the existing preset $path?" ) )
-    {
-        return;
+        if ( @$trouble || !-d $dir )
+        {
+            my ( $why ) = map { values %$_ } @$trouble;
+            $self->_report( "Cannot make the preset directory $dir: "
+                    . ( $why // 'it is not there afterwards' ) );
+            return;
+        }
     }
 
     my $yaml = $self->{ state }->to_preset_yaml(

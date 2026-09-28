@@ -7,13 +7,11 @@ use utf8;
 use FindBin ();
 use lib "$FindBin::Bin/../lib";
 
-use File::Temp ();
 use Test::More;
 
 use GlitchVape           ();
-use GlitchVape::Context  ();
-use GlitchVape::Pipeline ();
 use GlitchVape::Registry ();
+use GlitchVape::Test     ();
 use GlitchVape::Tools    ();
 
 plan skip_all => 'ImageMagick is not installed'
@@ -35,89 +33,22 @@ plan skip_all => 'Image::Magick is not installed'
 # frame nought -- because what each setting does is its own business and is
 # pinned in its own file. What is being caught here is nothing at all.
 
+# The loop's length, for the sections below that ask about particular frames
+# of it. The sweep itself uses the same one, from GlitchVape::Test.
 my $FRAMES = 12;
 
-my $dir = File::Temp->newdir( 'gv_anim_XXXXXX' );
-my $src = "$dir/src.png";
-
-# Small and busy. Busy because a smooth ramp hides damage a detailed picture
-# shows: databend on a gradient decodes back to something indistinguishable
-# from what went in, and the sweep would read that as a broken setting. Small
-# because this renders a few hundred frames -- but not so small that a JPEG of
-# it has too few blocks for a corrupted byte to reach.
-{
-    my $img = Image::Magick->new( size => '192x144' );
-    $img->Read( 'plasma:fractal' );
-    $img->Write( $src );
-}
-
-my $cache = File::Temp->newdir( 'gv_anim_cache_XXXXXX' );
-
-# One frame of a loop, as a signature.
+# One frame of a loop, as a signature, on the picture the sweep uses: small
+# and busy. Busy because a smooth ramp hides damage a detailed picture shows:
+# databend on a gradient decodes back to something indistinguishable from what
+# went in, and the sweep would read that as a broken setting. Small because
+# this renders a few hundred frames -- but not so small that a JPEG of it has
+# too few blocks for a corrupted byte to reach.
 sub frame_of
 {
-    my ( $effect, $params, $frame ) = @_;
+    my ( $effect, $params, $frame, $frames ) = @_;
 
-    my $img = Image::Magick->new;
-    $img->Read( $src );
-
-    my $ctx = GlitchVape::Context->new(
-        image    => $img,
-        seed     => 3,
-        cachedir => "$cache",
-    );
-    $ctx->frames( $FRAMES );
-    $ctx->frame( $frame );
-
-    GlitchVape::Pipeline->new( effects => { $effect => $params } )->run( $ctx );
-
-    return $ctx->image->Get( 'signature' );
-}
-
-# A setting turned up as far as it goes, with everything it says it depends on
-# turned on beside it -- otherwise the sweep proves that a greyed control is
-# greyed, which is not the question.
-sub wound_up
-{
-    my ( $effect, $key ) = @_;
-
-    my $params = GlitchVape::Registry->get( $effect )->{ params };
-    my $spec   = $params->{ $key };
-
-    my $most =
-          defined $spec->{ max }    ? $spec->{ max }
-        : $spec->{ type } eq 'bool' ? 1
-        : $spec->{ values }         ? $spec->{ values }[ -1 ]
-        :                             1;
-
-    my %wound = ( $key => $most );
-
-    for my $need ( sort keys %{ $spec->{ needs } || {} } )
-    {
-        my $want = $spec->{ needs }{ $need };
-        $want = $want->[ 0 ] if ref $want eq 'ARRAY';
-
-        $wound{ $need } =
-            $want eq '1' ? ( $params->{ $need }{ max } // 1 ) : $want;
-    }
-
-    return \%wound;
-}
-
-# Which of a loop's frames differ from the one it opens on.
-sub moves
-{
-    my ( $effect, $key ) = @_;
-
-    my $wound = wound_up( $effect, $key );
-    my $first = frame_of( $effect, $wound, 0 );
-
-    for my $frame ( 1 .. $FRAMES - 1 )
-    {
-        return 1 if frame_of( $effect, $wound, $frame ) ne $first;
-    }
-
-    return 0;
+    return GlitchVape::Test::frame( 'motion', $effect, $params, $frame,
+        $frames // $FRAMES );
 }
 
 # The four that cannot answer, and why. Each is a fact about the effect rather
@@ -133,17 +64,18 @@ my %EXCUSED = (
 my @asked;
 my @dead;
 
+# A setting turned up as far as it goes, with everything it says it depends on
+# turned on beside it -- otherwise the sweep proves that a greyed control is
+# greyed, which is not the question. GlitchVape::Test::moves does the turning
+# up, so a plug-in's tests ask exactly this of its settings.
 for my $effect ( GlitchVape::Registry->names )
 {
-    my $params = GlitchVape::Registry->get( $effect )->{ params };
-
-    for my $key ( sort keys %$params )
+    for my $key (
+        GlitchVape::Test::animation_settings( $effect, except => \%EXCUSED ) )
     {
-        next unless $params->{ $key }{ animation };
-        next if $EXCUSED{ "$effect.$key" };
-
         push @asked, "$effect.$key";
-        push @dead,  "$effect.$key" unless moves( $effect, $key );
+        push @dead, "$effect.$key"
+            unless GlitchVape::Test::moves( $effect, $key );
     }
 }
 
@@ -235,32 +167,11 @@ for my $named ( sort keys %EXCUSED )
         # A still has no loop to be at a point of, so the setting is not a
         # setting there: whatever it says, one frame renders as it would
         # without it.
-        my $moving = Image::Magick->new;
-        $moving->Read( $src );
-        my $ctx = GlitchVape::Context->new(
-            image    => $moving,
-            seed     => 3,
-            cachedir => "$cache"
-        );
-        GlitchVape::Pipeline->new( effects => { $effect => $turned_up } )
-            ->run( $ctx );
+        my $held =
+            GlitchVape::Registry->without_animation( $effect, $turned_up );
 
-        my $held = Image::Magick->new;
-        $held->Read( $src );
-        my $still = GlitchVape::Context->new(
-            image    => $held,
-            seed     => 3,
-            cachedir => "$cache"
-        );
-        GlitchVape::Pipeline->new(
-            effects => {
-                $effect => GlitchVape::Registry->without_animation(
-                    $effect, $turned_up
-                )
-            }
-        )->run( $still );
-
-        is $ctx->image->Get( 'signature' ), $still->image->Get( 'signature' ),
+        is frame_of( $effect, $turned_up, 0, 1 ),
+            frame_of( $effect, $held, 0, 1 ),
             "and leaves a still of $effect exactly as it was";
     }
 }

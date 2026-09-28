@@ -314,7 +314,7 @@ what is exported.
 
 ### Adding an effect is a wizard
 
-Forty-five effects are too many for one list, so **+ → Single effect…** opens
+Forty-seven effects are too many for one list, so **+ → Single effect…** opens
 a three-page assistant that asks the questions in the order a person has them.
 
 **What kind of thing am I after?** The nine stages under their presentable

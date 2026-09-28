@@ -344,7 +344,7 @@ steps are whole renders.
 Discovery:
 
 ```bash
-glitchvape --list-effects       # all 39, grouped by pipeline stage
+glitchvape --list-effects       # all of them, grouped by pipeline stage
 glitchvape --explain pixelsort  # parameters and documentation for one effect
 glitchvape --list-presets
 glitchvape --list-palettes
@@ -426,7 +426,11 @@ rather than a commitment:
 glitchvape -p vhs-decay --set tracking.bands=12 --set grain.amount=0.2 in.heic
 ```
 
-Presets are found in `./presets`, or wherever `$GLITCHVAPE_PRESETS` points.
+Presets are looked for in `$GLITCHVAPE_PRESETS` if it is set, then in
+`~/.local/share/glitchvape/presets` — which is where the window's **Save as
+preset…** puts one, so a preset of yours shadows a shipped one of the same
+name without replacing it — then `./presets`, then the presets that shipped,
+and last any a plug-in brought.
 
 In the window a preset is one of the two things **+** offers on the Image
 page. It is the only thing there that *replaces* what is already in the
@@ -588,6 +592,30 @@ loop.
 
 **[docs/audio.md](docs/audio.md)** has the flags, the generators and their
 parameters, and how a mix of several tracks is balanced.
+
+---
+
+## Plug-ins
+
+Effects, generated soundtracks, palettes, font roles and presets can come from
+plug-ins as well as from the program. A plug-in is a Perl module called
+`GlitchVape::Plugin::Name`, installed wherever Perl looks for modules — a
+distribution package, `cpanm`, or `~/.local/share/glitchvape/lib/perl5` for
+one of your own — and there is nothing to configure: what it adds turns up in
+`--list-effects`, `--explain`, the presets and the window exactly as the
+program's own does, with its name beside it.
+
+```bash
+glitchvape --list-plugins                   # what was found, what each adds, why any was refused
+GLITCHVAPE_PLUGINS=none glitchvape …        # without any
+GLITCHVAPE_PLUGINS=-Muffins glitchvape …    # without one
+```
+
+A plug-in that fails to load, breaks a rule, or wants a name something else
+already has is refused on its own, with a warning saying why, and everything
+else carries on. How to write one — the API, what it may add, and the checks
+its own tests can run with `GlitchVape::Test` — is in
+`perldoc GlitchVape::Plugins`.
 
 ---
 

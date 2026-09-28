@@ -168,6 +168,157 @@ my %DUOTONE = (
     seapunk  => [ '#04263A', '#7FFFD4' ],
 );
 
+# Which plug-in added a palette or a ramp, keyed by name. Absent for the
+# program's own.
+my %PALETTE_FROM;
+my %DUOTONE_FROM;
+
+=head2 register( name => $name, title => $title, colors => [ ... ] )
+
+A palette from a plug-in: two or more colours, darkest first by the
+convention L</DESCRIPTION> explains, and a title for C<--list-palettes>. It is
+offered wherever a palette is -- C<palette>, C<gradient_map>, C<bitmap>, and
+as a cluster map by C<defrag> -- because every one of those asks L</names>
+rather than keeping a list.
+
+The name follows the rule effect names do, and may not be one the program or
+another plug-in already uses: a preset that asked for C<vapor> before a
+plug-in was installed has to get the same colours after.
+
+=cut
+
+sub register
+{
+    my ( $class, %arg ) = @_;
+
+    my $name = _new_name( 'palette', $arg{ name }, \%PALETTE, \%PALETTE_FROM );
+
+    my @colors = _checked_colors( $name, $arg{ colors } );
+
+    die "GlitchVape::Palette: palette '$name' needs at least two colours\n"
+        unless @colors >= 2;
+
+    require GlitchVape::Plugins;
+
+    $PALETTE{ $name } = {
+        title  => $arg{ title } // $name,
+        colors => \@colors,
+    };
+    $PALETTE_FROM{ $name } = GlitchVape::Plugins::owner( scalar caller );
+
+    return $name;
+}
+
+=head2 register_duotone( name => $name, colors => [ $shadow, $highlight ] )
+
+A two-stop ramp for C<duotone>, which wants its ends as far apart as they will
+go rather than an even spread -- see the note on C<%DUOTONE>.
+
+=cut
+
+sub register_duotone
+{
+    my ( $class, %arg ) = @_;
+
+    my $name =
+        _new_name( 'duotone ramp', $arg{ name }, \%DUOTONE, \%DUOTONE_FROM );
+
+    my @colors = _checked_colors( $name, $arg{ colors } );
+
+    die "GlitchVape::Palette: duotone ramp '$name' needs exactly two "
+        . "colours\n"
+        unless @colors == 2;
+
+    require GlitchVape::Plugins;
+
+    $DUOTONE{ $name }      = \@colors;
+    $DUOTONE_FROM{ $name } = GlitchVape::Plugins::owner( scalar caller );
+
+    return $name;
+}
+
+=head2 retract( $plugin ) / contributions( $plugin )
+
+A plug-in's palettes and ramps, taken back or listed -- the two questions
+L<GlitchVape::Plugins> asks every place a plug-in can add to.
+
+=cut
+
+sub retract
+{
+    my ( $class, $plugin ) = @_;
+
+    for my $pair ( [ \%PALETTE, \%PALETTE_FROM ],
+        [ \%DUOTONE, \%DUOTONE_FROM ] )
+    {
+        my ( $table, $from ) = @$pair;
+
+        for my $name ( _from( $from, $plugin ) )
+        {
+            delete $table->{ $name };
+            delete $from->{ $name };
+        }
+    }
+
+    return;
+}
+
+sub contributions
+{
+    my ( $class, $plugin ) = @_;
+
+    return {
+        palettes        => [ _from( \%PALETTE_FROM, $plugin ) ],
+        'duotone ramps' => [ _from( \%DUOTONE_FROM, $plugin ) ],
+    };
+}
+
+sub _from
+{
+    my ( $from, $plugin ) = @_;
+
+    my @names =
+        sort grep { defined $from->{ $_ } && $from->{ $_ } eq $plugin }
+        keys %$from;
+
+    return @names;
+}
+
+sub _new_name
+{
+    my ( $what, $name, $table, $from ) = @_;
+
+    $name //= q{};
+
+    die "GlitchVape::Palette: a $what needs a name made of lower case "
+        . "letters, digits and underscores, starting with a letter\n"
+        unless $name =~ /\A[a-z][a-z0-9_]*\z/;
+
+    if ( $table->{ $name } )
+    {
+        my $whose = 'the program itself';
+        $whose = "plug-in $from->{$name}" if defined $from->{ $name };
+
+        die "GlitchVape::Palette: $what '$name' registered twice -- "
+            . "$whose already has it\n";
+    }
+
+    return $name;
+}
+
+sub _checked_colors
+{
+    my ( $name, $colors ) = @_;
+
+    die "GlitchVape::Palette: '$name' lists its colours as something other "
+        . "than a list\n"
+        unless ref $colors eq 'ARRAY';
+
+    # Normalised once here, so that a malformed colour is refused with the
+    # plug-in that brought it rather than when a render first asks for it.
+    return map { _normalise_hex( $_ // q{} ) } @$colors;
+}
+
 =head2 names()
 
 Sorted palette names.

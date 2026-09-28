@@ -1,0 +1,5 @@
+name: sprinkled
+title: Sprinkled, from the Sprinkles test plug-in
+effects:
+  sprinkles: { amount: 0.05, topping: thousands }
+  scanlines: { opacity: 0.2 }

@@ -588,6 +588,16 @@ A digest of everything that determines the resulting image. The source file's
 size and modification time are folded in as well, so editing the input outside
 the application does not serve a preview of its previous contents.
 
+=head2 The code is part of what determines the image
+
+The same settings drawn by a different program are a different picture, and
+the preview directory outlives the program that filled it. So the key carries
+the program's version -- an upgrade used to be shown the previous version's
+renders for every setting it had already seen -- and, for each effect that
+came from a plug-in, the plug-in's fingerprint: its version and the size and
+modification time of its files, which also covers a plug-in being worked on,
+where the version never moves. See L<GlitchVape::Plugins/fingerprint>.
+
 =cut
 
 sub cache_key
@@ -595,12 +605,13 @@ sub cache_key
     my ( $self, %arg ) = @_;
 
     require GlitchVape::GUI::Cache;
+    require GlitchVape;
 
     my $source = $self->{ current }{ source };
     my @stat   = stat( $source // q{} );
 
     my @parts = (
-        'glitchvape-preview-v1', $source,
+        'glitchvape-preview-v1', $GlitchVape::VERSION, $source,
         $stat[ 7 ],
         $stat[ 9 ],
         $self->{ current }{ seed },
@@ -632,6 +643,12 @@ sub cache_key
     {
         next unless $effects->{ $name }{ enabled };
         push @parts, $name;
+
+        my $spec = GlitchVape::Registry->get( $name );
+        if ( my $plugin = $spec && $spec->{ plugin } )
+        {
+            push @parts, GlitchVape::Plugins::fingerprint( $plugin ) // $plugin;
+        }
 
         my $params = $self->effect_params( $name );
         for my $key ( sort keys %$params )

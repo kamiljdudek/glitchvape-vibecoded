@@ -3,7 +3,8 @@ package GlitchVape::DTMF;
 use strict;
 use warnings;
 
-use GlitchVape::Tools ();
+use GlitchVape::Generator ();
+use GlitchVape::Tools     ();
 
 our $VERSION = '0.01';
 
@@ -840,6 +841,42 @@ sub spec_parts
             dial_tone_sec gain)
     );
 }
+
+# ---------------------------------------------------------------------------
+# The declaration. Here rather than in GlitchVape::Generator, which is where
+# every kind's used to be: a kind is the module that makes the sound, and a
+# plug-in's kind can only be declared beside its code, so the program's own
+# are too -- see GlitchVape::Generator/register.
+
+GlitchVape::Generator->register(
+    kind    => 'dtmf',
+    label   => 'Phone dial tones',
+    icon    => 'call-start-symbolic',
+    summary => 'A phrase spelled out in dialpad tones',
+    doc     => <<'DOC',
+Text dialled on a phone keypad, multi-tap style. Under a soundtrack it plays
+once, stops, and after three seconds of silence the line opens again -- rather
+than looping, which would turn a sentence into a stutter.
+DOC
+    ending   => 1,
+    params   => GlitchVape::DTMF::params(),
+    order    => [ GlitchVape::DTMF::param_order() ],
+    resolve  => \&GlitchVape::DTMF::resolve,
+    duration => \&GlitchVape::DTMF::duration,
+    describe => \&GlitchVape::DTMF::describe,
+    render   => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::DTMF::render( %arg );
+    },
+    readout => sub {
+        my ( $spec ) = @_;
+
+        my $keys = GlitchVape::DTMF::keys_of( $spec );
+        return q{} unless length $keys;
+
+        return "dials: $keys";
+    },
+);
 
 1;
 

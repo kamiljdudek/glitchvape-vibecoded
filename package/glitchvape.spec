@@ -62,6 +62,11 @@ BuildRequires:  perl(lib)
 # The interface's cache is content-addressed on the resolved configuration,
 # and this is what addresses it.
 BuildRequires:  perl(Digest::SHA)
+# Every test loads the program, and the program loads its plug-in loader,
+# which tries each plug-in in a forked child and has it leave through
+# POSIX::_exit -- so that the parent's END blocks and temporary directories
+# are not the child's to run.
+BuildRequires:  perl(POSIX)
 # A preset is YAML, so a buildroot that cannot read one runs no test that
 # loads a preset. Either parser will do at run time -- see the Requires below
 # -- but a build has to name one, and this is the one Config.pm reaches for
@@ -104,8 +109,20 @@ Requires:       perl(File::Which)
 Requires:       perl(Getopt::Long)
 Requires:       perl(Image::Magick)
 Requires:       perl(List::Util)
+Requires:       perl(POSIX)
 Requires:       perl(Pod::Usage)
 Requires:       perl(Scalar::Util)
+# GlitchVape::Test is the checks every effect owes, installed so that a
+# plug-in's own test suite can make them. Anybody running one has this
+# already; it is here because the module is here, and a module that cannot
+# load is not one that ships.
+Requires:       perl(Test::Builder)
+
+# Plug-ins are Perl modules in GlitchVape::Plugin::*, and one packaged for
+# Fedora depends on the API it was written for rather than on a version of
+# this package: the number moves only when something a plug-in could rely on
+# changes incompatibly. See GlitchVape::Plugins.
+Provides:       %{name}(plugin-api) = 1
 
 # A preset is a YAML file and presets are what this program is for, so this
 # is not optional the way the Recommends below are: without a parser every
@@ -144,7 +161,7 @@ Suggests:       ipa-gothic-fonts
 Suggests:       source-foundry-hack-fonts
 
 %description
-GlitchVape puts a photograph through a signal chain of forty-five effects:
+GlitchVape puts a photograph through a signal chain of forty-seven effects:
 tape wobble and tracking error, chromatic aberration, pixel sorting and
 databending, film grain, scanlines and phosphor grilles, and the text and
 furniture that sit over the top.
@@ -156,6 +173,11 @@ reproduced exactly from its seed.
 
 This package contains the command-line tools and the library. For the window,
 install %{name}-gui.
+
+Plug-ins -- Perl modules in the GlitchVape::Plugin namespace -- can add
+effects, generated soundtracks, palettes, font roles and presets, and are
+found wherever Perl modules are installed; glitchvape --list-plugins says what
+was found and what each added.
 
 Departure Mono and Fusion Pixel are included under the SIL Open Font License
 and VCR OSD Mono under its author's own grant; %{name} --licenses prints their

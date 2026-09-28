@@ -3,8 +3,9 @@ package GlitchVape::Noise;
 use strict;
 use warnings;
 
-use GlitchVape::Random ();
-use GlitchVape::Wav    ();
+use GlitchVape::Generator ();
+use GlitchVape::Random    ();
+use GlitchVape::Wav       ();
 
 our $VERSION = '0.01';
 
@@ -398,13 +399,43 @@ sub _mmss
     return sprintf '%d:%04.1f', $minutes, $seconds - $minutes * 60;
 }
 
+# ---------------------------------------------------------------------------
+# The declaration. Here rather than in GlitchVape::Generator, which is where
+# every kind's used to be: a kind is the module that makes the sound, and a
+# plug-in's kind can only be declared beside its code, so the program's own
+# are too -- see GlitchVape::Generator/register.
+
+GlitchVape::Generator->register(
+    kind    => 'static',
+    label   => 'TV static',
+    icon    => 'audio-speakers-symbolic',
+    summary => 'The hiss of a set tuned to nothing',
+    doc     => <<'DOC',
+Analogue snow. Pink rather than white, and band-limited to a television's
+audio path, so it is restful in the way rain is rather than fatiguing in the
+way white noise is -- while still being unmistakably static. Mains hum and the
+occasional crackle are what stop it sounding like a synthesiser.
+
+It has no natural end, so under a soundtrack it simply carries on: there is no
+seam to hide.
+DOC
+    params   => GlitchVape::Noise::params(),
+    order    => [ GlitchVape::Noise::param_order() ],
+    duration => \&GlitchVape::Noise::duration,
+    describe => \&GlitchVape::Noise::describe,
+    render   => sub {
+        my ( %arg ) = @_;
+        return GlitchVape::Noise::render( %arg );
+    },
+);
+
 1;
 
 __END__
 
 =head1 SEE ALSO
 
-L<GlitchVape::Generator>, which registers this as a kind of track, and
-L<GlitchVape::Wav>, where the samples end up.
+L<GlitchVape::Generator>, the registry this declares itself to as a kind of
+track, and L<GlitchVape::Wav>, where the samples end up.
 
 =cut

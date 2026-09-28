@@ -702,7 +702,7 @@ sub _describe
         return;
     }
 
-    my ( $title, $blurb, $because );
+    my ( $title, $blurb, $because, $from );
 
     if ( $is_effect )
     {
@@ -711,6 +711,7 @@ sub _describe
 
         $title = $spec->{ title };
         $blurb = $spec->{ summary };
+        $from  = $spec->{ plugin };
 
         # Where it runs, said on the effect as well as on the category,
         # because a tree can be searched -- and a match arrived at from the
@@ -727,9 +728,19 @@ sub _describe
         $because = $info->{ because };
     }
 
+    # Beside the internal name, because it is the same kind of fact: not what
+    # the effect does but where it is spelled -- a copied command line that
+    # uses it works only where the plug-in is installed.
+    my $where = q{};
+    if ( defined $from )
+    {
+        ( my $short = $from ) =~ s/\AGlitchVape::Plugin:://;
+        $where = '  ·  from ' . _escape( $short );
+    }
+
     $heading->set_markup( '<b>' . _escape( $title ) . '</b>' );
     $key->set_markup(
-        "<span alpha='45%'><tt>" . _escape( $name ) . '</tt></span>' );
+        "<span alpha='45%'><tt>" . _escape( $name ) . "</tt>$where</span>" );
     $body->set_text( $blurb );
     $foot->set_markup( sprintf q{<span alpha='55%%'><i>%s</i></span>},
         _escape( $because ) );
