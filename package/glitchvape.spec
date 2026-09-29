@@ -62,6 +62,8 @@ BuildRequires:  perl(lib)
 # The interface's cache is content-addressed on the resolved configuration,
 # and this is what addresses it.
 BuildRequires:  perl(Digest::SHA)
+# Every render times its effects, and the timer counts fractions of a second.
+BuildRequires:  perl(Time::HiRes)
 # Every test loads the program, and the program loads its plug-in loader,
 # which tries each plug-in in a forked child and has it leave through
 # POSIX::_exit -- so that the parent's END blocks and temporary directories
@@ -112,6 +114,12 @@ Requires:       perl(List::Util)
 Requires:       perl(POSIX)
 Requires:       perl(Pod::Usage)
 Requires:       perl(Scalar::Util)
+# Every render times its effects with this, in fractions of a second.
+Requires:       perl(Time::HiRes)
+# GlitchVape::Checkpoint keys the pictures it keeps with this, and the
+# window's preview store keys through it: the digest moved into the base
+# package so that a module shipped here need not reach into the window's.
+Requires:       perl(Digest::SHA)
 # GlitchVape::Test is the checks every effect owes, installed so that a
 # plug-in's own test suite can make them. Anybody running one has this
 # already; it is here because the module is here, and a module that cannot
@@ -230,7 +238,6 @@ Requires:       perl(Glib::Object::Introspection)
 Requires:       hicolor-icon-theme
 
 # What the window needs on top of the base package's set.
-Requires:       perl(Digest::SHA)
 Requires:       perl(File::Copy)
 Requires:       perl(POSIX)
 

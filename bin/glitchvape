@@ -55,6 +55,7 @@ my %opt = (
     animate  => 0,
     frames   => 24,
     fps      => 12,
+    jobs     => undef,
     verbose  => 0,
     dry_run  => 0,
     optimise => 0,
@@ -102,6 +103,7 @@ GetOptions(
     'a|animate' => \$opt{ animate },
     'frames=i'  => \$opt{ frames },
     'fps=i'     => \$opt{ fps },
+    'j|jobs=i'  => \$opt{ jobs },
 
     'audio=s'         => \$opt{ audio },
     'audio-start=f'   => \$opt{ audio_start },
@@ -229,6 +231,7 @@ my $result = eval {
         verbose  => $opt{ verbose },
         dry_run  => $opt{ dry_run },
         animate  => build_animate_spec( $audio ),
+        jobs     => $opt{ jobs },
     );
 };
 
@@ -949,6 +952,7 @@ glitchvape - apply vaporwave and glitch-art transformations to an image
        --frames N          frames in the loop (default 24)
        --fps N             frame rate (default 12)
        --codec NAME        h264, vp9 or av1; default from the extension
+   -j, --jobs N            processes drawing the frames (default one per core)
 
        --audio PATH        add a soundtrack; the loop repeats to cover it
        --audio-start SEC   where to start in the track (default 0)
@@ -1025,6 +1029,11 @@ C<--animate> renders the pipeline once per frame and encodes the sequence.
 Effects with a periodic component read their position in the loop and complete
 exactly one cycle, so the result loops seamlessly. The output extension picks
 the encoder: C<.mp4>, C<.webm> or C<.gif>.
+
+The frames are drawn by several processes at once, one per core the program
+may run on, since each is computed from the seed alone. C<--jobs> sets how
+many; C<--jobs 1> draws them one after another in this process. Which it is
+makes no difference to the result.
 
 =head2 Audio
 

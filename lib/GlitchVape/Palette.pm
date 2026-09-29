@@ -489,15 +489,23 @@ sub remap_file
 
     my $colors = _resolve_colors( $spec );
     my $key    = join '_', map { s/^#//r } @$colors;
-    my $path   = File::Spec->catfile( $dir, "remap_$key.png" );
-    return $path if -f $path;
 
-    my @argv = GlitchVape::Tools::magick_argv( ( map { "xc:$_" } @$colors ),
-        '+append', $path, );
+    require GlitchVape::Context;
 
-    system( @argv ) == 0
-        or die "GlitchVape::Palette: failed to build remap image at $path\n";
-    return $path;
+    return GlitchVape::Context::cached_file(
+        File::Spec->catfile( $dir, "remap_$key.png" ),
+        sub {
+            my ( $path ) = @_;
+
+            my @argv =
+                GlitchVape::Tools::magick_argv( ( map { "xc:$_" } @$colors ),
+                '+append', $path, );
+
+            system( @argv ) == 0
+                or die
+                "GlitchVape::Palette: failed to build remap image at $path\n";
+        }
+    );
 }
 
 =head2 gradient_file( $spec, $dir, %opt )
@@ -520,25 +528,37 @@ sub gradient_file
     # same colours at different resolutions do not collide.
     my $key = join '_', ( map { s/^#//r } @{ _resolve_colors( $spec ) } ),
         $steps;
-    my $path = File::Spec->catfile( $dir, "clut_$key.png" );
-    return $path if -f $path;
 
-    # Build from the interpolated stops directly: one pixel per step, appended.
-    # Writing a PPM by hand avoids a 256-operand command line.
-    my $ppm = File::Spec->catfile( $dir, "clut_$key.ppm" );
-    open my $fh, '>:raw', $ppm
-        or die "GlitchVape::Palette: cannot write $ppm: $!\n";
-    print { $fh } "P6\n$steps 1\n255\n";
-    print { $fh } pack 'C*', map { _hex_to_rgb( $_ ) } @$stops;
+    require GlitchVape::Context;
 
-    # A failing close means buffered pixel data never reached the disk, which
-    # would leave a silently truncated gradient for ImageMagick to read.
-    close $fh or die "GlitchVape::Palette: cannot finish writing $ppm: $!\n";
+    return GlitchVape::Context::cached_file(
+        File::Spec->catfile( $dir, "clut_$key.png" ),
+        sub {
+            my ( $path ) = @_;
 
-    system( GlitchVape::Tools::magick_argv( $ppm, $path ) ) == 0
-        or die "GlitchVape::Palette: failed to build CLUT at $path\n";
-    unlink $ppm;
-    return $path;
+            # Build from the interpolated stops directly: one pixel per step,
+            # appended. Writing a PPM by hand avoids a 256-operand command
+            # line.
+            my $ppm = "$path.ppm";
+            open my $fh, '>:raw', $ppm
+                or die "GlitchVape::Palette: cannot write $ppm: $!\n";
+            print { $fh } "P6\n$steps 1\n255\n";
+            print { $fh } pack 'C*', map { _hex_to_rgb( $_ ) } @$stops;
+
+            # A failing close means buffered pixel data never reached the
+            # disk, which would leave a silently truncated gradient for
+            # ImageMagick to read.
+            close $fh
+                or die "GlitchVape::Palette: cannot finish writing $ppm: $!\n";
+
+            my $ok =
+                system( GlitchVape::Tools::magick_argv( $ppm, $path ) ) == 0;
+            unlink $ppm;
+
+            die "GlitchVape::Palette: failed to build CLUT at $path\n"
+                unless $ok;
+        }
+    );
 }
 
 =head2 swapped( $stops, $amount )

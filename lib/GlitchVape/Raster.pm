@@ -58,17 +58,24 @@ sub pattern_png
 {
     my ( $dir, $key, $w, $h, $bytes ) = @_;
 
-    my $png = File::Spec->catfile( $dir, "pat_$key.png" );
-    return $png if -f $png;
+    require GlitchVape::Context;
 
-    my $ppm = File::Spec->catfile( $dir, "pat_$key.ppm" );
-    write_ppm( $ppm, $w, $h, $bytes );
+    return GlitchVape::Context::cached_file(
+        File::Spec->catfile( $dir, "pat_$key.png" ),
+        sub {
+            my ( $png ) = @_;
 
-    system( GlitchVape::Tools::magick_argv( $ppm, $png ) ) == 0
-        or die "GlitchVape::Raster: failed converting $ppm to PNG\n";
-    unlink $ppm;
+            my $ppm = "$png.ppm";
+            write_ppm( $ppm, $w, $h, $bytes );
 
-    return $png;
+            my $ok =
+                system( GlitchVape::Tools::magick_argv( $ppm, $png ) ) == 0;
+            unlink $ppm;
+
+            die "GlitchVape::Raster: failed converting $ppm to PNG\n"
+                unless $ok;
+        }
+    );
 }
 
 =head2 desktop_names() / desktop_tile( $dir, %opt )
@@ -330,16 +337,21 @@ sub grille_tile
 
 Expand a tile to C<${w}x${h}> and return the path.
 
+The result is MIFF rather than PNG. It is a full-size picture that exists to be
+read once by the next ImageMagick call, and compressing it cost as much as the
+composite it was for. A tile holds eight-bit values and tiling adds none, so
+nothing is lost by it.
+
 =cut
 
 sub tiled
 {
     my ( $ctx, $tile, $w, $h ) = @_;
 
-    my $out = $ctx->tmpfile( '.png' );
+    my $out = $ctx->tmpfile( '.miff' );
     my @argv =
         GlitchVape::Tools::magick_argv( '-size', "${w}x${h}", "tile:$tile",
-        $out );
+        '-depth', '8', $out );
 
     die "GlitchVape::Raster: failed tiling $tile to ${w}x${h}\n"
         unless system( @argv ) == 0 && -s $out;

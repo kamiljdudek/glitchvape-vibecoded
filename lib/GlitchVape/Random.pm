@@ -195,6 +195,75 @@ sub gauss
     return $mean + $sd * $u * $f;
 }
 
+=head2 gauss_list( $n, [$mean], [$sd] )
+
+C<$n> normal deviates at once: exactly the numbers C<$n> calls to L</gauss( [$mean], [$sd] )>
+would have returned, in the same order, leaving the generator where they
+would have left it.
+
+For C<grain>, which wants one or three per pixel -- eight million for a
+1920-pixel picture. Through C<gauss> each of those is a method call making two
+more method calls into the generator, and that bookkeeping cost more than the
+arithmetic did: the same draws made here in one loop take a little over half the time. The
+xorshift and the polar method are written out again below rather than called,
+which is the whole of the saving and the reason the two must stay in step.
+F<t/01-random.t> holds them to it.
+
+=cut
+
+sub gauss_list
+{
+    my ( $self, $n, $mean, $sd ) = @_;
+    $mean = 0 unless defined $mean;
+    $sd   = 1 unless defined $sd;
+
+    my $x     = $self->{ state };
+    my $spare = delete $self->{ _spare };
+
+    my @out;
+    $#out = $n - 1 if $n > 0;
+    my $i = 0;
+
+    while ( $i < $n )
+    {
+        if ( defined $spare )
+        {
+            $out[ $i++ ] = $mean + $sd * $spare;
+            undef $spare;
+            next;
+        }
+
+        my ( $u, $v, $s );
+        do
+        {
+            $x ^= ( $x << 13 ) & 0xFFFFFFFF;
+            $x ^= ( $x >> 17 );
+            $x ^= ( $x << 5 ) & 0xFFFFFFFF;
+            $x &= 0xFFFFFFFF;
+            $x ||= _RESCUE;
+            $u = $x / _2POW32 * 2 - 1;
+
+            $x ^= ( $x << 13 ) & 0xFFFFFFFF;
+            $x ^= ( $x >> 17 );
+            $x ^= ( $x << 5 ) & 0xFFFFFFFF;
+            $x &= 0xFFFFFFFF;
+            $x ||= _RESCUE;
+            $v = $x / _2POW32 * 2 - 1;
+
+            $s = $u * $u + $v * $v;
+        } while ( $s >= 1 || $s == 0 );
+
+        my $f = sqrt( -2 * log( $s ) / $s );
+        $spare = $v * $f;
+        $out[ $i++ ] = $mean + $sd * $u * $f;
+    }
+
+    $self->{ state }  = $x;
+    $self->{ _spare } = $spare if defined $spare;
+
+    return @out;
+}
+
 =head2 walk( $n, %opt )
 
 C<$n> values of a bounded random walk in C<[min,max]>, starting at C<start>.

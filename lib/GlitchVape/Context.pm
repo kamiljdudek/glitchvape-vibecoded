@@ -3,8 +3,9 @@ package GlitchVape::Context;
 use strict;
 use warnings;
 
-use File::Spec ();
-use File::Temp ();
+use File::Spec  ();
+use File::Temp  ();
+use Time::HiRes ();
 
 use GlitchVape::Magick ();
 use GlitchVape::Random ();
@@ -358,6 +359,13 @@ would have frame two writing over frame one's working files.
 Falls back to C<tmpdir> when nobody handed one over, which is what a still
 does: there is one frame, so the two are the same thing.
 
+It can outlive the render as well as the frame. The window hands every
+preview the same one for as long as it is open, which is what turns a second
+Apply of C<cmyk> from four screens built into four screens read; and the
+frames of a loop may be rendered by several processes at once, all writing
+into it. So a file goes in through L</cached( $name, $build )>, which is what makes both
+safe.
+
 =cut
 
 sub cachedir
@@ -367,6 +375,68 @@ sub cachedir
     return "$self->{cachedir}" if $self->{ cachedir };
 
     return $self->tmpdir;
+}
+
+=head2 cached( $name, $build )
+
+The path of C<$name> in L</cachedir()>, built first if it is not there yet:
+
+    my $path = $ctx->cached( "screen_${pitch}.png", sub {
+        my ( $tmp ) = @_;
+        system( magick_argv( ..., $tmp ) ) == 0 or die ...;
+    } );
+
+C<$build> is handed a path to write to rather than the real one, and the
+result is renamed into place only once it is complete. That is the whole
+point: the directory is shared -- between the frames of a loop rendered in
+parallel, and in the window between one preview and the next, which may start
+while a cancelled one is still writing -- and a file that exists under its
+real name is then always a finished one. The same test on the real path
+straight after building it, as every cache here used to do, would hand a
+second process half a screen.
+
+The temporary name keeps the real one's extension, since that is how
+ImageMagick decides what to write. Two processes that both miss build the file
+twice and the second rename wins, which costs time and nothing else.
+
+=head2 cached_file( $path, $build )
+
+The same, as a plain function over a full path, for the modules that are handed
+a directory rather than a context.
+
+=cut
+
+sub cached
+{
+    my ( $self, $name, $build ) = @_;
+
+    return cached_file( File::Spec->catfile( $self->cachedir, $name ), $build );
+}
+
+my $CACHED_SEQ = 0;
+
+sub cached_file
+{
+    my ( $path, $build ) = @_;
+
+    return $path if -s $path;
+
+    my ( $vol, $dir, $file ) = File::Spec->splitpath( $path );
+    $CACHED_SEQ++;
+    my $tmp = File::Spec->catpath( $vol, $dir, ".$$-$CACHED_SEQ-$file" );
+
+    local $@;
+    my $ok  = eval { $build->( $tmp ); 1 };
+    my $err = $@;
+
+    unless ( $ok && -s $tmp && rename $tmp, $path )
+    {
+        unlink $tmp;
+        die $err if !$ok;
+        die "GlitchVape: could not build $path\n";
+    }
+
+    return $path;
 }
 
 =head2 tmpfile( $suffix )
@@ -426,20 +496,47 @@ operations whose CLI form is dramatically clearer than the binding's -- the
 C<-fx> expression compiler and multi-image C<-layers> composites in
 particular.
 
+=head3 Staged as MIFF, rounded to eight bits
+
+The image crosses to the other process and back as MIFF, which is
+ImageMagick's own format: the pixels as they are, and nothing to compress.
+It used to cross as PNG, and at 1920 pixels the zlib at either end cost a
+second a call -- more than most of the effects that make one, and a render
+can make several.
+
+Both ends are rounded to eight bits first, because that is what the PNG
+staging did without saying so: an effect before this one may have left
+sixteen-bit values behind (C<grade>'s Modulate does), and PNG wrote them at
+the depth the image was labelled with, which is eight. Handing them across at
+full depth instead moves most pixels of a render by a level or two -- nothing
+anybody could see, and a different picture from the same seed all the same.
+Rounded, the two stagings give the same pixels.
+
+And an alpha channel with nothing in it is dropped at both ends, which is the
+other thing PNG did unasked. C<osd> and C<text> leave the picture with one,
+fully opaque; PNG wrote that as plain RGB, so no effect ever saw a fourth
+channel from it -- and the ones that C<-separate> the picture count on there
+being three, and recombine a mess when there are four. A channel that does
+hold transparency is kept, as PNG kept it.
+
 =cut
 
 sub magick
 {
     my ( $self, @args ) = @_;
 
-    my $in  = $self->tmpfile( '.png' );
-    my $out = $self->tmpfile( '.png' );
+    my $in  = $self->tmpfile( '.miff' );
+    my $out = $self->tmpfile( '.miff' );
+
+    $self->{ image }->Set( depth => 8 );
+    _drop_opaque_alpha( $self->{ image } );
 
     GlitchVape::Magick::check( $self->{ image }->Write( $in ),
         'staging write failed' );
 
-    my @argv = GlitchVape::Tools::magick_argv( $in, @args, $out );
-    my $rc   = system( @argv );
+    my @argv =
+        GlitchVape::Tools::magick_argv( $in, @args, '-depth', '8', $out );
+    my $rc = system( @argv );
 
     die "GlitchVape: ImageMagick failed (exit "
         . ( $rc >> 8 )
@@ -452,8 +549,21 @@ sub magick
     GlitchVape::Magick::check( $new->Read( $out ),
         'could not read back the ImageMagick result' );
 
+    _drop_opaque_alpha( $new );
+
     $self->{ image } = $new;
     return $new;
+}
+
+sub _drop_opaque_alpha
+{
+    my ( $img ) = @_;
+
+    return unless $img->Get( 'matte' );
+    return unless ( $img->Get( '%[opaque]' ) // q{} ) eq 'True';
+
+    $img->Set( alpha => 'off' );
+    return;
 }
 
 =head2 pixels( $callback )
@@ -482,14 +592,18 @@ sub pixels
 
 Run C<$code>, recording wall time against C<$name> for C<--timing>.
 
+With the clock's fractions of a second. Core C<time> counts whole seconds,
+which made every effect under a second report C<0.00s> and the slow ones
+report whatever the second boundary happened to fall across.
+
 =cut
 
 sub time_effect
 {
     my ( $self, $name, $code ) = @_;
-    my $t0 = time;
+    my $t0 = Time::HiRes::time();
     my @r  = $code->();
-    push @{ $self->{ _timing } }, [ $name, time - $t0 ];
+    push @{ $self->{ _timing } }, [ $name, Time::HiRes::time() - $t0 ];
 
     # Propagate the caller's context to the wrapped code's return value.
     if ( wantarray )

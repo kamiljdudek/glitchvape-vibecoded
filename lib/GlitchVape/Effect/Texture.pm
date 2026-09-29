@@ -1120,8 +1120,17 @@ sub _bayer_file
     my ( $n ) = $name =~ /(\d+)/;
     $n ||= 4;
 
-    my $path = File::Spec->catfile( $dir, "bayer_$n.png" );
-    return $path if -f $path;
+    require GlitchVape::Context;
+
+    return GlitchVape::Context::cached_file(
+        File::Spec->catfile( $dir, "bayer_$n.png" ),
+        sub { _build_bayer( $name, $n, $_[ 0 ] ) }
+    );
+}
+
+sub _build_bayer
+{
+    my ( $name, $n, $path ) = @_;
 
     my $m    = [ [ 0 ] ];
     my $size = 1;
@@ -1147,7 +1156,7 @@ sub _bayer_file
     # bare gray(n) as black, which produces a uniform tile -- a dither that
     # does nothing, and looks exactly like one that is switched off.
     my $cells = $n * $n;
-    my $raw   = File::Spec->catfile( $dir, "bayer_$n.gray" );
+    my $raw   = "$path.gray";
 
     open my $fh, '>:raw', $raw
         or die "GlitchVape: cannot write $raw: $!\n";
@@ -1162,8 +1171,11 @@ sub _bayer_file
 
     my @argv = GlitchVape::Tools::magick_argv( '-size', "${n}x$n", '-depth',
         '8', "gray:$raw", $path );
-    system( @argv ) == 0
-        or die "GlitchVape: could not build the $name threshold matrix\n";
+    my $ok = system( @argv ) == 0;
+    unlink $raw;
+
+    die "GlitchVape: could not build the $name threshold matrix\n"
+        unless $ok;
 
     return $path;
 }
@@ -1229,6 +1241,12 @@ sub _grain
     my $bias = $p->{ shadow_bias };
     my $mono = $p->{ mono };
 
+    # This is the one loop in the program that runs once per pixel of a
+    # full-size picture, so it is written for that: a row's noise drawn in
+    # one call rather than a method call per value, and the luma and the
+    # clamp spelled out rather than called. Each is the same arithmetic in
+    # the same order as GlitchVape::Pixels::luma and ::clamp, so a seed
+    # grains exactly as it always has, in a little over half the time.
     GlitchVape::Pixels->edit(
         $ctx,
         sub {
@@ -1239,29 +1257,44 @@ sub _grain
                     my ( undef, $row ) = @_;
                     my @v = unpack 'C*', $row;
 
+                    my @noise =
+                        $rng->gauss_list( $mono ? @v / 3 : scalar @v, 0, $sd );
+                    my $k = 0;
+
                     for ( my $i = 0 ; $i < @v ; $i += 3 )
                     {
                         my $scale = 1;
                         if ( $bias )
                         {
                             my $luma =
-                                GlitchVape::Pixels::luma( @v[ $i .. $i + 2 ] )
-                                / 255;
+                                ( 0.299 * $v[ $i ] +
+                                    0.587 * $v[ $i + 1 ] +
+                                    0.114 * $v[ $i + 2 ] ) / 255;
                             $scale = 1 - $bias * $luma;
                         }
 
                         if ( $mono )
                         {
-                            my $n = $rng->gauss( 0, $sd ) * $scale;
-                            $v[ $_ ] =
-                                GlitchVape::Pixels::clamp( $v[ $_ ] + $n )
-                                for $i .. $i + 2;
+                            my $n = $noise[ $k++ ] * $scale;
+                            for my $j ( $i .. $i + 2 )
+                            {
+                                my $t = $v[ $j ] + $n;
+                                $v[ $j ] =
+                                      $t < 0   ? 0
+                                    : $t > 255 ? 255
+                                    :            int $t;
+                            }
                         }
                         else
                         {
-                            $v[ $_ ] = GlitchVape::Pixels::clamp(
-                                $v[ $_ ] + $rng->gauss( 0, $sd ) * $scale )
-                                for $i .. $i + 2;
+                            for my $j ( $i .. $i + 2 )
+                            {
+                                my $t = $v[ $j ] + $noise[ $k++ ] * $scale;
+                                $v[ $j ] =
+                                      $t < 0   ? 0
+                                    : $t > 255 ? 255
+                                    :            int $t;
+                            }
                         }
                     }
 

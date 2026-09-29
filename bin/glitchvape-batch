@@ -22,9 +22,10 @@ binmode STDERR, ':encoding(UTF-8)';
 @ARGV = map { Encode::decode( 'UTF-8', $_ ) } @ARGV;
 ## use critic
 
-use GlitchVape         ();
-use GlitchVape::Config ();
-use GlitchVape::IO     ();
+use GlitchVape          ();
+use GlitchVape::Config  ();
+use GlitchVape::IO      ();
+use GlitchVape::Workers ();
 
 our $VERSION = '0.01';
 
@@ -124,7 +125,7 @@ unless ( @jobs )
 printf "%d image(s) x %d preset(s) = %d render(s)\n",
     scalar @inputs, scalar @presets, scalar @jobs;
 
-my $workers = $opt{ jobs } || detect_cpus();
+my $workers = $opt{ jobs } || GlitchVape::Workers::cpus();
 $workers = scalar @jobs if $workers > @jobs;
 
 # Forking for a single job costs more than it saves.
@@ -231,9 +232,17 @@ sub run_parallel
 
     printf "running %d worker(s)\n", $pool_size;
 
+    # The cores shared out between the workers. Each render is ImageMagick
+    # running a thread per core unless told otherwise, so a worker per core
+    # left alone is a thread per core per worker, fighting over the same
+    # cores -- measured slower than the same workers holding a share each.
+    my $threads = int( GlitchVape::Workers::cpus() / $pool_size ) || 1;
+
     for my $job ( @$jobs )
     {
         $pm->start and next;
+
+        GlitchVape::Workers::limit_threads( $threads );
 
         my $line = eval { render_one( $job ) };
         if ( $@ )
@@ -306,22 +315,6 @@ sub scan_dir
     return @out;
 }
 
-sub detect_cpus
-{
-    open my $fh, '<', '/proc/cpuinfo' or return 2;
-    my $n = grep { /^processor\s*:/ } <$fh>;
-    close $fh;
-
-    # Assume at least two, so an unreadable or unusual cpuinfo still gets
-    # some parallelism rather than none.
-    if ( $n > 1 )
-    {
-        return $n;
-    }
-
-    return 2;
-}
-
 __END__
 
 =head1 NAME
@@ -376,8 +369,13 @@ which is the quickest way to decide what a given photograph wants:
 =head2 Parallelism
 
 Work is distributed with L<Parallel::ForkManager> when it is installed, one
-image per worker. Rendering is CPU-bound and single-threaded per image, so the
-default of one worker per core is usually right.
+image per worker, one worker per core by default -- counting the cores this
+process may run on, so C<taskset> and a container's CPU limit are respected.
+
+A render is not single-threaded: ImageMagick runs its heavier operations on as
+many threads as there are cores. So each worker is held to its share of them,
+which is what lets a worker per core be the right number rather than an
+oversubscription.
 
 =head1 SEE ALSO
 

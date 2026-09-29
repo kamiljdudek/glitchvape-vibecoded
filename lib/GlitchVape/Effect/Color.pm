@@ -174,8 +174,13 @@ $R->register(
     doc     => <<'DOC',
 The most physically accurate VHS artefact. Composite video allocates far less
 bandwidth to colour than to brightness, so colour detail smears horizontally
-while edges stay crisp. Reproduced by converting to YCbCr, blurring only Cb and
-Cr along one axis, and converting back.
+while edges stay crisp. Reproduced by converting to YCbCr, smearing only Cb and
+Cr along the line, and converting back.
+
+The smear is one-sided and trails to the right, because on tape the colour
+arrives late: it runs on past the edge of whatever it belongs to rather than
+spreading evenly either side of it. C<amount> is how far, as the width of the
+fall-off in pixels.
 
 C<jitter> is what a marginal signal does across a loop: the bandwidth
 available to colour is not a constant on a tape that is struggling, so the
@@ -188,14 +193,16 @@ DOC
             type    => 'num',
             min     => 0,
             max     => 100,
-            doc     => 'Horizontal chroma blur radius in pixels',
+            doc     => 'How far colour trails to the right along the line, in '
+                . 'pixels',
         },
         vertical => {
             default => 0,
             type    => 'num',
             min     => 0,
             max     => 100,
-            doc     => 'Vertical chroma blur; real tape has almost none',
+            doc     => 'Vertical chroma blur, down the columns only; real '
+                . 'tape has almost none',
         },
         saturation => {
             default => 1.0,
@@ -244,9 +251,13 @@ sub _chroma_bleed
         # where the whole separate/blur/recombine cycle fits in one call
         # anyway.
         my @chroma;
-        push @chroma, '-motion-blur', sprintf( '0x%.3f+90', $amount )
+        push @chroma, '-morphology', 'Correlate', _trail_kernel( $amount )
             if $amount > 0;
-        push @chroma, '-blur', sprintf( '0x%.3f', $vertical )
+
+        # Along the columns only. This was a -blur, which is both ways at
+        # once, under a name and a description that said vertical.
+        push @chroma, '-morphology', 'Convolve',
+            sprintf( 'Blur:0x%.3f,90', $vertical )
             if $vertical > 0;
 
         $ctx->magick(
@@ -266,6 +277,37 @@ sub _chroma_bleed
         if $p->{ saturation } != 1;
 
     return;
+}
+
+# The smear, as a one-row kernel: each pixel takes its colour from itself and
+# the pixels to its left, weighted by a half-Gaussian of the given width, so
+# colour trails to the right of whatever it belongs to -- the way it does on
+# tape, where the chroma arrives late along the line.
+#
+# It was a -motion-blur, and two things were wrong with that. It went the wrong
+# way: at +90 ImageMagick's motion blur runs up the columns, not along the
+# rows, so every preset's "horizontal" bleed was a smear upwards. And it was
+# slow, fetching every tap through an interpolating lookup: at 1920 pixels it
+# took ten seconds on one core, where the same weights as a plain kernel take
+# under half a second. The weights are the ones the motion blur used, a
+# Gaussian of sigma $amount from the pixel itself outwards, taken to four
+# sigma, past which what is left is under a three-thousandth of the whole.
+#
+# Correlate rather than Convolve so that the list reads in the order the
+# pixels do, with the origin at its right-hand end: the pixel itself.
+sub _trail_kernel
+{
+    my ( $sigma ) = @_;
+
+    my $taps = int( 4 * $sigma ) + 1;
+
+    my @weight = map { exp( -( $_**2 ) / ( 2 * $sigma**2 ) ) } 0 .. $taps - 1;
+
+    my $sum = 0;
+    $sum += $_ for @weight;
+
+    return sprintf '%dx1+%d+0: %s', $taps, $taps - 1,
+        join ',', map { sprintf '%.6f', $_ / $sum } reverse @weight;
 }
 
 # The factor this frame's bleed is multiplied by. rng_for folds the frame

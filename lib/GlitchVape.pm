@@ -3,8 +3,9 @@ package GlitchVape;
 use strict;
 use warnings;
 
-use File::Spec ();
-use File::Temp ();
+use File::Spec  ();
+use File::Temp  ();
+use Time::HiRes ();
 
 use GlitchVape::Config    ();
 use GlitchVape::Context   ();
@@ -77,6 +78,8 @@ format.
     colors    => N                 quantise the still to an N-entry palette
     codec     => name              h264, vp9 or av1; default from the extension
     animate   => { frames, fps }   render a loop instead of a still
+    jobs      => N                 processes rendering a loop's frames;
+                                   default one per core
     on_frame  => sub { my ( $done, $total ) = @_ }   after each frame
     on_encode => sub { }                             frames done, encoding
     verbose   => bool
@@ -162,7 +165,7 @@ sub render
         }
         if $arg{ dry_run };
 
-    my $started = time;
+    my $started = Time::HiRes::time();
 
     my $max_dim = $arg{ max_dim };
     $max_dim = $config->{ output }{ max_dim } unless defined $max_dim;
@@ -190,7 +193,7 @@ sub render
 
     $result->{ seed }     = $seed;
     $result->{ pipeline } = $pipeline;
-    $result->{ elapsed }  = time - $started;
+    $result->{ elapsed }  = Time::HiRes::time() - $started;
 
     return $result;
 }
@@ -252,6 +255,7 @@ sub _render_animation
     my ( $job ) = @_;
 
     require GlitchVape::Animate;
+    require GlitchVape::Frames;
 
     my $arg    = $job->{ opt };
     my $spec   = $arg->{ animate };
@@ -271,71 +275,46 @@ sub _render_animation
 
     my $dir = File::Temp->newdir( 'glitchvape_frames_XXXXXX', TMPDIR => 1 );
 
-    # The source is decoded once and cloned per frame. Re-reading a 3 MB HEIC
-    # twenty-four times is the slowest thing this program could plausibly do.
-    my $source = GlitchVape::IO::load(
-        $job->{ input },
-        max_dim => $job->{ max_dim },
-        fit     => $arg->{ fit },
-    );
-
-    my @paths;
-    my @timings;
-
     # One for the whole loop. Screens, tiles and colour lookups depend on the
     # settings and not on the frame, and a context's own tmpdir dies with the
     # frame -- so without this every frame rebuilds what the one before it
     # just built. See L<GlitchVape::Context/cachedir()>.
     my $cache = File::Temp->newdir( 'glitchvape_cache_XXXXXX', TMPDIR => 1 );
 
-    for my $n ( 0 .. $frames - 1 )
-    {
-        my $ctx = GlitchVape::Context->new(
-            image    => $source->Clone,
-            source   => $job->{ input },
-            seed     => $job->{ seed },
-            verbose  => $arg->{ verbose },
-            cachedir => "$cache",
-        );
-        $ctx->frames( $frames );
-        $ctx->frame( $n );
-
-        $job->{ pipeline }->run( $ctx );
-
-        # Every frame, or the encoder is handed two shapes: the bar makes the
-        # picture taller and a loop whose first frame alone had one would not
-        # encode at all.
-        $ctx->image(
-            GlitchVape::Watermark::apply( $ctx->image, $arg->{ watermark } ) )
-            if $arg->{ watermark };
-
-        my $path = GlitchVape::Animate::frame_path( "$dir", $n );
-
-        # Frames keep the blunt strip. They are intermediate files that exist
-        # for as long as the encode takes, and a per-frame exiftool run would
-        # be twenty-four subprocesses to scrub something nobody will read.
-        GlitchVape::IO::save(
-            $ctx->image, $path,
-            quality => 100,
-            strip   => 1,
-            fit     => $arg->{ fit },
-        );
-        push @paths,   $path;
-        push @timings, [ $ctx->timings ];
-
-        warn sprintf( "  frame %d/%d\n", $n + 1, $frames ) if $arg->{ verbose };
+    # The source is decoded once per process rendering frames rather than
+    # once per frame: re-reading a 3 MB HEIC twenty-four times is the slowest
+    # thing this program could plausibly do. How many processes that is, and
+    # why the decode cannot simply happen here first, is GlitchVape::Frames.
+    my $done = GlitchVape::Frames::render(
+        load => sub {
+            GlitchVape::IO::load(
+                $job->{ input },
+                max_dim => $job->{ max_dim },
+                fit     => $arg->{ fit },
+            );
+        },
+        pipeline  => $job->{ pipeline },
+        seed      => $job->{ seed },
+        frames    => $frames,
+        dir       => "$dir",
+        cachedir  => "$cache",
+        source    => $job->{ input },
+        watermark => $arg->{ watermark },
+        fit       => $arg->{ fit },
+        verbose   => $arg->{ verbose },
+        jobs      => $arg->{ jobs },
 
         # A loop is the one thing this program does that takes long enough to
         # want watching, and the frame is the only unit of it worth counting:
         # everything inside one is a chain of ImageMagick calls with no
         # progress of their own to report.
-        $arg->{ on_frame }->( $n + 1, $frames ) if $arg->{ on_frame };
-    }
+        on_frame => $arg->{ on_frame },
+    );
 
     $arg->{ on_encode }->() if $arg->{ on_encode };
 
     GlitchVape::Animate::encode(
-        frames  => \@paths,
+        frames  => $done->{ paths },
         output  => $job->{ output },
         fps     => $fps,
         loop    => $spec->{ loop },
@@ -344,15 +323,13 @@ sub _render_animation
         audio   => $spec->{ audio },
     );
 
-    my ( $w, $h ) = $source->Get( 'width', 'height' );
-
     return {
         output  => $job->{ output },
-        dims    => [ $w, $h ],
+        dims    => $done->{ dims },
         frames  => $frames,
         fps     => $fps,
         audio   => $spec->{ audio },
-        timings => $timings[ 0 ] || [],
+        timings => $done->{ timings },
     };
 }
 

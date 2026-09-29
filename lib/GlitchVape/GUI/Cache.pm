@@ -3,12 +3,12 @@ package GlitchVape::GUI::Cache;
 use strict;
 use warnings;
 
-use Digest::SHA  ();
-use Encode       ();
 use File::Path   ();
 use File::Spec   ();
 use File::Temp   ();
 use Scalar::Util ();
+
+use GlitchVape::Checkpoint ();
 
 our $VERSION = '0.01';
 
@@ -29,6 +29,9 @@ stack a file lookup rather than a re-render.
     ~/.cache/glitchvape/
         previews/<key>.png       shared, kept between runs, LRU-capped
         session-<pid>/           transient working files, removed on exit
+            layers/              screens and tiles; see layers_dir
+            steps/               the picture after each effect; see steps_dir
+            tmp/                 the render child's scratch files
 
 C<previews> survives the process because that is what makes undo and a
 restarted session cheap. The per-session directory holds things with no reuse
@@ -159,35 +162,11 @@ sub key
 {
     my ( $class, @parts ) = @_;
 
-    my $sha = Digest::SHA->new( 256 );
-    for my $part ( @parts )
-    {
-        my $text = q{};
-        if ( defined $part )
-        {
-            $text = "$part";
-        }
-
-        # Digest::SHA hashes bytes and refuses a string with a character
-        # above 255 in it outright -- and half the parts here are effect
-        # parameters, which is where a preset's Japanese text ends up.
-        # Without this, applying any preset carrying a text effect died
-        # before it rendered.
-        #
-        # Only what it would refuse is encoded. Encoding unconditionally
-        # would re-encode a string that already holds octets, changing every
-        # key that works today and discarding a warm cache for nothing.
-        my $bytes = $text;
-        $bytes = Encode::encode_utf8( $bytes ) if $bytes =~ /[^\x00-\xFF]/;
-
-        # Length-prefixed rather than joined with a separator: otherwise
-        # ('a','bc') and ('ab','c') hash identically, and two different
-        # parameter sets could collide onto one cached image.
-        $sha->add( length( $bytes ) . ':' );
-        $sha->add( $bytes );
-    }
-
-    return substr $sha->hexdigest, 0, 32;
+    # The digest lives in the base package, because the checkpoints the
+    # render child keeps are keyed the same way and a module the CLI package
+    # ships may not reach into this one. Same function, same keys: a cache
+    # filled before it moved is still a cache.
+    return GlitchVape::Checkpoint::digest( @parts );
 }
 
 =head2 preview_path( $key, $suffix )
@@ -266,6 +245,44 @@ sub scratch_dir
         sprintf( '%s%05d', $name || 'frames', $self->{ seq } ) );
 
     File::Path::make_path( $dir );
+    return $dir;
+}
+
+=head2 layers_dir()
+
+The C<cachedir> every render of this session is handed: screens, tiles and
+colour lookups, which depend on the settings and the size and not on the
+picture. See L<GlitchVape::Context/cachedir()>. Kept for the session rather
+than for one render, because the window renders the same settings at the same
+size over and over, and a C<cmyk> preview spent nine tenths of its time
+rebuilding four screens it had built the Apply before.
+
+=head2 steps_dir()
+
+Where the render child keeps the picture as it stood after each effect; see
+L<GlitchVape::Checkpoint>.
+
+=head2 tmp_dir()
+
+The render child's C<TMPDIR>, so that the scratch files of a render cancelled
+half way -- which goes by C<_exit> and cleans up nothing -- go with the session
+rather than staying in the system's temporary directory.
+
+All three are created on first use, and go with the session.
+
+=cut
+
+sub layers_dir { return $_[ 0 ]->_session_subdir( 'layers' ) }
+sub steps_dir  { return $_[ 0 ]->_session_subdir( 'steps' ) }
+sub tmp_dir    { return $_[ 0 ]->_session_subdir( 'tmp' ) }
+
+sub _session_subdir
+{
+    my ( $self, $name ) = @_;
+
+    my $dir = File::Spec->catdir( $self->{ session }, $name );
+    File::Path::make_path( $dir );
+
     return $dir;
 }
 

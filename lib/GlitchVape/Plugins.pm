@@ -211,8 +211,8 @@ and missing from the menu.
 The registries above; the C<Context> an effect's C<apply> is handed -- its
 C<image>, C<dims>, the three random streams C<rng_for>, C<rng_phase> and
 C<rng_fixed>, C<frame>, C<frames>, C<phase>, the motions C<travel>,
-C<excursion> and C<swell>, C<tmpdir>, C<cachedir>, C<magick> and C<pixels>;
-and these modules: L<GlitchVape::Magick>, L<GlitchVape::Pixels>,
+C<excursion> and C<swell>, C<tmpdir>, C<cachedir> and C<cached>, C<magick>
+and C<pixels>; and these modules: L<GlitchVape::Magick>, L<GlitchVape::Pixels>,
 L<GlitchVape::Palette>, L<GlitchVape::Random>, L<GlitchVape::Tools>,
 L<GlitchVape::Wav> for a kind of track to write what it made, and
 L<GlitchVape::Fonts>'s C<resolve>.
@@ -220,6 +220,16 @@ L<GlitchVape::Fonts>'s C<resolve>.
 Everything else is the program's own and may change without the API number
 moving -- C<Chicago>, C<VGA>, C<Defrag> and C<Starfield> in particular, which
 are the insides of particular effects.
+
+Two things an effect has to allow for, which the program's own were changed
+to allow for. The frames of a loop are drawn by several processes at once, so
+an effect may be running in more than one of them: a frame must depend on
+nothing but its picture, its parameters, the seed and C<frame>, never on a
+frame drawn before it. And C<cachedir> is shared by all of them and may
+outlive the render -- the window keeps one for the session -- so a file that
+goes in it goes in through L<GlitchVape::Context/cached( $name, $build )>,
+which only ever lets a finished one be seen, and is named for everything it
+depends on.
 
 =head1 TESTING ONE
 

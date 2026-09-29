@@ -3,6 +3,9 @@ package GlitchVape::Effect::Screen;
 use strict;
 use warnings;
 
+use POSIX ();
+
+use GlitchVape::Context  ();
 use GlitchVape::Magick   ();
 use GlitchVape::Registry ();
 use GlitchVape::Raster   ();
@@ -307,7 +310,13 @@ sub _vignette
     return if $p->{ strength } <= 0;
     require Image::Magick;
 
-    my ( $w, $h ) = $ctx->dims;
+    my ( $fw, $fh ) = $ctx->dims;
+
+    # Built small and enlarged: see _layer_scale.
+    # Six hundred pixels per step at full strength, measured: at 720 by 540
+    # and the default strength that is half size and a third of a level.
+    my $f = _layer_scale( $fw < $fh ? $fw : $fh, 600 * $p->{ strength } );
+    my ( $w, $h ) = ( POSIX::ceil( $fw / $f ), POSIX::ceil( $fh / $f ) );
 
     # radial-gradient is white in the centre, black at the edge. Scaling it up
     # and cropping back moves the black further out, widening the clear area.
@@ -331,8 +340,20 @@ sub _vignette
     $grad->Crop( geometry => "${w}x${h}+0+0", gravity => 'Center' );
     $grad->Set( page => '0x0+0+0' );
 
-    $grad->Blur( radius => 0, sigma => $p->{ softness } * 20 )
+    $grad->Blur( radius => 0, sigma => $p->{ softness } * 20 / $f )
         if $p->{ softness } > 0;
+
+    # Back to the size it would have had: the picture's, or the gradient's own
+    # where a size below 1 made it the smaller of the two.
+    if ( $f > 1 )
+    {
+        my $tw = int( $fw * $p->{ size } ) || $fw;
+        my $th = int( $fh * $p->{ size } ) || $fh;
+        $tw = $fw if $tw > $fw;
+        $th = $fh if $th > $fh;
+
+        $grad->Resize( geometry => "${tw}x${th}!", filter => 'Triangle' );
+    }
 
     $ctx->image->Composite(
         image   => $grad->[ 0 ],
@@ -340,6 +361,34 @@ sub _vignette
         gravity => 'Center',
     );
     return;
+}
+
+# How many times smaller a smooth layer can be built than the picture it goes
+# on. The vignette's falloff and the glare's band are gradients blurred wider
+# still, and building them at full size spent almost all of both effects' time
+# on pixels an enlargement reproduces: the glare's blur alone was ten seconds of
+# a single core at 1920 pixels, and at an eighth of the size it is a tenth of
+# one.
+#
+# What an enlargement does not reproduce is position. Centring the band, the
+# rotation and the crop each round to a whole pixel, and at a smaller size a
+# whole pixel is several of the picture's -- so the layer lands a little off
+# where it would have been, by about the scale, and a steep gradient turns that
+# into a difference of brightness. $per is how many of the picture's pixels of
+# layer each step of scale has to have to keep that under a level in 256, which
+# each effect works out from its own slope and strength: measured, not guessed,
+# against the full-size layer in t/51-layers.t.
+sub _layer_scale
+{
+    my ( $extent, $per ) = @_;
+
+    return 1 unless $per > 0;
+
+    my $f = int( $extent / $per );
+
+    return 1 if $f < 1;
+    return 8 if $f > 8;
+    return $f;
 }
 
 # ---------------------------------------------------------------------------
@@ -482,7 +531,7 @@ sub _defocus_rim
     # of ImageMagick copy the alpha channel and nothing else here, so without
     # the copy the mask arrives fully opaque and the blurred picture covers
     # the sharp one entirely. Done on the way out of the cache rather than on
-    # the way in, because a grey PNG is a thing every ImageMagick reads back
+    # the way in, because a grey picture is a thing every ImageMagick reads back
     # as the picture that was written and a greyscale one carrying its own
     # alpha is not.
     $mask->Set( alpha => 'copy' );
@@ -518,18 +567,35 @@ sub _focus_mask
     my ( $ctx, $w, $h, $focus ) = @_;
     require File::Spec;
 
-    my $path =
-        File::Spec->catfile( $ctx->cachedir, sprintf 'crtfocus_%dx%d_%.3f.png',
-        $w, $h, $focus );
+    # MIFF at the full sixteen bits, because the mask has to come out of the
+    # cache as the picture that went in. It used to be a PNG, and a PNG is
+    # eight bits: the render that built the mask used it exact from memory and
+    # every frame after that read back a rounded copy, so frame one of a loop
+    # was defocused through a different mask from the others -- and now that
+    # the cache is shared between renders and between processes, which of the
+    # two a frame got would come down to timing.
+    my $path = $ctx->cached(
+        sprintf( 'crtfocus_%dx%d_%.3f.miff', $w, $h, $focus ),
+        sub {
+            my $built = _build_focus_mask( $w, $h, $focus );
+            $built->Set( depth => 16 );
+            GlitchVape::Magick::check( $built->Write( $_[ 0 ] ),
+                'curvature: could not cache the focus falloff' );
+        }
+    );
 
     my $mask = Image::Magick->new;
+    GlitchVape::Magick::check( $mask->Read( $path ),
+        'curvature: could not read the cached focus falloff' );
 
-    if ( -f $path )
-    {
-        GlitchVape::Magick::check( $mask->Read( $path ),
-            'curvature: could not read the cached focus falloff' );
-        return $mask;
-    }
+    return $mask;
+}
+
+sub _build_focus_mask
+{
+    my ( $w, $h, $focus ) = @_;
+
+    my $mask = Image::Magick->new;
 
     # radial-gradient is white in the centre, and here the centre is the part
     # that must not be touched -- so black-white. Built oversize and cropped
@@ -555,9 +621,6 @@ sub _focus_mask
     # focused at, so this is the falloff the glass has as well as the one that
     # looks right: flat across the middle, and all of the fall near the rim.
     $mask->Evaluate( operator => 'Pow', value => 2 );
-
-    GlitchVape::Magick::check( $mask->Write( $path ),
-        'curvature: could not cache the focus falloff' );
 
     return $mask;
 }
@@ -821,7 +884,20 @@ sub _glare
     return if $p->{ strength } <= 0;
     require Image::Magick;
 
-    my ( $w, $h ) = $ctx->dims;
+    my ( $fw, $fh ) = $ctx->dims;
+
+    # A wide band is built small and enlarged, since blurred as widely as it
+    # is there is nothing in it the enlargement could lose: see _layer_scale.
+    # A narrow one is left at full size and unblurred, as it always was.
+    #
+    # Measured, the misplacement is about the scale in pixels and the band
+    # climbs from nothing to full in half its width, so a band of B pixels at
+    # strength S may be built at up to B / (660 S) times smaller.
+    my $reach = int( sqrt( $fw * $fw + $fh * $fh ) ) + 2;
+    my $f     = _layer_scale( int( $reach * $p->{ width } ) || 1,
+        660 * $p->{ strength } );
+
+    my ( $w, $h ) = ( POSIX::ceil( $fw / $f ), POSIX::ceil( $fh / $f ) );
     my $diag = int( sqrt( $w * $w + $h * $h ) ) + 2;
     my $band = int( $diag * $p->{ width } ) || 1;
 
@@ -864,7 +940,9 @@ sub _glare
     $sheen->Set( gravity => 'Center' );
     $sheen->Crop( geometry => "${w}x${h}+0+0", gravity => 'Center' );
     $sheen->Set( page => '0x0+0+0' );
-    $sheen->Blur( radius => 0, sigma => $band / 6 ) if $band > 12;
+    $sheen->Blur( radius => 0, sigma => $band / 6 ) if $band * $f > 12;
+    $sheen->Resize( geometry => "${fw}x${fh}!", filter => 'Triangle' )
+        if $f > 1;
     $sheen->Evaluate( operator => 'Multiply', value => $p->{ strength } );
 
     $ctx->image->Composite(
@@ -1114,9 +1192,20 @@ sub _screen_file
     my ( $pitch, $angle, $w, $h, $dir ) = @_;
     require File::Spec;
 
-    my $path =
-        File::Spec->catfile( $dir, "screen_${pitch}_${angle}_${w}x$h.png" );
-    return $path if -f $path;
+    # MIFF, because a screen is a full-size picture read by every frame that
+    # uses it, and as PNG it spent longer being compressed than being built.
+    # At whatever depth the rotation left it, which is sixteen bits -- see
+    # below -- and which the PNG kept as well; rounding it to eight moves the
+    # dots of the rosette that fall on a threshold.
+    return GlitchVape::Context::cached_file(
+        File::Spec->catfile( $dir, "screen_${pitch}_${angle}_${w}x$h.miff" ),
+        sub { _build_screen( $pitch, $angle, $w, $h, $dir, $_[ 0 ] ) }
+    );
+}
+
+sub _build_screen
+{
+    my ( $pitch, $angle, $w, $h, $dir, $path ) = @_;
 
     my $cell = _cell_file( $pitch, $dir );
 
@@ -1131,8 +1220,11 @@ sub _screen_file
     my @argv = GlitchVape::Tools::magick_argv(
         '-size', "${side}x$side", "tile:$cell",
 
-        # Point, so rotation samples the cell's thresholds rather than
-        # averaging neighbouring ones into values the cell never had.
+        # Point was meant to make the rotation sample the cell's thresholds
+        # rather than average neighbouring ones into values the cell never
+        # had. -rotate shears rather than resamples and does not consult it,
+        # so the screen does carry blended thresholds, at sixteen bits; that
+        # is the screen every render so far has used, and the cache keeps it.
         '-filter',  'Point',
         '-rotate',  $angle,
         '-gravity', 'center',
@@ -1156,8 +1248,15 @@ sub _cell_file
     my ( $pitch, $dir ) = @_;
     require File::Spec;
 
-    my $path = File::Spec->catfile( $dir, "cell_$pitch.png" );
-    return $path if -f $path;
+    return GlitchVape::Context::cached_file(
+        File::Spec->catfile( $dir, "cell_$pitch.png" ),
+        sub { _build_cell( $pitch, $_[ 0 ] ) }
+    );
+}
+
+sub _build_cell
+{
+    my ( $pitch, $path ) = @_;
 
     my $cells = $pitch**2;
     my $mid   = ( $pitch - 1 ) / 2;
@@ -1177,7 +1276,7 @@ sub _cell_file
         $rank++;
     }
 
-    my $raw = File::Spec->catfile( $dir, "cell_$pitch.gray" );
+    my $raw = "$path.gray";
     open my $fh, '>:raw', $raw
         or die "GlitchVape: cannot write $raw: $!\n";
     print { $fh } join q{}, map { chr } @value;
@@ -1186,8 +1285,11 @@ sub _cell_file
     my @argv = GlitchVape::Tools::magick_argv( '-size', "${pitch}x$pitch",
         '-depth', '8', "gray:$raw", $path );
 
-    system( @argv ) == 0
-        or die "GlitchVape: could not build the $pitch-pixel dot cell\n";
+    my $ok = system( @argv ) == 0;
+    unlink $raw;
+
+    die "GlitchVape: could not build the $pitch-pixel dot cell\n"
+        unless $ok;
 
     return $path;
 }

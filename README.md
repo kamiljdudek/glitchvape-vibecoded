@@ -281,6 +281,7 @@ glitchvape [options] <input>
 | `-a, --animate` | render a loop instead of a still |
 | `--frames N` / `--fps N` | loop length and rate (default 24 @ 12) |
 | `--codec NAME` | `h264`, `vp9` or `av1`; default from the extension |
+| `-j, --jobs N` | processes drawing a loop's frames (default one per core) |
 | `--audio PATH` | add a soundtrack; the loop repeats to cover it |
 | `--audio-start` / `--audio-end` | seconds; which part of the track |
 | `--audio-filter F=V` | vaporwave filter; repeatable |
@@ -494,8 +495,10 @@ A few worth knowing about:
   the characters — a broken framebuffer still goes out through the same CRT.
 - **`chroma_bleed`** — the most physically accurate VHS artefact. Composite
   video gives colour far less bandwidth than brightness, so colour smears
-  horizontally while edges stay sharp. Done properly in YCbCr, blurring only
-  Cb and Cr.
+  horizontally while edges stay sharp. Done properly in YCbCr, smearing only
+  Cb and Cr, and one-sided: the colour trails to the right of whatever it
+  belongs to, because on tape it arrives late along the line. `vertical` is
+  the up-and-down smear, off by default because real tape has almost none.
 - **`defrag`** — redraws the picture as the cluster map from the disk
   defragmenter that shipped with Windows 95, inside the defragmenter's own
   window: a grid of blocks eight pixels across and ten down, each one the

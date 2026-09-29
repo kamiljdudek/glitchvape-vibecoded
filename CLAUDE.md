@@ -24,6 +24,8 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 | `lib/GlitchVape/Effect/*.pm` | the forty-seven effects, grouped by theme not by stage |
 | `lib/GlitchVape/GUI.pm`, `GUI/` | everything Gtk3, and the only thing that may `use Gtk3` |
 | `lib/GlitchVape/Plugins.pm` | finding, trying and loading plug-ins — `GlitchVape::Plugin::*`; see invariant 8 |
+| `lib/GlitchVape/Frames.pm`, `Workers.pm` | a loop's frames, drawn by several processes where forking is safe — see [Speed](#speed-and-what-was-measured) |
+| `lib/GlitchVape/Checkpoint.pm` | the picture as it stood after each effect, so a preview starts after what it shares with the last one |
 | `lib/GlitchVape/Test.pm` | the checks every effect owes, installed so that a plug-in's tests can make them too |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
@@ -140,11 +142,20 @@ release them, and the first parallel operation deadlocks forever.
 
 So `GUI/Render.pm` forks per render and **the parent process never loads an
 image at all** — not even to cache the decoded source, which is the obvious
-optimisation and exactly the thing that cannot be done. Image dimensions come
-from a separate `magick` subprocess.
+optimisation and exactly the thing that cannot be done in the parent. Image
+dimensions come from a separate `magick` subprocess. The source *is* cached,
+on disk and by a child: the first checkpoint `GlitchVape::Checkpoint` keeps is
+the decoded photograph, and the next child reads that.
 
 This is the single most expensive mistake available in this codebase, because
 it presents as an intermittent hang rather than an error.
+
+The same rule decides where a loop's frames may be drawn in parallel.
+`GlitchVape::Frames` forks its workers *before* anything is decoded and each
+decodes for itself, and it asks `Workers::fork_safe` first — does this process
+have exactly one thread — so that a caller who has already decoded something,
+or runs GLib's threads, gets its frames drawn in one process, as they always
+were, rather than a hang. `t/50-frames.t` checks both halves.
 
 ### 6. Undo steps over configurations, not images
 
@@ -152,6 +163,14 @@ it presents as an intermittent hang rather than an error.
 which is a cache hit, because `GUI/Cache.pm` is content-addressed on the
 resolved configuration. One Apply is one history entry, so dragging a slider
 does not produce fifty near-identical steps.
+
+Within one preview the same idea runs at a finer grain. The render child
+keeps the picture as it stood after each effect, keyed on the key before it
+plus that effect's parameters, and the next preview starts after the last one
+its pipeline shares — adjusting the ninth effect of twelve re-runs four. It is
+kept as MPC and only as MPC, for the reason in *Things that have cost time
+before*, and `t/52-checkpoint.t` resumes every step of five presets and asks
+for the same picture to the bit.
 
 The configuration is not all that decides a picture, and the key says so: it
 carries the program's version, and for each effect a plug-in drew, that
@@ -931,6 +950,8 @@ calls, none of which reports progress.
 
 Two things are easy to get wrong here and both were:
 
+- **What is counted is frames finished, not which frame.** Workers finish in
+  whatever order they finish in, and the count goes up by one each time.
 - **The total is `frames + 1`, and every report in a render must use the same
   one.** The extra step is the ffmpeg run after the last frame — with a
   soundtrack, an audio render before that — so a bar reaching full and then
@@ -946,6 +967,62 @@ the export path reports through the library rather than through a second loop
 in the GUI. The estimate discards the first frame: it pays for decoding the
 source that every later frame reuses, so extrapolating from it promises a wait
 half again as long as the one that follows.
+
+## Speed, and what was measured
+
+The machine this was written on has twenty-four cores, and ImageMagick uses
+every one of them — which hid for months that the program was slow anywhere
+else. Measure under `taskset -c 0-3` for a laptop and under `taskset -c 0`
+with `MAGICK_THREAD_LIMIT=1` for one worker's share; `-vv` gives per-effect
+timings, which count fractions of a second now rather than whole ones.
+
+There were two kinds of slow, and a fast machine hides only one of them:
+
+- **Perl touching every pixel.** `grain` draws one or three Gaussian numbers
+  per pixel, eight million of them at 1920 pixels, on one core whatever the
+  machine has.
+- **ImageMagick asked for something expensive** that twenty-four cores
+  absorb: `chroma_bleed`'s motion blur was ten seconds of one core at 1920
+  pixels, `glare`'s blur of its band eight, and every full-size picture
+  handed between processes as PNG spent most of a second in zlib.
+
+What was done about it, each checked against what it replaced:
+
+| | | |
+|---|---|---|
+| `Context::magick` stages through MIFF | 1.06 s a call at 1920 px → 0.04 | same pixels, all presets |
+| `grain` draws a row's noise at once | 1.7–1.9× | same pixels |
+| `cachedir` kept for the window's session; screens as MIFF | a second Apply of `cmyk`: 4.4 s → 0.2 | same pixels |
+| frames as PPM; previews encode `veryfast` | 0.23 s a frame → 0.006; encode 1.2 s → 0.24 | same decoded frames |
+| frames drawn by several processes | 3× on four cores | same bytes |
+| the window keeps each step's picture | adjusting a late effect: 0.75 s → 0.2 on four cores | same pixels, every step of every preset |
+| `chroma_bleed` as a kernel | 10.6 s → 0.44 on one core | only the axis, which was a bug |
+| `glare` and `vignette` built small | `glare` 8–10 s → a tenth on one core | within a level |
+
+Together: a twenty-four frame preview loop at 720 pixels on four cores went
+from 56–63 seconds to 6–8; a still preview on one core from 2.4–3.2 seconds
+plus a 0.86 second decode to 0.7–1.1, with the decode paid once per
+photograph; a full-size still on the big machine from 7–12 seconds to 2–6.
+
+What was not done, and why:
+
+- **`grain` from a noise tile.** Generating one tile of noise and re-rolling
+  it per frame by offset and orientation measured ten times faster again. It
+  also gives different grain for the same seed, which makes it a decision
+  about the program's promises rather than an optimisation; it is waiting
+  for one.
+- **Compiled code, libvips, OpenCL.** None is needed at these numbers, and
+  each costs "nothing is compiled" or a new dependency in two packagings.
+- **Compositing the late layers with Cairo in the window**, so a slider could
+  be watched live. That is a second implementation of the effects it draws,
+  against invariant 3, and Cairo's blend maths is not ImageMagick's; the
+  per-step checkpoints give nearly the same responsiveness without either.
+- **A fixed eighth for the smooth layers** was tried first and was three to
+  nine levels out at 720 pixels. A small canvas cannot place a layer better
+  than one of its own pixels, which is several of the picture's, and a steep
+  gradient turns that into brightness. `Screen::_layer_scale` now chooses the
+  scale from the layer's own slope and strength, and `t/51-layers.t` holds
+  each to a level of its full-size build.
 
 ## Things that have cost time before
 
@@ -1027,6 +1104,49 @@ half again as long as the one that follows.
   settings rather than on the frame goes in `$ctx->cachedir`, which the
   animation loop hands to every frame; `tmpdir` stays per-frame, because the
   scratch files are numbered from one in each.
+
+  `cachedir` is now shared by the processes drawing a loop and, in the window,
+  by every preview of the session, so a file goes in through `$ctx->cached`
+  (or `Context::cached_file`), which builds under a hidden name and renames it
+  into place. The old pattern — `return $path if -f $path`, then write to
+  `$path` — hands a second process half a file.
+
+- **PNG staging did two things nobody asked it to.** `Context::magick` hands
+  the picture to `magick` as MIFF now, because PNG's zlib cost a second a call
+  at 1920 pixels. But PNG had been rounding sixteen-bit values to the eight
+  bits the picture was labelled with, and dropping an alpha channel that held
+  nothing — and both are load-bearing. Without the first, most pixels of a
+  render move a level; without the second, the canvas `osd` or `text` leaves
+  (opaque alpha) reaches a `-separate` as four planes and comes back white.
+  The MIFF staging does both on purpose; `t/51-layers.t` holds it to PNG's
+  result.
+
+- **`Set( depth => 8 )` rounds the pixels; operations raise the label to 16
+  without being asked.** So between effects a picture can hold sixteen-bit
+  values under an eight-bit label, and no ordinary file round-trips that: at
+  eight bits the values are rounded, at sixteen the label is lost, and setting
+  the label back rounds after all. MPC — ImageMagick's pixel cache written as
+  it is — is the only format that gives the picture back, which is why the
+  checkpoints are MPC. Relatedly, the PNG and PNM writers round sixteen-bit
+  values to eight *differently*, a level apart on a quarter of some presets'
+  pixels, which is why a frame is rounded before it is written as PPM.
+
+- **`-rotate` does not consult `-filter`.** It shears, so the `-filter Point`
+  in front of `cmyk`'s screen rotation has never kept the thresholds unblended:
+  the screens are sixteen-bit pictures, and caching one at eight bits moved
+  the rosette's dots.
+
+- **`-motion-blur 0xN+90` runs up the columns, not along the rows.** That was
+  `chroma_bleed`'s "horizontal" smear for as long as it existed, and it was
+  also ten seconds of one core at 1920 pixels, because every tap is an
+  interpolated lookup. The same weights as a one-row `-morphology Correlate`
+  kernel go the right way in a twentieth of the time.
+
+- **A `die` in a signal handler that lands in a destructor is a warning.** The
+  process carries on. A frame worker told to stop therefore `_exit`s, and its
+  scratch files live under the frame directory so that whoever removes the
+  frames removes them — clearing up in the handler raced the `magick` still
+  reading from them.
 
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first

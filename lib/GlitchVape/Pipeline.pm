@@ -96,18 +96,35 @@ sub new
     return bless { steps => \@steps }, $class;
 }
 
-=head2 run( $ctx )
+=head2 run( $ctx, %opt )
 
 Apply every step to the context's image, in order. Returns the context.
+
+    from  => N                    skip the first N steps: the image already
+                                  has them
+    after => sub { my ( $done ) = @_ }   called after each step, with how
+                                         many steps the image now has
+
+The two are for L<GlitchVape::Checkpoint>, which keeps the image as it stood
+after each step so that changing the ninth effect of twelve re-runs four of
+them. That is sound because a step's result depends on nothing but the image
+it is handed, its own parameters, the seed and the frame: effects draw from
+streams of their own (L<GlitchVape::Context/rng_for( $effect_name )>) and
+leave nothing in the context for the next one.
 
 =cut
 
 sub run
 {
-    my ( $self, $ctx ) = @_;
+    my ( $self, $ctx, %opt ) = @_;
+
+    my $from = $opt{ from } // 0;
+    my $done = 0;
 
     for my $step ( @{ $self->{ steps } } )
     {
+        next if $done++ < $from;
+
         $ctx->log( '%-16s %s', $step->{ name },
             _describe( $step->{ params } ) );
 
@@ -127,6 +144,8 @@ sub run
                 }
             }
         );
+
+        $opt{ after }->( $done ) if $opt{ after };
     }
 
     return $ctx;

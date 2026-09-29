@@ -74,6 +74,36 @@ use GlitchVape::Random;
     cmp_ok abs( sqrt( $var ) - 1 ), '<', 0.1, 'gauss has the requested spread';
 }
 
+# gauss_list writes the generator and the polar method out again, for grain's
+# sake, so it is only correct for as long as it agrees with gauss number for
+# number. Every way the two could drift apart is here: an odd count, which
+# leaves the second of a pair spare; a gauss after that, which has to spend
+# it; a mean and a spread applied to both halves of a pair; and a count of
+# none, which must leave the generator where it was.
+{
+    my @asked = ( 1, 2, 3, 7, 0, 1, 1000, 4, 0, 5 );
+
+    my $one  = GlitchVape::Random->new( seed => 'grain#3' );
+    my $bulk = GlitchVape::Random->new( seed => 'grain#3' );
+
+    my ( @by_one, @by_list );
+    for my $n ( @asked )
+    {
+        push @by_one,  map { $one->gauss( 0, 22.95 ) } 1 .. $n;
+        push @by_list, $bulk->gauss_list( $n, 0, 22.95 );
+
+        # And a single draw between each, the way two effects sharing a
+        # stream would interleave them.
+        push @by_one,  $one->gauss( 3, 2 );
+        push @by_list, $bulk->gauss( 3, 2 );
+    }
+
+    is scalar @by_list, scalar @by_one, 'gauss_list draws as many as asked';
+    is_deeply \@by_list, \@by_one,
+        'and exactly the numbers the same number of gauss calls would';
+    is $bulk->rand, $one->rand, 'leaving the generator where they would';
+}
+
 {
     my $r    = GlitchVape::Random->new( seed => 5 );
     my @walk = $r->walk( 200, step => 0.1, min => -1, max => 1 );

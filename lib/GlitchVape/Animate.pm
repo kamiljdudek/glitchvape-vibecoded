@@ -58,11 +58,16 @@ my %CODEC = (
         encoder => 'libx264',
         label   => 'H.264',
         video   => sub {
-            my ( $crf ) = @_;
+            my ( $crf, $fast ) = @_;
+
+            # slow for a file somebody keeps; veryfast for a preview, which is
+            # watched once and thrown away, and on which slow spent a second
+            # of every loop at 1920 pixels for a file a fifth smaller.
+            my $preset = $fast ? 'veryfast' : 'slow';
 
             # yuv420p and even dimensions are what makes the file play in
             # browsers and phone galleries rather than only in VLC.
-            return ( '-c:v', 'libx264', '-crf', $crf, '-preset', 'slow',
+            return ( '-c:v', 'libx264', '-crf', $crf, '-preset', $preset,
                 '-pix_fmt', 'yuv420p', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2' );
         },
         audio => [ '-c:a', 'aac', '-b:a', '192k' ],
@@ -167,6 +172,7 @@ sub require_codec
     quality => 20          CRF; lower is better
     codec   => 'av1'       h264, vp9 or av1; default from the extension
     audio   => { ... }     a GlitchVape::Audio spec to mux in
+    fast    => 1           a preview: spend less time on the encode
 
 =cut
 
@@ -206,19 +212,22 @@ The printf-style path used for numbered frames in C<$dir>.
 sub frame_pattern
 {
     my ( $dir ) = @_;
-    return File::Spec->catfile( $dir, 'frame_%05d.png' );
+    return File::Spec->catfile( $dir, 'frame_%05d.ppm' );
 }
 
 =head2 frame_path( $dir, $n )
 
 Path for frame C<$n>.
 
+PPM, because a frame is written once and read once, a moment later, by
+ffmpeg: see L<GlitchVape::Frames/Frames are PPM>.
+
 =cut
 
 sub frame_path
 {
     my ( $dir, $n ) = @_;
-    return File::Spec->catfile( $dir, sprintf( 'frame_%05d.png', $n ) );
+    return File::Spec->catfile( $dir, sprintf( 'frame_%05d.ppm', $n ) );
 }
 
 sub _encode_video
@@ -253,7 +262,7 @@ sub _encode_video
     push @argv, '-framerate', $fps, '-i', frame_pattern( $dir );
     push @argv, '-i', $track->{ path } if $track;
 
-    push @argv, $spec->{ video }->( $crf );
+    push @argv, $spec->{ video }->( $crf, $arg->{ fast } );
     push @argv, @{ $spec->{ audio } } if $track;
 
     if ( $track )

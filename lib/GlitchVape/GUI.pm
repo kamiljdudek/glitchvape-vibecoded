@@ -13,6 +13,7 @@ use Encode         ();
 use File::Basename qw(basename);
 use File::Spec     ();
 use POSIX          ();
+use Time::HiRes    ();
 
 use Glib ();
 use Gtk3 ();
@@ -3166,7 +3167,7 @@ sub _render
 
     my $spec = $self->_animate_spec;
 
-    my $started = time;
+    my $started = Time::HiRes::time();
     $self->_busy( 1, 'Rendering…' );
 
     # Only if the preference says to show it. Off, the preview is the picture
@@ -3221,7 +3222,9 @@ sub _report_timing
 
     my ( $back, $forward ) = $self->{ state }->depth;
 
-    my $how = sprintf 'rendered in %ds', time - $started;
+    # Tenths, because most previews now take less than a second and a status
+    # line that says "rendered in 0s" for all of them says nothing.
+    my $how = sprintf 'rendered in %.1fs', Time::HiRes::time() - $started;
     if ( $cached )
     {
         $how = 'from cache';
@@ -3659,7 +3662,10 @@ sub _progress
     $bar->show;
 
     $self->{ progress_seen } ||= [];
-    push @{ $self->{ progress_seen } }, time;
+
+    # With the clock's fractions: frames drawn in parallel land a fraction of
+    # a second apart, and whole seconds measured most of those gaps as none.
+    push @{ $self->{ progress_seen } }, Time::HiRes::time();
 
     my $frames = $total - 1;
 

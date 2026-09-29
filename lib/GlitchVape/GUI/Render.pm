@@ -37,14 +37,33 @@ release them, so the first parallel operation in the child deadlocks and never
 returns.
 
 Caching the decoded source in the parent -- the obvious optimisation, worth
-0.4 seconds of HEIC decoding per render -- is therefore exactly the thing that
-cannot be done. Every image operation happens in a child that has never
-forked, and the parent process never loads an image at all.
+0.4 seconds of HEIC decoding per render, and nearer a second on one core -- is
+therefore exactly the thing that cannot be done. Every image operation happens
+in a child that has never forked, and the parent process never loads an image
+at all.
 
-The consolation is that this makes the preview more honest rather than less:
-it reads the source from disk through C<GlitchVape::IO::load> at the preview
-size, which is the same call the command-line tool makes, so a preview differs
-from the export only in the size it was rendered at.
+The source is cached all the same, on disk and by a child: the first child to
+decode it at a size keeps the result, and the next one reads that instead. See
+L</ADJUSTING ONE EFFECT DOES NOT RE-RUN THE OTHERS>. It is decoded through
+C<GlitchVape::IO::load> at the preview size, which is the same call the
+command-line tool makes, so a preview still differs from the export only in
+the size it was rendered at.
+
+=head1 ADJUSTING ONE EFFECT DOES NOT RE-RUN THE OTHERS
+
+A still preview keeps the picture as it stood after each effect, and the next
+preview starts from the last of those its pipeline shares -- so adjusting the
+ninth effect of twelve re-runs four. L<GlitchVape::Checkpoint> is how, and why
+the result is the same picture to the bit as a render from the start.
+
+Screens, tiles and colour lookups are kept for the session too, in the
+directory every render is handed as its C<cachedir>, since they depend on the
+settings and the size rather than on the picture: a second Apply of C<cmyk>
+reads four screens rather than building them.
+
+A loop keeps only the source. Every frame is its own history, and twenty-four
+of them would be a great deal of disk for a render the undo stack answers
+anyway.
 
 =head1 PROGRESS IS COUNTED IN FRAMES
 
@@ -59,6 +78,11 @@ The count runs to C<frames + 1> rather than to C<frames>, because after the
 last frame there is still an ffmpeg run -- and with a soundtrack, an audio
 render before it. A bar that reached full and then sat there would be saying
 the render had finished when it had not.
+
+What is counted is frames finished, not which frame finished. The child hands
+the frames out to workers of its own (L<GlitchVape::Frames>), and they finish
+in whatever order they finish in; the count goes up by one each time
+regardless, which is all a bar needs.
 
 Nothing about this reaches ImageMagick in the parent: the parent reads bytes
 off a pipe, which is the same thing it does for the error file.
@@ -476,16 +500,26 @@ sub _render_preview
         return $self->_render_preview_loop( %arg, animate => $spec );
     }
 
-    my $img =
-        GlitchVape::IO::load( $self->{ source }, max_dim => $arg{ size } );
-
-    my $ctx = GlitchVape::Context->new(
-        image  => $img,
-        source => $self->{ source },
-        seed   => $arg{ seed },
+    # Started from wherever the last render left off: see L</ADJUSTING ONE
+    # EFFECT DOES NOT RE-RUN THE OTHERS>. Opening a photograph renders it
+    # with no effects at all, so the first thing kept is the decoded source,
+    # and the first Apply already starts past the decode.
+    my $ctx = $self->_steps->run(
+        pipeline => $arg{ pipeline },
+        base     => $self->source_key( $arg{ size } ),
+        seed     => $arg{ seed },
+        load     => sub {
+            GlitchVape::IO::load( $self->{ source }, max_dim => $arg{ size } );
+        },
+        context => sub {
+            GlitchVape::Context->new(
+                image    => $_[ 0 ],
+                source   => $self->{ source },
+                seed     => $arg{ seed },
+                cachedir => $self->{ cache }->layers_dir,
+            );
+        },
     );
-
-    $arg{ pipeline }->run( $ctx );
 
     # The same call the export makes, after the pipeline for the same reason:
     # a preview that showed the mark somewhere else would be showing something
@@ -504,6 +538,7 @@ sub _render_preview_loop
     my ( $self, %arg ) = @_;
 
     require GlitchVape::Animate;
+    require GlitchVape::Frames;
 
     my $spec   = $arg{ animate };
     my $frames = $spec->{ frames } || 24;
@@ -511,52 +546,67 @@ sub _render_preview_loop
 
     my $dir = $self->{ cache }->scratch_dir( 'frames' );
 
-    # Decoded once for the whole loop. Safe here in a way it is not in the
-    # parent: this process has already forked and will not fork again.
-    my $source =
-        GlitchVape::IO::load( $self->{ source }, max_dim => $arg{ size } );
+    my $done = GlitchVape::Frames::render(
 
-    my @paths;
-    for my $n ( 0 .. $frames - 1 )
-    {
-        my $ctx = GlitchVape::Context->new(
-            image  => $source->Clone,
-            source => $self->{ source },
-            seed   => $arg{ seed },
-        );
-        $ctx->frames( $frames );
-        $ctx->frame( $n );
-
-        $arg{ pipeline }->run( $ctx );
-
-        $ctx->image(
-            GlitchVape::Watermark::apply( $ctx->image, $arg{ watermark } ) )
-            if $arg{ watermark };
-
-        my $path = GlitchVape::Animate::frame_path( $dir, $n );
-        GlitchVape::IO::save( $ctx->image, $path, quality => 100, strip => 1 );
-        push @paths, $path;
+        # Every frame starts from the source, so that is the one picture worth
+        # keeping here -- and a loop's first frame is usually a still that has
+        # just been previewed, whose source is already kept.
+        load => sub {
+            $self->_steps->source(
+                base => $self->source_key( $arg{ size } ),
+                load => sub {
+                    GlitchVape::IO::load( $self->{ source },
+                        max_dim => $arg{ size } );
+                },
+            );
+        },
+        pipeline  => $arg{ pipeline },
+        seed      => $arg{ seed },
+        frames    => $frames,
+        dir       => $dir,
+        cachedir  => $self->{ cache }->layers_dir,
+        source    => $self->{ source },
+        watermark => $arg{ watermark },
 
         # The total counts one past the frames, for the encode still to come:
         # a bar that reached full and then sat through an ffmpeg run would be
         # saying the render had finished when it had not. Every report in this
         # sub uses the same total, or the bar would jump when the last one
         # changed the denominator under it.
-        $arg{ report }->( $n + 1, $frames + 1 ) if $arg{ report };
-    }
+        on_frame => sub {
+            $arg{ report }->( $_[ 0 ], $frames + 1 ) if $arg{ report };
+        },
+    );
 
     # The track goes into the preview as well as into the export. It is the
     # part of an animation that cannot be judged by looking at a still, so a
     # preview without it would be answering a question nobody asked.
     GlitchVape::Animate::encode(
-        frames => \@paths,
+        frames => $done->{ paths },
         output => $arg{ output },
         fps    => $fps,
         loop   => 1,
         audio  => $spec->{ audio },
+        fast   => 1,
     );
 
+    # The frames have been encoded and are nothing now but a few dozen
+    # megabytes of the session directory, which a session of previewing
+    # loops used to fill until the window closed.
+    require File::Path;
+    File::Path::remove_tree( $dir, { error => \my $ignored } );
+
     return $arg{ output };
+}
+
+sub _steps
+{
+    my ( $self ) = @_;
+
+    require GlitchVape::Checkpoint;
+
+    return $self->{ steps } ||=
+        GlitchVape::Checkpoint->new( dir => $self->{ cache }->steps_dir );
 }
 
 # Fork, run $work, and arrange for the outcome to come back on the main loop.
@@ -614,6 +664,15 @@ sub _spawn
                 return;
             };
         }
+
+        # Scratch files under the session directory rather than the
+        # system's. A cancelled render goes by _exit and cleans up nothing,
+        # and during a session of dragging sliders that is most renders; the
+        # session directory is removed when the window closes, or swept at
+        # the next start if it did not close cleanly.
+        ## no critic (Variables::RequireLocalizedPunctuationVars)
+        $ENV{ TMPDIR } = $self->{ cache }->tmp_dir;
+        ## use critic
 
         _child( \%job, $errfile );
 
