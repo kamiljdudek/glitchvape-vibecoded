@@ -11,7 +11,8 @@ glitchvape-gui -p vhs-decay Pictures/IMG_8111.HEIC
 ```
 
 What goes into the render on the left, the render itself on the right, Apply
-between them, Export to write the result at full size.
+between them, Export to write the result at full size. The picture follows the
+settings as they change; Apply keeps them as a step to come back to.
 
 The left pane is two pages of a stack under a switcher, because effects and
 soundtrack are both answers to the same question:
@@ -31,17 +32,20 @@ The foot of the pane is an action bar shared by both pages:
 | **+** | adds to whichever page is showing — a popover offers *Single effect…* or *Effects from a preset…* on Image, and the file or a generated kind on Soundtrack |
 | **cog** | the settings of the selected row — a popover on Image, the track's own wizard on Soundtrack |
 | **camera** | **Animate**: whether the render is a loop or a still |
-| **Apply** | renders it |
+| **Apply** | keeps it as a step in the history; renders a loop, and a still when the live preview is off |
 
 Only Apply keeps a label — four of them do not fit the pane, and it is the
-one with a render bill attached. The other three carry tooltips naming their
+one with a history step, and sometimes a render bill, attached. The other three
+carry tooltips naming their
 keys, `Alt+D`, `Alt+J` and `Alt+N`, which are accelerators rather than
 mnemonics because a button with no label has nowhere to underline a letter.
 All four sit outside the scrolled list, so none can be scrolled away by a long
 pipeline, and Apply keeps the accent colour that marks it as the one action
 the rest of the pane is leading up to. Apply becomes **Stop** while a render
-is in flight, icon and tooltip along with the word, and the button is pinned
-to the wider of the two so the bar does not twitch.
+somebody has to wait for is in flight — a loop, an export, or any render with
+the live preview off — icon and tooltip along with the word, and the button is
+pinned to the wider of the two so the bar does not twitch. A live render of a
+still never turns it: the next change overtakes it, so there is nothing to stop.
 
 Switching page drops the effect selection, and the cog goes back to waiting
 for one: it acts on the effect list, and a selection kept across the switch
@@ -79,11 +83,12 @@ no confirming buttons looks like a dialog and behaves like a panel, and people
 go looking for the button that commits the change; the only one there is Apply,
 which belongs to the whole pipeline.
 
-It is deliberately **not** modal, which is not a popover's default. Rendering
-here is an explicit Apply, so one that closed the moment anything else was
-clicked would have to be reopened after every render. Left non-modal it stays
-up across an Apply, and it follows the selection: click another row and it
-shows that effect instead.
+It is deliberately **not** modal, which is not a popover's default. One that
+closed the moment anything else was clicked would have to be reopened after
+every Apply, and every time the picture beside it was looked at closely. Left
+non-modal it stays up while the preview follows its controls and across an
+Apply, and it follows the selection: click another row and it shows that
+effect instead.
 
 It carries the effect's summary, its identifier, and a switch for whether it is
 in the render — the same fact as the row's checkbox, and the two move together.
@@ -397,15 +402,21 @@ Clear throws away which effects are in it, this throws away what they were set
 to and keeps them.
 
 **Apply the effect immediately**, the tick below it, decides what happens
-after the wizard closes: with it set, the picture is redrawn as soon as the
-window goes — the whole pipeline, everything already in the list plus the one
-just added, which is exactly what the preview above was showing. Without it
-the effect is added and the picture waits for Apply.
+after the wizard closes: with it set, the addition is applied as soon as the
+window goes — kept as a step, and the whole pipeline drawn, everything already
+in the list plus the one just added, which is exactly what the preview above
+was showing. Without it the effect is added and waits for Apply to be kept;
+the live preview draws it either way, unless it is switched off, when the
+picture waits for Apply too.
 
 It starts clear every time the wizard opens and never remembers being set.
-Adding an effect and spending several seconds on a render are two decisions,
-and somebody adding five effects to a large photograph should not be paying
+Adding an effect and keeping it are two decisions, and with the live preview
+off, somebody adding five effects to a large photograph should not be paying
 for four renders they did not ask for.
+
+While the wizard is open the window's live preview waits: the wizard's own
+previews are drawn by the same render process, and a live render would cancel
+them. What changed in the meantime is drawn once it closes.
 
 Nothing reaches the pipeline until Apply. The wizard previews against a
 detached copy of the state, so cancelling — at any point, however many
@@ -440,9 +451,11 @@ applied to it. There is no pipeline to run, so it costs only the decode and
 the downscale — under a second on a twelve-megapixel HEIC, and a cache lookup
 the second time.
 
-Deliberately not the preset's render, even when one was named on the command
-line: that can be eight seconds, and the point of this is to be immediate.
-Apply is what renders the preset.
+Deliberately not the preset's render first, even when one was named on the
+command line: that can take seconds, and the point of this is to be
+immediate. With the live preview on the preset follows as soon as the
+photograph is up, as any change would; with it off, Apply is what renders the
+preset.
 
 ### Another photograph is another window
 
@@ -464,14 +477,40 @@ to lose the work. If the second instance cannot be started, it says so and
 nothing is opened: falling back to opening it here would be the exact thing
 this avoids.
 
-### Why Apply is a button
+### The preview follows the settings, and Apply keeps a step
 
-A render is one to eight seconds depending on size, so there is no live
-preview to be had. Making it explicit also gives undo something to be a step
-of: one Apply is one history entry, rather than fifty from dragging a slider.
+A still is rendered a moment after a control moves, without Apply — **Update
+the preview as settings change**, in Preview preferences, on by default. It
+used to wait for Apply, because a render was one to eight seconds and a render
+per slider position was not to be had. Most are now a tenth of a second to
+one: adjusting an effect re-runs only it and those after it, those reuse what
+they draw that does not depend on the photograph, and the picture reaches the
+window without being compressed on the way.
+
+A change is rendered sixty milliseconds after it is made, counted from the
+first of a burst, and a change made while a render is running waits for that
+render and is drawn after it rather than throwing it away. So dragging a
+slider shows the picture following it, a render at a time, and letting go of
+it is never more than two renders from seeing where it stopped.
+
+What Apply does then is what it always did to the history: one Apply is one
+entry, rather than fifty from dragging a slider. The render it starts is
+usually a cache hit by then, or the one already running, which it joins
+rather than begins again.
+
+A loop is never rendered this way — each change would be twenty-four renders
+— and neither is anything while an export runs, which a still nobody has asked
+for yet must not cancel; the still follows once it is done. Off, the preference
+gives the window back exactly as it was: nothing renders until Apply, and Apply
+is Stop while it does. That is for a slow machine, or a full-size preview.
+
+Undo takes back what has not been applied before anything else. With the
+preview following the controls, the picture on screen is the unapplied one,
+and an undo that stepped past the last Apply would land two pictures back from
+what you were looking at. Redo brings the edits back, as a step.
 
 Renders happen in a forked child watched by the main loop, so the window stays
-responsive and a second Apply cancels the first.
+responsive whatever is rendering.
 
 ### Undo does not stack images
 

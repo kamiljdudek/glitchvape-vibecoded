@@ -708,9 +708,8 @@ sub _osd_glyph
         # Red whatever the text colour is: the record lamp was a red LED, and
         # a white one reads as a full stop.
         my $cx = $mx + $r;
-        $ctx->magick( '-fill', '#FF2020', '-stroke', 'none', '-draw',
-            sprintf( 'circle %d,%d %d,%d', $cx, $cy, $cx + $r, $cy ),
-        );
+        _osd_draw( $ctx, '#FF2020', 'circle',
+            sprintf( '%d,%d %d,%d', $cx, $cy, $cx + $r, $cy ) );
         return;
     }
 
@@ -724,18 +723,41 @@ sub _osd_glyph
 
     for my $x0 ( @x )
     {
-        $ctx->magick(
-            '-fill',
+        _osd_draw(
+            $ctx,
             $p->{ color },
-            '-stroke',
-            'none', '-draw',
+            'polygon',
             sprintf(
-                'polygon %d,%d %d,%d %d,%d',
+                '%d,%d %d,%d %d,%d',
                 $x0,             $top,             $x0,
                 $top + $tri * 2, $x0 + $tri * 1.7, $top + $tri
             ),
         );
     }
+
+    return;
+}
+
+# One filled shape, as the command line drew it. Each is its own staging --
+# see GlitchVape::Context/in_process -- because the two triangles of a fast
+# wind overlap, and the second was drawn over the first one's rounded edge.
+sub _osd_draw
+{
+    my ( $ctx, $fill, $primitive, $points ) = @_;
+
+    $ctx->in_process(
+        sub {
+            GlitchVape::Magick::check(
+                $_[ 0 ]->Draw(
+                    primitive => $primitive,
+                    points    => $points,
+                    fill      => $fill,
+                    stroke    => 'none',
+                ),
+                "osd: could not draw the $primitive"
+            );
+        }
+    );
 
     return;
 }
@@ -1296,11 +1318,7 @@ sub _letterbox_tiled
 
     return if $nw <= $w && $nh <= $h;
 
-    my $ground = GlitchVape::Raster::tiled( $ctx, $tile, $nw, $nh );
-
-    my $out = Image::Magick->new;
-    GlitchVape::Magick::check( $out->Read( $ground ),
-        'letterbox: could not lay the pattern down' );
+    my $out = GlitchVape::Raster::tiled_image( $tile, $nw, $nh );
 
     GlitchVape::Magick::check(
         $out->Composite(
@@ -1346,9 +1364,17 @@ sub _letterbox
             ? ( $w, int( $w / $target ) )
             : ( int( $h * $target ), $h );
 
-        $ctx->magick(
-            '-background', $p->{ color }, '-gravity', 'Center',
-            '-extent',     "${nw}x${nh}",
+        $ctx->in_process(
+            sub {
+                GlitchVape::Magick::check(
+                    $_[ 0 ]->Extent(
+                        geometry   => "${nw}x${nh}",
+                        gravity    => 'Center',
+                        background => $p->{ color },
+                    ),
+                    'letterbox: could not add the bars'
+                );
+            }
         );
     }
 
@@ -1365,7 +1391,18 @@ sub _letterbox
         }
 
         my $b = int( $shorter * $p->{ border } );
-        $ctx->magick( '-bordercolor', $p->{ color }, '-border', $b ) if $b > 0;
+
+        $ctx->in_process(
+            sub {
+                GlitchVape::Magick::check(
+                    $_[ 0 ]->Border(
+                        geometry    => "${b}x$b",
+                        bordercolor => $p->{ color },
+                    ),
+                    'letterbox: could not add the border'
+                );
+            }
+        ) if $b > 0;
     }
     return;
 }
@@ -1471,15 +1508,6 @@ sub _watermark
         GlitchVape::Fonts::resolve_or_die( $p->{ font }, "effect 'watermark'" );
     my $size = int( $h * $p->{ size } / 100 ) || 8;
 
-    # Rotating the finished layer means building it on an oversized canvas so
-    # the corners are still covered afterwards. The diagonal is the minimum
-    # that can contain the frame at any angle; the margin on top covers the
-    # tile that is half in shot at the edge.
-    my $diag = int( sqrt( $w * $w + $h * $h ) ) + $size * 4;
-
-    my $layer = Image::Magick->new( size => "${diag}x${diag}" );
-    $layer->Read( 'xc:transparent' );
-
     my $text = Encode::encode( 'UTF-8', $p->{ string } );
     my $gap  = int( $size * $p->{ spacing } ) || $size;
 
@@ -1488,7 +1516,13 @@ sub _watermark
     # the string is about as wide as it is tall: give it a sentence and every
     # repetition is drawn across the next one, and the whole band turns into a
     # smear. Asking the font settles it for any string in any face.
-    my @metrics = $layer->QueryFontMetrics(
+    #
+    # Asked of a single pixel rather than of the canvas the lattice is drawn
+    # on. The answer is the font's, and building that canvas first would spend
+    # part of what keeping the lattice saves.
+    my $probe = Image::Magick->new( size => '1x1' );
+    $probe->Read( 'xc:transparent' );
+    my @metrics = $probe->QueryFontMetrics(
         text      => $text,
         font      => $font,
         pointsize => $size,
@@ -1503,6 +1537,63 @@ sub _watermark
     my $yperiod = $gap * 2;
 
     my ( $sx, $sy ) = _watermark_slide( $ctx, $p, $xperiod, $yperiod );
+
+    # One letter per repetition, a rotation and a crop, none of which depends
+    # on the picture, so a render that reaches here unchanged reads the lattice
+    # rather than drawing it: a third of a second on one core at 720 pixels.
+    # Keyed on where the tiling has slid to rather than on the frame, so that
+    # a loop which does not drift keeps one lattice instead of one a frame.
+    my $layer = $ctx->layer(
+        [
+            'watermark', $w, $h, $font, $text, $size, $gap,
+            $p->{ color },
+            $p->{ opacity },
+            $p->{ rotate },
+            $xperiod, $sx, $sy
+        ],
+        sub {
+            return _watermark_lattice(
+                $p,
+                {
+                    w       => $w,
+                    h       => $h,
+                    font    => $font,
+                    text    => $text,
+                    size    => $size,
+                    gap     => $gap,
+                    xperiod => $xperiod,
+                    yperiod => $yperiod,
+                    sx      => $sx,
+                    sy      => $sy,
+                }
+            );
+        },
+    );
+
+    $ctx->image->Composite(
+        image   => $layer->[ 0 ],
+        compose => 'Over',
+        gravity => 'Center',
+    );
+    return;
+}
+
+# The lattice itself, laid out as _watermark worked it out.
+sub _watermark_lattice
+{
+    my ( $p, $at ) = @_;
+
+    my ( $w, $h, $font, $text, $size, $gap, $xperiod, $yperiod, $sx, $sy ) =
+        @{ $at }{ qw(w h font text size gap xperiod yperiod sx sy) };
+
+    # Rotating the finished layer means building it on an oversized canvas so
+    # the corners are still covered afterwards. The diagonal is the minimum
+    # that can contain the frame at any angle; the margin on top covers the
+    # tile that is half in shot at the edge.
+    my $diag = int( sqrt( $w * $w + $h * $h ) ) + $size * 4;
+
+    my $layer = Image::Magick->new( size => "${diag}x${diag}" );
+    $layer->Read( 'xc:transparent' );
 
     # Enough margin that whatever is sliding in from either side is already
     # drawn by the time it arrives.
@@ -1549,12 +1640,7 @@ sub _watermark
         channel  => 'Alpha',
     );
 
-    $ctx->image->Composite(
-        image   => $layer->[ 0 ],
-        compose => 'Over',
-        gravity => 'Center',
-    );
-    return;
+    return $layer;
 }
 
 # Screen-space unit vectors, y downward as the raster has it.

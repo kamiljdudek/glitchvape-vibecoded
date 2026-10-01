@@ -189,6 +189,36 @@ sub kept_steps
 my $first = preview();
 ok same_picture( $first, straight() ),
     'a preview is the picture a render from the start gives';
+
+# The preview is handed to the window as BMP rather than as the PNG it used to
+# be, for speed. What has to hold is what the window is shown: GdkPixbuf
+# decodes an opaque PNG to three channels and a BMP to as many as it has, so
+# both are read out as four, an opaque pixel's fourth being 255.
+{
+    my $rgba = sub {
+        my $pb = Gtk3::Gdk::Pixbuf->new_from_file( $_[ 0 ] );
+        my ( $w, $h, $n, $stride ) = (
+            $pb->get_width,      $pb->get_height,
+            $pb->get_n_channels, $pb->get_rowstride,
+        );
+        my $data = $pb->get_pixels;
+        my $out  = "${w}x$h:";
+        for my $y ( 0 .. $h - 1 )
+        {
+            my $row = substr $data, $y * $stride, $w * $n;
+            $out .=
+                  $n == 4
+                ? $row
+                : join q{},
+                map { substr( $row, $_ * 3, 3 ) . "\xFF" } 0 .. $w - 1;
+        }
+        return $out;
+    };
+
+    like $first, qr/\.bmp\z/, 'a still preview is handed over as BMP';
+    ok $rgba->( $first ) eq $rgba->( straight() ),
+        'and the window decodes it to the pixels it decoded from the PNG';
+}
 is kept_steps(), scalar( $state->effect_names ) + 1,
     'and the source and the picture after each effect are kept';
 
@@ -213,7 +243,7 @@ is kept_steps(), scalar( $state->effect_names ) + 1,
 ok same_picture(
     $render->{ cache }->preview_path(
         $state->cache_key( size => 200, extra => [ 'watermark', 'none' ] ),
-        '.png'
+        GlitchVape::GUI::Render::STILL
     ),
     straight()
     ),

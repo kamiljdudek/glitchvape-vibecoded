@@ -76,6 +76,12 @@ sub defaults
         fps    => 12,
         muted  => 0,
 
+        # On: a still follows the settings as they change, and Apply keeps a
+        # step in the history. Off is for a machine slow enough, or a preview
+        # large enough, that a render per change is a render too many -- see
+        # GlitchVape::GUI/THE PREVIEW FOLLOWS THE SETTINGS.
+        live_preview => 1,
+
         # Metadata. Off by default because the safe answer to "should this
         # picture still say where it was taken" is no, and because it is what
         # the program did before there was a choice.

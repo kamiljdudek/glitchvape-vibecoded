@@ -162,7 +162,10 @@ were, rather than a hang. `t/50-frames.t` checks both halves.
 `GUI/State.pm` keeps a history of settings, and stepping back re-renders —
 which is a cache hit, because `GUI/Cache.pm` is content-addressed on the
 resolved configuration. One Apply is one history entry, so dragging a slider
-does not produce fifty near-identical steps.
+does not produce fifty near-identical steps. Edits not yet applied are what
+undo takes back first: with the preview following the controls they are the
+picture on screen, and an undo past the last Apply would land two pictures
+back.
 
 Within one preview the same idea runs at a finer grain. The render child
 keeps the picture as it stood after each effect, keyed on the key before it
@@ -730,6 +733,22 @@ says what it does and this says what else was tried.
   actually change are the size and the format and neither should require
   knowing that `.webm` means VP9.
 
+- **Apply was what rendered.** Every change waited for it, because a render
+  was one to eight seconds. Once most were a tenth of a second to one, the
+  preview follows the settings instead — a still, a moment after a control
+  moves — and Apply keeps a step in the history, which is usually a cache hit
+  by then. It is a preference (*Update the preview as settings change*), off
+  for a slow machine or a full-size preview, and a loop still waits for Apply.
+  What is in `GUI.pm` under *ONE RENDER AT A TIME, AND WHICH* is the part that
+  can go wrong without looking wrong: a live render must never cancel an
+  export or the Add wizard's previews, so it waits for them and is owed.
+
+  It was first a debounce: rendered 150 ms after the *last* change. A slider
+  being dragged then showed nothing until it stopped, and the commonest
+  gesture got the least feedback. It is a throttle now — 60 ms after the
+  first change of a burst, with whatever changes during a render gathered
+  into the one after it rather than cancelling it.
+
 ## Generated soundtracks
 
 `GlitchVape::Generator` is a registry in the same sense `Registry` is: one
@@ -998,11 +1017,22 @@ What was done about it, each checked against what it replaced:
 | the window keeps each step's picture | adjusting a late effect: 0.75 s → 0.2 on four cores | same pixels, every step of every preset |
 | `chroma_bleed` as a kernel | 10.6 s → 0.44 on one core | only the axis, which was a bug |
 | `glare` and `vignette` built small | `glare` 8–10 s → a tenth on one core | within a level |
+| twelve effects stage through `Context::in_process` instead of `magick` | `scanlines` 24–27 ms → 10–12 at 720 px | same pixels and form, `t/54-in-process.t` |
+| `vignette`, `watermark`, `glare` keep their layers (`Context::layer`) | a re-run: 0.14–0.41 s → 0.005; 0.33 → 0.005; 0.05 → 0.002 | same pixels, `t/51-layers.t` |
+| a still preview handed over as BMP, not PNG | write 23–113 ms → 1; window decode 5 ms → 0.3 | same decoded pixels, `t/53-gui-render.t` |
 
 Together: a twenty-four frame preview loop at 720 pixels on four cores went
 from 56–63 seconds to 6–8; a still preview on one core from 2.4–3.2 seconds
 plus a 0.86 second decode to 0.7–1.1, with the decode paid once per
 photograph; a full-size still on the big machine from 7–12 seconds to 2–6.
+
+The second round, on one core at 720 pixels across the seventeen presets:
+adjusting the last effect went from a median of 59 milliseconds of render to
+10; re-running from the first effect from 0.72 seconds to 0.62, and `rgb-S3`
+from 0.52 to 0.08; a preset's first render from 0.74 to 0.67, which is what
+`grain` and `bloom` leave of it. With the preview following the settings,
+changing a late effect in the window is a tenth of a second from the change to
+the picture, without Apply.
 
 What was not done, and why:
 
@@ -1011,8 +1041,27 @@ What was not done, and why:
   also gives different grain for the same seed, which makes it a decision
   about the program's promises rather than an optimisation; it is waiting
   for one.
-- **Compiled code, libvips, OpenCL.** None is needed at these numbers, and
-  each costs "nothing is compiled" or a new dependency in two packagings.
+- **`grain` in C.** The same xorshift and polar method, in the same order of
+  arithmetic and built with `-ffp-contract=off`, gave the same bytes as the
+  Perl in 3–8 milliseconds instead of 0.3–0.5 seconds at 720 pixels, which
+  would make the noise tile unnecessary. It is the largest single cost left in
+  most presets, and it is waiting on whether "nothing is compiled" stays.
+- **`bloom` blurred small.** A quarter to an eighth of the size is fifteen to
+  thirty times faster, and averages a quarter of a level out at worst — but
+  peaks at three to twelve levels near bright edges, where `glare` and
+  `vignette` were held to one. At half size it stays within a level and is
+  three to six times faster. A different picture from the same seed either
+  way, so it is a decision too.
+- **libvips, OpenCL, a GPU.** Not needed at these numbers, and each costs a
+  second implementation of the effects or a new dependency in two packagings.
+- **A render process kept running between previews.** Measured, the window's
+  own share of a preview — the fork, collecting the child, showing the
+  picture — is fifteen milliseconds. It cannot fork per render once it has
+  run ImageMagick (invariant 5), so cancelling would mean killing it.
+- **`posterize`, `quantize`'s fallback and `cmyk` through the binding.**
+  PerlMagick's Posterize cannot ask for Floyd–Steinberg, which `gameboy`
+  does; `quantize` uses pngquant when it can; `cmyk` composites four planes
+  against four screens with `-layers`, which the binding has no form of.
 - **Compositing the late layers with Cairo in the window**, so a slider could
   be watched live. That is a second implementation of the effects it draws,
   against invariant 3, and Cairo's blend maths is not ImageMagick's; the
@@ -1147,6 +1196,40 @@ What was not done, and why:
   scratch files live under the frame directory so that whoever removes the
   frames removes them — clearing up in the handler raced the `magick` still
   reading from them.
+
+- **A picture read back from a file has forgotten things, and effects
+  relied on it.** PerlMagick's `Modulate`, given a brightness, leaves
+  `modulate:colorspace=HSB` on the picture as an artifact, and the next
+  `Modulate` that is not told otherwise works in HSB instead of HSL. Every
+  `$ctx->magick` staging dropped it, because what came back was a new picture,
+  so `chroma_bleed`'s saturation always ran in HSL after `grade`'s. Moved into
+  this process, the mark survived and every pixel of six presets moved — while
+  the effect itself, tested alone, was identical. `Context::in_process` makes
+  the same trip through MIFF in memory, a millisecond and a half, because
+  there is no listing what the binding leaves behind. The settings the
+  command line took as options and the binding stores on the picture —
+  `background` from `Extent`, `bordercolor` from `Border` — are put back
+  before it, since MIFF would carry those on.
+
+- **What the command line handed back as a palette depended on the dither.**
+  `-remap` with Floyd–Steinberg and then `-depth 8` came back as plain
+  pixels; with no dither, or Riemersma, as a palette — and the binding's
+  `Remap` leaves a palette either way. It matters to the next effect that
+  quantizes, which does nothing to a palette picture that already has few
+  enough colours. `palette` says so where it happens, and `t/54-in-process.t`
+  compares the class as well as the pixels.
+
+- **PerlMagick returns errors instead of raising them, and an unknown option
+  is one.** `Remap( dither => ... )` is not an option `Remap` has — only
+  `dither-method` — and the call returns `Exception 410` and changes nothing.
+  Compared against an unchanged picture, an unchanged result looks like
+  agreement. Wrap every call in `GlitchVape::Magick::check`, and make any
+  equivalence test check that the picture changed at all.
+
+- **GdkPixbuf reads TIFF through libtiff's RGBA interface**, which hands back
+  colour already multiplied by alpha, so a translucent pink comes back a dark
+  mauve. That is why a still preview reaches the window as BMP, which keeps
+  alpha as it was, rather than as TIFF, which would otherwise have done.
 
 - **A `.webm` does not say which codec it holds.** VP9 and AV1 both live in
   it; `--codec` settles it, and codec availability is checked before the first

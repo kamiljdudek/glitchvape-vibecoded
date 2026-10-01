@@ -317,6 +317,125 @@ sub levels
 }
 
 # ---------------------------------------------------------------------------
+# A layer kept for the session is the layer it would have drawn
+
+# vignette's falloff, watermark's lattice and glare's band depend on the size
+# and the settings and never on the picture, so a render that reaches them
+# unchanged reads them from the cache directory instead of drawing them. What
+# it reads has to composite to the same picture as what it would have drawn,
+# or the preview would depend on which of the two a render happened to do.
+
+my $kept = File::Temp->newdir( 'gv_kept_XXXXXX', TMPDIR => 1 );
+
+# One effect on a fresh picture, keeping its layers in $dir if there is one.
+sub kept_or_drawn
+{
+    my ( $effect, $dir, %params ) = @_;
+
+    my %cache;
+    $cache{ cachedir } = "$dir" if $dir;
+
+    my $ctx = GlitchVape::Context->new(
+        image => picture( 160, 120 ),
+        seed  => 3,
+        %cache,
+    );
+    GlitchVape::Registry->get( $effect )->{ apply }
+        ->( $ctx, GlitchVape::Registry->resolve_params( $effect, \%params ) );
+
+    return $ctx->image;
+}
+
+sub layers_in
+{
+    my ( $dir ) = @_;
+    opendir my $dh, "$dir" or return 0;
+    return scalar grep { /^layer-.*\.miff\z/ } readdir $dh;
+}
+
+sub layers_kept { return layers_in( $kept ) }
+
+# A frame of a four-frame loop of watermark.
+sub lattice_frame
+{
+    my ( $n, %params ) = @_;
+
+    my $ctx = GlitchVape::Context->new(
+        image    => picture( 160, 120 ),
+        seed     => 3,
+        cachedir => "$kept",
+    );
+    $ctx->frames( 4 );
+    $ctx->frame( $n );
+    GlitchVape::Registry->get( 'watermark' )->{ apply }->(
+        $ctx,
+        GlitchVape::Registry->resolve_params(
+            'watermark', { string => 'LOOP', %params }
+        )
+    );
+
+    return $ctx->image;
+}
+
+for my $case (
+    [ 'vignette',  { strength => 0.6,     softness => 1.2 } ],
+    [ 'watermark', { string   => 'VAPOR', opacity  => 0.5, rotate => -20 } ],
+    [ 'glare',     { strength => 0.5,     width    => 0.3 } ],
+    )
+{
+    my ( $effect, $params ) = @$case;
+    my $before = layers_kept();
+
+    my $drawn = kept_or_drawn( $effect, undef, %$params );
+    my $first = kept_or_drawn( $effect, $kept, %$params );
+
+    is layers_kept(), $before + 1, "$effect keeps its layer";
+
+    my $read = kept_or_drawn( $effect, $kept, %$params );
+
+    is layers_kept(), $before + 1, '  and reads it the next time';
+    is levels( $first, $drawn ), 0,
+        '  the render that kept it is the one that would have drawn it';
+    is levels( $read, $drawn ), 0, '  and so is the render that read it';
+}
+
+# A setting the layer depends on is a different layer, not the old one served
+# again.
+is levels(
+    kept_or_drawn( 'vignette', $kept, strength => 0.3, softness => 1.2 ),
+    kept_or_drawn( 'vignette', undef, strength => 0.3, softness => 1.2 )
+    ),
+    0, 'a vignette set differently is drawn for those settings';
+
+# Keyed on where the lattice has slid to rather than on the frame: a loop that
+# does not drift keeps one, and one that does keeps one a position.
+{
+    my $before = layers_kept();
+    my @still  = map { lattice_frame( $_ ) } 0 .. 3;
+    is layers_kept(), $before + 1,
+        'a loop that does not drift keeps one lattice for every frame';
+
+    $before = layers_kept();
+    my @drifting = map { lattice_frame( $_, drift => 2 ) } 0 .. 3;
+    cmp_ok layers_kept(), '>', $before + 1,
+        'one that drifts keeps one a position';
+    isnt levels( $drifting[ 0 ], $drifting[ 1 ] ), 0,
+        'and the frames are not served one another';
+}
+
+# The command line renders a still once, and has nothing to keep it for.
+{
+    my $ctx = GlitchVape::Context->new( image => picture( 64, 48 ), seed => 1 );
+    my $built = 0;
+    $ctx->layer( [ 'nothing', 1 ], sub { $built++; return picture( 4, 4 ) } );
+    $ctx->layer( [ 'nothing', 1 ], sub { $built++; return picture( 4, 4 ) } );
+
+    is $built, 2, 'without a shared directory a layer is drawn each time';
+    is layers_in( $ctx->cachedir ), 0,
+        'and nothing is written for nobody to read';
+}
+
+# ---------------------------------------------------------------------------
 # --timing counts fractions of a second
 
 {

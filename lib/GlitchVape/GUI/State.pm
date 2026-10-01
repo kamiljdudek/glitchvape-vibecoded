@@ -402,12 +402,38 @@ sub commit
     return 1;
 }
 
+=head2 pending()
+
+Whether the configuration has moved since it was last applied: changes that
+are in the controls -- and, with the window's live preview, on screen -- but
+are not yet a step in the history.
+
+=cut
+
+sub pending
+{
+    my ( $self ) = @_;
+
+    my $top = $self->{ undo }[ -1 ] or return 0;
+
+    return _digest( $top ) ne _digest( $self->{ current } ) ? 1 : 0;
+}
+
 =head2 undo()
 
 Step back one applied state. Returns true if it moved.
 
 The stack holds committed states including the present one, so undoing means
 moving the top entry across to the redo stack and adopting what is underneath.
+
+=head2 What has not been applied is undone first
+
+When the configuration has moved since the last Apply, undo puts it back to
+that Apply and keeps what it was in the redo stack, rather than stepping past
+it to the Apply before. With the preview following the controls, the picture
+on screen is the unapplied one, and an undo that skipped the last thing
+applied would jump two pictures back from what somebody was looking at. Redo
+brings the edits back, as a step.
 
 =cut
 
@@ -416,6 +442,14 @@ sub undo
     my ( $self ) = @_;
 
     return 0 unless $self->can_undo;
+
+    if ( $self->pending )
+    {
+        push @{ $self->{ redo } }, _clone( $self->{ current } );
+        $self->{ current } = _clone( $self->{ undo }[ -1 ] );
+
+        return 1;
+    }
 
     my $present = pop @{ $self->{ undo } };
     push @{ $self->{ redo } }, $present;
@@ -452,7 +486,7 @@ button sensitivity.
 
 =cut
 
-sub can_undo { return @{ $_[ 0 ]{ undo } } > 1 }
+sub can_undo { return @{ $_[ 0 ]{ undo } } > 1 || $_[ 0 ]->pending }
 sub can_redo { return scalar @{ $_[ 0 ]{ redo } } }
 
 =head2 depth()

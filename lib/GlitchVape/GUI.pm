@@ -190,6 +190,18 @@ use constant {
 # are constant: only the word changes.
 use constant APPLY_EXTRA => 46;
 
+# How long after a change the live preview renders it -- see L</THE PREVIEW
+# FOLLOWS THE SETTINGS>. Long enough to gather the rest of a burst of
+# keystrokes or a spin button's repeat into the same render, too short to be
+# seen. Not restarted by the changes that follow, so a slider being dragged is
+# rendered as it goes rather than only once it stops.
+use constant LIVE_SETTLE_MS => 60;
+
+# A live render shows its spinner only once it has taken this long. Most take
+# less, and a spinner flashing over the picture at every step of a slider is
+# noise rather than news.
+use constant BADGE_DELAY_MS => 300;
+
 my @PREVIEW_SIZES = (
     [ 512, 'Fast (512 px)' ],
     [ 720, 'Balanced (720 px)' ],
@@ -288,6 +300,13 @@ sub new
         animate      => 0,
         audio        => undef,
 
+        # Which render the window is waiting for, and whether it is one that
+        # holds everything else up. See L</ONE RENDER AT A TIME, AND WHICH>.
+        ticket    => 0,
+        blocking  => 0,
+        live_owed => 0,
+        live_held => 0,
+
         # Read once, here, and written back whenever the Preferences window
         # changes one. The three below are copies of preferences that the
         # rest of the window already reads by these names; keeping the copies
@@ -336,6 +355,12 @@ sub run
     Gtk3->main;
 
     $self->{ preview }->stop_video;
+
+    # Before the cancel, whose callback would otherwise go looking for widgets
+    # that have been destroyed -- and a pending live render with them.
+    $self->{ closed } = 1;
+    Glib::Source->remove( delete $self->{ live_timer } )
+        if $self->{ live_timer };
     $self->{ render }->cancel if $self->{ render }->busy;
 
     # cleanup always: it removes this session's scratch files, which nothing
@@ -743,12 +768,8 @@ sub _build_left_actions
     );
     $bar->pack_start( $adjust );
 
-    my ( $apply, $apply_icon, $apply_label ) = _action_button(
-        APPLY_ICON,
-        '_Apply',
-        'Render the pipeline and show the result. '
-            . 'Nothing on the left takes effect until this is pressed'
-    );
+    my ( $apply, $apply_icon, $apply_label ) =
+        _action_button( APPLY_ICON, '_Apply', $self->_apply_tooltip );
     $apply->get_style_context->add_class( 'suggested-action' );
     $apply->signal_connect(
         clicked => sub {
@@ -784,6 +805,10 @@ sub _build_left_actions
         toggled => sub {
             $self->{ animate } = $animate->get_active;
             $self->_sync_actions;
+
+            # Back to a still, which the live preview renders; a loop waits
+            # for Apply.
+            $self->_schedule_live unless $self->{ animate };
             return;
         }
     );
@@ -1367,6 +1392,9 @@ sub _build_preview_bar
             my $n = $quality->get_active;
             $self->{ preview_size } = $PREVIEW_SIZES[ $n ][ 0 ]
                 if $n >= 0;
+
+            # A different size is a different picture to show.
+            $self->_schedule_live;
             return;
         }
     );
@@ -1906,15 +1934,17 @@ sub _follow_selection
 # in particular, which is only an action while a row is selected and so has to
 # be re-decided after a rebuild that dropped the selection.
 #
-# It does not render: what has changed is the configuration, and the picture
-# on screen is still the last one asked for. Applying is a separate gesture
-# because it is the one with a render bill attached.
+# It renders only through the live preview, a moment later, and only for a
+# still: see L</THE PREVIEW FOLLOWS THE SETTINGS>. Applying is a separate
+# gesture, and with the live preview off it is the one with the render bill
+# attached.
 sub _touch
 {
     my ( $self ) = @_;
 
     $self->{ dirty } = 1;
     $self->_sync_actions;
+    $self->_schedule_live;
 
     return;
 }
@@ -2135,35 +2165,52 @@ sub _open_file
 # press a button is a poor answer to "what does this picture look like", and
 # with no effects to run this costs only the decode.
 #
-# Not the preset's render even when one was asked for: that can be eight
-# seconds, and this is meant to be the thing that happens immediately. The
-# preset is what Apply is for.
+# Not the preset's render even when one was asked for: that can take seconds,
+# and this is meant to be the thing that happens immediately. With the live
+# preview on, the preset follows once the photograph is up, as any change
+# would; with it off, the preset is what Apply is for.
 sub _show_source
 {
     my ( $self ) = @_;
 
-    my $size = $self->{ preview_size };
-    $size = $self->_full_size unless $size;
+    my $ticket = $self->_begin( 1, 'Opening…' );
 
-    $self->_busy( 1, 'Opening…' );
+    my $opened = sub {
+
+        # Owed rather than started here, so that it begins once this child is
+        # gone -- and keeps the decoded photograph it leaves behind.
+        $self->{ live_owed } = 1
+            if $self->{ state } && $self->{ state }->effect_names;
+
+        return 0 unless $self->_end( $ticket );
+
+        $self->{ shown_key } = undef;
+        $self->_status(
+            $self->_live
+            ? 'Add effects and adjust them; the preview follows.'
+            : 'Add effects, adjust anything, then press Apply.'
+        );
+        return 1;
+    };
 
     $self->{ render }->source_preview(
-        size    => $size,
+        size    => $self->_preview_size,
         on_done => sub {
             my ( $path ) = @_;
 
-            $self->_busy( 0 );
-            $self->{ preview }->show_still( $path );
-            $self->_status( 'Add effects, adjust anything, then press Apply.' );
+            $self->{ preview }->show_still( $path ) if $opened->();
             return;
         },
-        on_error => sub {
 
-            # Not being able to show the source is not a reason to refuse to
-            # open it -- everything else about the file is already loaded, and
-            # Apply will report the same problem more usefully.
-            $self->_busy( 0 );
-            $self->_status( 'Add effects, adjust anything, then press Apply.' );
+        # Not being able to show the source is not a reason to refuse to open
+        # it -- everything else about the file is already loaded, and the
+        # first render will report the same problem more usefully.
+        on_error => sub {
+            $opened->();
+            return;
+        },
+        on_cancel => sub {
+            $self->_cancelled( $ticket );
             return;
         },
     );
@@ -2265,7 +2312,7 @@ sub _export
                 . 'not be in this file. Export as .mp4 or .webm for sound.' );
     }
 
-    $self->_busy( 1, sprintf 'Exporting to %s  ·  %s',
+    my $ticket = $self->_begin( 1, sprintf 'Exporting to %s  ·  %s',
         $path, GlitchVape::GUI::Export::describe( $self->{ export }, $spec ) );
 
     $self->{ render }->export(
@@ -2287,19 +2334,23 @@ sub _export
         # An export is the long one: full size rather than preview size, so
         # the frames it counts are the slowest this program renders.
         on_progress => sub {
-            $self->_progress( @_ );
+            $self->_progress( @_ ) if $ticket == $self->{ ticket };
             return;
         },
 
         on_done => sub {
             my ( $written ) = @_;
-            $self->_busy( 0 );
+            return unless $self->_end( $ticket );
             $self->_status( "Exported $written" );
             return;
         },
         on_error => sub {
-            $self->_busy( 0 );
+            return unless $self->_end( $ticket );
             $self->_report( $_[ 0 ] );
+            return;
+        },
+        on_cancel => sub {
+            $self->_cancelled( $ticket );
             return;
         },
     );
@@ -2696,7 +2747,7 @@ sub _select_preset
 
     $self->_reload_widgets;
     $self->_touch;
-    $self->_status( "Preset '$name' loaded. Press Apply to render it." );
+    $self->_changed( "Preset '$name' loaded.", 'to render it' );
 
     return;
 }
@@ -3049,12 +3100,26 @@ sub _choose_effect
 
     return unless $self->{ state };
 
+    # The wizard draws its previews through the same render child, so the
+    # live preview waits while it is open rather than cancelling them -- see
+    # L</THE PREVIEW FOLLOWS THE SETTINGS>.
+    Glib::Source->remove( delete $self->{ live_timer } )
+        if $self->{ live_timer };
+    $self->{ live_held }++;
+
+    my $release = sub {
+        $self->{ live_held }--     if $self->{ live_held };
+        $self->_schedule_live( 0 ) if $self->{ live_owed };
+        return;
+    };
+
     # Handed back rather than dropped, so a test can drive the wizard the
     # window actually opened instead of one built to look like it.
-    return GlitchVape::GUI::Wizard->run(
+    my $wizard = GlitchVape::GUI::Wizard->run(
         parent   => $self->{ window },
         state    => $self->{ state },
         render   => $self->{ render },
+        on_close => $release,
         on_empty => sub { $self->_report( $_[ 0 ] ); return },
         on_apply => sub {
             my ( $name, $params, $now ) = @_;
@@ -3076,6 +3141,11 @@ sub _choose_effect
             return;
         },
     );
+
+    # Nothing left to add, so no wizard and nothing to wait for.
+    $release->() unless $wizard;
+
+    return $wizard;
 }
 
 # The wizard hands back a name and the settings dialled in against its
@@ -3107,11 +3177,8 @@ sub _accept_effect
     # Telling somebody to press Apply when a render is about to start on its
     # own is an instruction to undo what they asked for.
     my $title = GlitchVape::Registry->get( $name )->{ title };
-    $self->_status(
-        $rendering
-        ? "Added '$title'."
-        : "Added '$title'. Press Apply to see it."
-    );
+    if   ( $rendering ) { $self->_status( "Added '$title'." ) }
+    else                { $self->_changed( "Added '$title'.", 'to see it' ) }
 
     return;
 }
@@ -3119,13 +3186,20 @@ sub _accept_effect
 # ---------------------------------------------------------------------------
 # Rendering
 
+# Apply, pressed.
+#
+# Stop, while a render somebody asked for and has to wait for is running -- a
+# loop, an export, or a still when the live preview is off. Otherwise it makes
+# the present configuration a step in the history and shows it, which with the
+# live preview on is usually a picture already rendered: a cache hit, or the
+# render under way joined rather than begun again.
 sub _apply
 {
     my ( $self ) = @_;
 
     return unless $self->{ state };
 
-    if ( $self->{ render }->busy )
+    if ( $self->{ blocking } )
     {
         $self->{ render }->cancel;
         $self->_busy( 0 );
@@ -3152,23 +3226,77 @@ sub _apply
     return;
 }
 
+# Put the present configuration on screen.
 sub _render
 {
     my ( $self ) = @_;
 
-    my $size = $self->{ preview_size };
+    # Whatever the live preview was about to render, this is it.
+    Glib::Source->remove( delete $self->{ live_timer } )
+        if $self->{ live_timer };
+    $self->{ live_owed } = 0;
 
-    # 'Full size' means whatever the pipeline would use for a real render,
-    # which the preset may have lowered from the 1920 default.
-    if ( !$size )
-    {
-        $size = $self->_full_size;
-    }
-
+    my $size = $self->_preview_size;
     my $spec = $self->_animate_spec;
 
+    # A still can be overtaken by the next change at no cost, so with the live
+    # preview on it neither greys the window nor turns Apply into Stop. A loop
+    # is seconds of work somebody asked for, and so is a still with it off:
+    # those hold everything up, as every render did before.
+    my $blocking = $spec || !$self->{ prefs }{ live_preview };
+
     my $started = Time::HiRes::time();
-    $self->_busy( 1, 'Rendering…' );
+    my $ticket  = $self->_begin( $blocking, 'Rendering…' );
+
+    my $key;
+    $key = $self->{ render }->preview(
+        $self->_preview_args,
+        animate     => $spec,
+        on_progress => sub {
+            $self->_progress( @_ ) if $ticket == $self->{ ticket };
+            return;
+        },
+        on_done => sub {
+            my ( $path, $cached ) = @_;
+            return unless $self->_end( $ticket );
+
+            $self->{ shown_key } = $key;
+            $self->_show( $path, $spec );
+            $self->_report_timing( $started, $cached, $size );
+            return;
+        },
+        on_error => sub {
+            return unless $self->_end( $ticket );
+
+            $self->_report( $_[ 0 ] );
+            return;
+        },
+        on_cancel => sub {
+            $self->_cancelled( $ticket );
+            return;
+        },
+    );
+
+    $self->_sync_actions;
+    return;
+}
+
+# The longest edge a preview is rendered at. 'Full size' means whatever the
+# pipeline would use for a real render, which the preset may have lowered from
+# the 1920 default.
+sub _preview_size
+{
+    my ( $self ) = @_;
+
+    return $self->{ preview_size } || $self->_full_size;
+}
+
+# What every preview of the present configuration is asked for with, so that
+# the live preview can work out the key it would be filed under without
+# rendering.
+sub _preview_args
+{
+    my ( $self ) = @_;
 
     # Only if the preference says to show it. Off, the preview is the picture
     # the pipeline made and the mark appears in the exported file alone --
@@ -3177,31 +3305,189 @@ sub _render
     my $mark = $self->{ prefs }{ watermark };
     $mark = 'none' unless $self->{ prefs }{ watermark_preview };
 
-    $self->{ render }->preview(
-        state       => $self->{ state },
-        size        => $size,
-        animate     => $spec,
-        watermark   => $mark,
-        on_progress => sub {
-            $self->_progress( @_ );
-            return;
-        },
-        on_done => sub {
-            my ( $path, $cached ) = @_;
-            $self->_busy( 0 );
-            $self->_show( $path, $spec );
-            $self->_report_timing( $started, $cached, $size );
-            return;
-        },
-        on_error => sub {
-            $self->_busy( 0 );
-            $self->_report( $_[ 0 ] );
-            return;
-        },
+    return (
+        state     => $self->{ state },
+        size      => $self->_preview_size,
+        watermark => $mark,
+    );
+}
+
+=head1 ONE RENDER AT A TIME, AND WHICH
+
+There is one render child, and anything that starts a render throws away the
+one before it. So everything the window starts -- a preview, the photograph
+on opening, an export -- takes a ticket, and what comes back for it is acted
+on only while that ticket is still the latest. A cache hit's answer is queued
+on an idle and cannot be called back, which made this necessary once already
+for the wizard; with the preview following every slider it is the ordinary
+case.
+
+A render is I<blocking> when it is one somebody asked for and has to wait for:
+a loop, an export, the photograph being opened, or any render while the live
+preview is off. Only those grey the window and turn Apply into Stop. A live
+still is overtaken by the next change instead, and holds nothing up.
+
+=head1 THE PREVIEW FOLLOWS THE SETTINGS
+
+With the live preview on -- the default, in Preview preferences -- a still is
+rendered a moment after the controls stop moving, without Apply. What Apply
+does then is keep the configuration as a step in the history, which is what it
+always did as well; the render it used to start is by then a cache hit, or the
+render under way.
+
+The checkpoints are what make this affordable: adjusting an effect re-runs it
+and those after it, and with the layers kept for the session most of those are
+a composite of something already drawn.
+
+A loop is never rendered this way. It is seconds of work per change, and
+Animate is the switch that says somebody has decided to pay that.
+
+A change is rendered a moment after it is made, counted from the first of a
+burst, and a change made while a render is under way waits for it to finish
+rather than throwing it away. Dragging a slider then shows the picture
+following it, one render at a time, instead of nothing until the slider stops
+-- and the render that finishes was not wasted, since its steps are kept for
+the next.
+
+A live render never displaces one that blocks: an export or a loop is not
+cancelled to show a still nobody has asked for yet. The still is owed instead,
+and rendered when that one is done; the same for the Add wizard, which draws
+its own previews through the same child.
+
+=cut
+
+# Whether a change should be followed by a render without Apply.
+sub _live
+{
+    my ( $self ) = @_;
+
+    return 0 unless $self->{ prefs }{ live_preview };
+    return 0 unless $self->_has_source;
+    return 0 if $self->{ animate };
+    return 0 if $self->{ closed };
+
+    return 1;
+}
+
+# A change has been made: render it in a moment.
+#
+# A moment counted from the first change rather than from the last. One
+# already coming renders the settings as they are when it fires, so whatever
+# changed meanwhile is in it; putting it back with every change, as this once
+# did, left a slider being dragged with no picture until it stopped.
+sub _schedule_live
+{
+    my ( $self, $delay ) = @_;
+
+    return unless $self->_live;
+    return if $self->{ live_timer };
+
+    $self->{ live_timer } = Glib::Timeout->add(
+        $delay // LIVE_SETTLE_MS,
+        sub {
+            $self->{ live_timer } = undef;
+            $self->_render_live;
+            return 0;
+        }
     );
 
-    $self->_sync_actions;
     return;
+}
+
+sub _render_live
+{
+    my ( $self ) = @_;
+
+    return unless $self->_live;
+
+    # Behind whatever is running, rather than instead of it -- see above.
+    if (   $self->{ blocking }
+        || $self->{ live_held }
+        || $self->{ render }->busy )
+    {
+        $self->{ live_owed } = 1;
+        return;
+    }
+
+    $self->{ live_owed } = 0;
+
+    # Already on screen: undo to a picture just seen, a slider dragged back to
+    # where it was. A cache hit would say so too, but would also replace the
+    # status line's timing with "from cache" for nothing.
+    my $key = $self->{ render }->preview_key( $self->_preview_args );
+    return if defined $self->{ shown_key } && $self->{ shown_key } eq $key;
+
+    $self->_render;
+    return;
+}
+
+# A render is starting. Returns its ticket.
+sub _begin
+{
+    my ( $self, $blocking, $message ) = @_;
+
+    $self->_busy( 1, $message, quiet => !$blocking );
+
+    return ++$self->{ ticket };
+}
+
+# The render holding $ticket has answered. False if a later one has taken its
+# place, in which case the answer is about a configuration nobody is looking
+# at and the caller does nothing with it.
+sub _end
+{
+    my ( $self, $ticket ) = @_;
+
+    return 0 if $self->{ closed };
+    return 0 unless $ticket == $self->{ ticket };
+
+    $self->_busy( 0 );
+
+    # What was owed while this one ran, now that the child is free.
+    $self->_schedule_live( 0 ) if $self->{ live_owed };
+
+    return 1;
+}
+
+# The render holding $ticket was abandoned -- by the window's next render, or
+# by somebody else's, or by Stop. What it would have shown is not on screen,
+# so the picture may be behind the settings.
+sub _cancelled
+{
+    my ( $self, $ticket ) = @_;
+
+    $self->{ live_owed } = 1;
+    $self->_end( $ticket );
+
+    return;
+}
+
+# A status line that ends by telling somebody to press Apply only when nothing
+# will happen until they do.
+sub _changed
+{
+    my ( $self, $said, $how ) = @_;
+
+    $said .= " Press Apply $how." unless $self->_live;
+    $self->_status( $said );
+
+    return;
+}
+
+# What Apply does, which depends on whether the preview already follows the
+# settings. Two lines at most, as t/26-gui-layout.t holds every tooltip to.
+sub _apply_tooltip
+{
+    my ( $self ) = @_;
+
+    if ( $self->{ prefs }{ live_preview } && !$self->{ animate } )
+    {
+        return "Keep these settings as a step that Undo comes back to.\n"
+            . 'The preview already follows them as they change';
+    }
+
+    return 'Render the pipeline and show the result. '
+        . 'Nothing on the left takes effect until this is pressed';
 }
 
 sub _show
@@ -3311,7 +3597,7 @@ sub _randomize
     $self->{ state }->seed( $seed );
 
     $self->_touch;
-    $self->_status( "Seed $seed. Press Apply to see it." );
+    $self->_changed( "Seed $seed.", 'to see it' );
 
     return;
 }
@@ -3374,10 +3660,30 @@ sub _adopt_prefs
 
     # A watermark shown in the preview is part of the picture as far as the
     # cache is concerned, so changing either of these invalidates what is on
-    # screen and the render has to be asked for again.
+    # screen and the render has to be asked for again -- or, with the live
+    # preview on, is asked for.
     if ( $every || $what =~ /^watermark/ )
     {
-        $self->_status( 'Watermark changed. Press Apply to see it.' );
+        $self->_changed( 'Watermark changed.', 'to see it' );
+        $self->_schedule_live;
+    }
+
+    # Switched on, the preview catches up with the settings at once; switched
+    # off, a render already owed is not started, and Apply says what it does.
+    if ( $every || $what eq 'live_preview' )
+    {
+        if ( $self->_live )
+        {
+            $self->_schedule_live( 0 );
+        }
+        else
+        {
+            Glib::Source->remove( delete $self->{ live_timer } )
+                if $self->{ live_timer };
+            $self->{ live_owed } = 0;
+        }
+
+        $self->_sync_actions;
     }
 
     return;
@@ -3604,9 +3910,22 @@ sub _to_clipboard
 # ---------------------------------------------------------------------------
 # Feedback
 
+# The spinner over the picture, and Apply's other hat.
+#
+# A render that is not quiet is one that blocks -- see L</ONE RENDER AT A
+# TIME, AND WHICH> -- so this is where the window learns that it is in one.
+# A quiet one is a live render: the button keeps saying Apply, since the render
+# is not one anybody has to stop, and the status line keeps whatever it last
+# said. Its spinner waits a moment before appearing, which most live renders
+# finish inside.
 sub _busy
 {
-    my ( $self, $busy, $message ) = @_;
+    my ( $self, $busy, $message, %opt ) = @_;
+
+    Glib::Source->remove( delete $self->{ badge_timer } )
+        if $self->{ badge_timer };
+
+    $self->{ blocking } = $busy && !$opt{ quiet } ? 1 : 0;
 
     if ( $busy )
     {
@@ -3620,19 +3939,31 @@ sub _busy
         $self->{ spinner_bar }->set_fraction( 0 );
         $self->{ spinner_bar }->hide;
 
-        $self->{ spinner_badge }->show;
-        $self->_set_apply( STOP_ICON, '_Stop',
-            'Abandon this render. The settings are untouched' );
-        $self->_status( $message ) if defined $message;
+        if ( $opt{ quiet } )
+        {
+            $self->{ badge_timer } = Glib::Timeout->add(
+                BADGE_DELAY_MS,
+                sub {
+                    $self->{ badge_timer } = undef;
+                    $self->{ spinner_badge }->show;
+                    return 0;
+                }
+            );
+        }
+        else
+        {
+            $self->{ spinner_badge }->show;
+            $self->_set_apply( STOP_ICON, '_Stop',
+                'Abandon this render. The settings are untouched' );
+            $self->_status( $message ) if defined $message;
+        }
     }
     else
     {
         $self->{ spinner }->stop;
         $self->{ spinner_bar }->hide;
         $self->{ spinner_badge }->hide;
-        $self->_set_apply( APPLY_ICON, '_Apply',
-                  'Render the pipeline and show the result. '
-                . 'Nothing on the left takes effect until this is pressed' );
+        $self->_set_apply( APPLY_ICON, '_Apply', $self->_apply_tooltip );
     }
 
     $self->_sync_actions;
@@ -3853,8 +4184,12 @@ sub _sync_actions
 {
     my ( $self ) = @_;
 
-    my $have  = defined $self->{ state };
-    my $busy  = $self->{ render }->busy;
+    my $have = defined $self->{ state };
+
+    # Only a render that holds everything up -- see L</ONE RENDER AT A TIME,
+    # AND WHICH>. A live one is overtaken by whatever is done next, so there
+    # is nothing to protect from it.
+    my $busy  = $self->{ blocking };
     my $ready = $have && !$busy;
 
     my $can_undo = $ready && $self->{ state }->can_undo;
@@ -3890,6 +4225,10 @@ sub _sync_actions
     $self->{ m_command }->set_sensitive( $have );
     $self->{ m_seed }->set_sensitive( $have );
     $self->{ b_apply }->set_sensitive( $have );
+
+    # What Apply does changes with the live preview and with Animate, so it
+    # says which, whenever it is not wearing its Stop hat.
+    $self->{ b_apply }->set_tooltip_text( $self->_apply_tooltip ) unless $busy;
 
     # The effect page says how to fill itself while there is nothing in it.
     # Driven from the state rather than from the row count so that it is

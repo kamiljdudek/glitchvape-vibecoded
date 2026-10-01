@@ -157,6 +157,36 @@ sub write_file
     cmp_ok $total, '<=', 1000, 'the directory ends up under the cap';
 }
 
+# The session's layers grow with every slider position a render reaches --
+# each is a layer the effects keep -- so they are capped as the previews are,
+# and what was read last is what stays.
+{
+    my $dir = temp_root();
+
+    my $cache =
+        GlitchVape::GUI::Cache->new( root => "$dir", layers_max => 1000 );
+    my $layers = $cache->layers_dir;
+
+    my $now = time;
+    for my $n ( 1 .. 4 )
+    {
+        my $path = File::Spec->catfile( $layers, "layer-$n.miff" );
+        write_file( $path, 'x' x 400 );
+        utime $now - ( 100 - $n ), $now - ( 100 - $n ), $path;
+    }
+
+    # Read since, which is what a render reaching it does: see
+    # GlitchVape::Context/layer.
+    utime $now, $now, File::Spec->catfile( $layers, 'layer-1.miff' );
+
+    cmp_ok $cache->trim_layers, '>=', 2,
+        'trimming the layers gets them under their cap';
+    ok -e File::Spec->catfile( $layers, 'layer-1.miff' ),
+        'keeping the one used last, however long ago it was made';
+    ok !-e File::Spec->catfile( $layers, 'layer-2.miff' ),
+        'and letting the one unused longest go';
+}
+
 {
     my $dir = temp_root();
 

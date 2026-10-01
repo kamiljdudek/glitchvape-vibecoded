@@ -100,8 +100,6 @@ sub _scanlines
     my ( $ctx, $p ) = @_;
     return if $p->{ opacity } <= 0;
 
-    my ( $w, $h ) = $ctx->dims;
-
     # Snapped to whole spacings by travel(), so the last frame of a loop lands
     # exactly where the first one started.
     my $offset = int( $ctx->travel( $p->{ drift }, $p->{ spacing } ) + 0.5 );
@@ -115,8 +113,29 @@ sub _scanlines
         offset    => $offset,
     );
 
-    my $mask = GlitchVape::Raster::tiled( $ctx, $tile, $w, $h );
-    $ctx->magick( $mask, '-compose', 'Multiply', '-composite' );
+    _multiply_tile( $ctx, $tile, 'scanlines' );
+    return;
+}
+
+# Lay a tile over the whole picture and multiply. The composite the command
+# line did, without the other process: see GlitchVape::Context/in_process.
+sub _multiply_tile
+{
+    my ( $ctx, $tile, $effect ) = @_;
+
+    my ( $w, $h ) = $ctx->dims;
+    my $mask = GlitchVape::Raster::tiled_image( $tile, $w, $h );
+
+    $ctx->in_process(
+        sub {
+            GlitchVape::Magick::check(
+                $_[ 0 ]
+                    ->Composite( image => $mask->[ 0 ], compose => 'Multiply' ),
+                "$effect: could not lay the mask over the picture"
+            );
+        }
+    );
+
     return;
 }
 
@@ -163,16 +182,13 @@ sub _grille
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
 
-    my ( $w, $h ) = $ctx->dims;
-
     my $tile = GlitchVape::Raster::grille_tile(
         $ctx->cachedir,
         width    => $p->{ width },
         strength => $p->{ strength },
     );
 
-    my $mask = GlitchVape::Raster::tiled( $ctx, $tile, $w, $h );
-    $ctx->magick( $mask, '-compose', 'Multiply', '-composite' );
+    _multiply_tile( $ctx, $tile, 'grille' );
 
     $ctx->image->Modulate( brightness => $p->{ brighten } * 100 )
         if $p->{ brighten } != 1;
@@ -308,9 +324,30 @@ sub _vignette
 {
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
-    require Image::Magick;
 
     my ( $fw, $fh ) = $ctx->dims;
+
+    # The falloff depends on the size and these three and on nothing in the
+    # picture, so a render that reaches here unchanged reads it: at 720 pixels
+    # and the strengths the presets use it is built at full size, blur and
+    # all, and was a seventh of a second of every preview that re-ran it.
+    my $grad = $ctx->layer(
+        [ 'vignette', $fw, $fh, @{ $p }{ qw(strength size softness) } ],
+        sub { return _vignette_falloff( $fw, $fh, $p ) },
+    );
+
+    $ctx->image->Composite(
+        image   => $grad->[ 0 ],
+        compose => 'Multiply',
+        gravity => 'Center',
+    );
+    return;
+}
+
+sub _vignette_falloff
+{
+    my ( $fw, $fh, $p ) = @_;
+    require Image::Magick;
 
     # Built small and enlarged: see _layer_scale.
     # Six hundred pixels per step at full strength, measured: at 720 by 540
@@ -355,12 +392,7 @@ sub _vignette
         $grad->Resize( geometry => "${tw}x${th}!", filter => 'Triangle' );
     }
 
-    $ctx->image->Composite(
-        image   => $grad->[ 0 ],
-        compose => 'Multiply',
-        gravity => 'Center',
-    );
-    return;
+    return $grad;
 }
 
 # How many times smaller a smooth layer can be built than the picture it goes
@@ -472,19 +504,52 @@ sub _curvature
     if ( abs( $p->{ amount } ) >= 0.001 )
     {
         # Barrel coefficients are A B C (D is derived as 1-A-B-C). Driving C
-        # alone gives a clean single-parameter bulge.
-        $ctx->magick(
-            '-virtual-pixel', 'background', '-background', $p->{ background },
-            '-distort', 'Barrel', sprintf( '0.0 0.0 %.5f', $p->{ amount } ),
+        # alone gives a clean single-parameter bulge. Rounded to the five
+        # places the command line was given, so the bulge is the one it drew.
+        my $c = sprintf '%.5f', $p->{ amount };
+
+        # The corners the bulge uncovers are the background colour, which the
+        # binding reads off the picture rather than taking with the Distort.
+        $ctx->in_process(
+            sub {
+                my ( $img ) = @_;
+
+                $img->Set( background => $p->{ background } );
+
+                GlitchVape::Magick::check(
+                    $img->Distort(
+                        method          => 'Barrel',
+                        points          => [ 0, 0, $c ],
+                        'virtual-pixel' => 'Background',
+                    ),
+                    'curvature: could not bulge the picture'
+                );
+            }
         );
 
+        # A separate staging, because it was a separate run: what the zoom
+        # enlarges is the bulge rounded to eight bits.
         if ( $p->{ zoom } != 1 )
         {
             my $zw = int( $w * $p->{ zoom } );
             my $zh = int( $h * $p->{ zoom } );
-            $ctx->magick(
-                '-resize', "${zw}x${zh}!", '-gravity', 'Center',
-                '-extent', "${w}x${h}",
+
+            $ctx->in_process(
+                sub {
+                    my ( $img ) = @_;
+
+                    GlitchVape::Magick::check(
+                        $img->Resize( geometry => "${zw}x${zh}!" ),
+                        'curvature: could not zoom' );
+
+                    GlitchVape::Magick::check(
+                        $img->Extent(
+                            geometry => "${w}x${h}",
+                            gravity  => 'Center',
+                        ),
+                        'curvature: could not crop the zoom back'
+                    );
+                }
             );
         }
     }
@@ -713,9 +778,27 @@ sub _halftone
 
     my $creep = _halftone_creep( $ctx, $p );
 
-    $ctx->magick( '-roll', sprintf '%+d%+d', $creep, $creep ) if $creep;
-    $ctx->magick( '-ordered-dither', "$p->{map},$p->{levels}" );
-    $ctx->magick( '-roll', sprintf '%+d%+d', -$creep, -$creep ) if $creep;
+    # One staging for what were three runs of the command line. Moving pixels
+    # changes none of them, so the rounding each run did between the three was
+    # the rounding the first one had already done.
+    $ctx->in_process(
+        sub {
+            my ( $img ) = @_;
+
+            GlitchVape::Magick::check( $img->Roll( x => $creep, y => $creep ),
+                'halftone: could not move the picture under the screen' )
+                if $creep;
+
+            GlitchVape::Magick::check(
+                $img->OrderedDither( threshold => "$p->{map},$p->{levels}" ),
+                'halftone: could not screen the picture' );
+
+            GlitchVape::Magick::check(
+                $img->Roll( x => -$creep, y => -$creep ),
+                'halftone: could not move the picture back'
+            ) if $creep;
+        }
+    );
 
     if ( $orig )
     {
@@ -882,9 +965,37 @@ sub _glare
 {
     my ( $ctx, $p ) = @_;
     return if $p->{ strength } <= 0;
-    require Image::Magick;
 
     my ( $fw, $fh ) = $ctx->dims;
+
+    # Half the diagonal, so a whole drift takes the band's centre from the
+    # middle of the glass to its edge and back rather than a whole diagonal
+    # off it: past about a half the band spends most of the loop outside the
+    # crop and the top of the slider is one long nothing.
+    my $diag  = _glare_geometry( $fw, $fh, $p )->{ diag };
+    my $shift = int $ctx->excursion( $p->{ drift } * $diag / 2 );
+
+    # The band depends on the size, where it has swept to and how it is set,
+    # and on nothing in the picture. Keyed on the sweep rather than the frame,
+    # so a loop that does not move it keeps one band rather than one a frame.
+    my $sheen = $ctx->layer(
+        [ 'glare', $fw, $fh, $shift, @{ $p }{ qw(width strength angle) } ],
+        sub { return _glare_band( $fw, $fh, $p, $shift ) },
+    );
+
+    $ctx->image->Composite(
+        image   => $sheen->[ 0 ],
+        compose => 'Screen',
+        gravity => 'Center',
+    );
+    return;
+}
+
+# The band's scale and extent, which the drift needs before the band is built
+# and the band needs to be built at all.
+sub _glare_geometry
+{
+    my ( $fw, $fh, $p ) = @_;
 
     # A wide band is built small and enlarged, since blurred as widely as it
     # is there is nothing in it the enlargement could lose: see _layer_scale.
@@ -900,6 +1011,17 @@ sub _glare
     my ( $w, $h ) = ( POSIX::ceil( $fw / $f ), POSIX::ceil( $fh / $f ) );
     my $diag = int( sqrt( $w * $w + $h * $h ) ) + 2;
     my $band = int( $diag * $p->{ width } ) || 1;
+
+    return { f => $f, w => $w, h => $h, diag => $diag, band => $band };
+}
+
+sub _glare_band
+{
+    my ( $fw, $fh, $p, $shift ) = @_;
+    require Image::Magick;
+
+    my ( $f, $w, $h, $diag, $band ) =
+        @{ _glare_geometry( $fw, $fh, $p ) }{ qw(f w h diag band) };
 
     # Build the band as a vertical gradient on an oversized canvas, rotate it,
     # then crop back: rotating a gradient is far cheaper than computing a
@@ -929,12 +1051,7 @@ sub _glare
         image   => $full->[ 0 ],
         compose => 'Over',
         gravity => 'Center',
-
-        # Half the diagonal, so a whole drift takes the band's centre from
-        # the middle of the glass to its edge and back rather than a whole
-        # diagonal off it: past about a half the band spends most of the loop
-        # outside the crop and the top of the slider is one long nothing.
-        y => int $ctx->excursion( $p->{ drift } * $diag / 2 ),
+        y       => $shift,
     );
     $sheen->Rotate( degrees => $p->{ angle }, background => 'black' );
     $sheen->Set( gravity => 'Center' );
@@ -945,12 +1062,7 @@ sub _glare
         if $f > 1;
     $sheen->Evaluate( operator => 'Multiply', value => $p->{ strength } );
 
-    $ctx->image->Composite(
-        image   => $sheen->[ 0 ],
-        compose => 'Screen',
-        gravity => 'Center',
-    );
-    return;
+    return $sheen;
 }
 
 # ---------------------------------------------------------------------------

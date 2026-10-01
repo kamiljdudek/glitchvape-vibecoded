@@ -38,6 +38,8 @@ my $P = 'GlitchVape::GUI::Prefs';
         'and nothing signs the output until asked';
     is $prefs->{ metadata_keep }, 0,
         'and an export does not carry the camera and the coordinates';
+    is $prefs->{ live_preview }, 1,
+        'and the preview follows the settings without Apply';
 }
 
 # ---------------------------------------------------------------------------

@@ -177,8 +177,48 @@ SKIP:
     $state->param( 'grain', 'amount', 0.9 );
 
     $state->undo;
-    is $state->param( 'grain', 'amount' ), $default,
+    is $state->param( 'grain', 'amount' ), 0.5,
         'history entries are independent copies';
+
+    $state->undo;
+    is $state->param( 'grain', 'amount' ), $default,
+        'and the one before it is the one it was';
+}
+
+# What has not been applied is undone first. With the preview following the
+# controls, the picture on screen is the unapplied one, and an undo that
+# stepped past the last Apply would land two pictures back from it.
+{
+    my $state = GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
+    $state->add_effect( 'scanlines' );
+    $state->commit;
+    $state->param( 'scanlines', 'opacity', 0.8 );
+    $state->commit;
+
+    ok !$state->pending, 'nothing is pending straight after an Apply';
+
+    $state->param( 'scanlines', 'opacity', 0.2 );
+    ok $state->pending, 'a moved control is pending';
+
+    ok $state->undo, 'undo moves';
+    is $state->param( 'scanlines', 'opacity' ), 0.8,
+        'back to the last Apply rather than past it';
+    ok !$state->pending, 'which leaves nothing pending';
+
+    ok $state->redo, 'redo moves';
+    is $state->param( 'scanlines', 'opacity' ), 0.2,
+        'and brings the unapplied edit back';
+    is scalar( ( $state->depth )[ 0 ] ), 2,
+        'as a step of its own, now that it has been through the history';
+}
+
+{
+    my $state = GlitchVape::GUI::State->new( source => 'photo.png', seed => 1 );
+    $state->add_effect( 'scanlines' );
+    $state->commit;
+    $state->param( 'scanlines', 'opacity', 0.6 );
+
+    ok $state->can_undo, 'an unapplied edit can be undone before any Apply';
 }
 
 {

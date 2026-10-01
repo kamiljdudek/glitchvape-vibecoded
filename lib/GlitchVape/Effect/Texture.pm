@@ -1066,41 +1066,81 @@ sub _bitmap
     my $sw = int( $w / $p->{ factor } ) || 1;
     my $sh = int( $h / $p->{ factor } ) || 1;
 
-    my $remap =
-        GlitchVape::Palette::remap_file( $p->{ palette }, $ctx->cachedir );
+    require Image::Magick;
 
-    my @args = ( '-filter', 'Point', '-resize', "${sw}x${sh}!" );
+    my $map = Image::Magick->new;
+    GlitchVape::Magick::check(
+        $map->Read(
+            GlitchVape::Palette::remap_file( $p->{ palette }, $ctx->cachedir )
+        ),
+        'bitmap: could not read the palette'
+    );
 
+    my ( $matrix, $dx, $dy );
     if ( $p->{ matrix } ne 'none' && $p->{ amount } > 0 )
     {
         my $tile = _bayer_file( $p->{ matrix }, $ctx->cachedir );
-        my ( $dx, $dy ) = _bitmap_offset( $ctx, $p );
+        ( $dx, $dy ) = _bitmap_offset( $ctx, $p );
 
-        push @args, '-roll', sprintf '%+d%+d', $dx, $dy if $dx || $dy;
-
-        # result = amount*tile + image - amount/2, so the matrix is centred on
-        # zero and shifts a pixel either way rather than only brightening it.
-        push @args,
-            '(', '-size', "${sw}x${sh}", "tile:$tile", ')',
-            '-compose', 'Mathematics', '-define',
-            sprintf(
-            'compose:args=0,%.4f,1,%.4f',
-            $p->{ amount },
-            -$p->{ amount } / 2
-            ),
-            '-composite';
-
-        push @args, '-roll', sprintf '%+d%+d', -$dx, -$dy if $dx || $dy;
+        $matrix = Image::Magick->new( size => "${sw}x${sh}" );
+        GlitchVape::Magick::check(
+            $matrix->Read( "tile:$tile" ),
+            'bitmap: could not lay the matrix out'
+        );
     }
 
-    # -dither before -remap: it is a setting that the remap reads, not an
-    # operation, so after it the remap has already diffused its own error and
-    # torn the matrix pattern up.
-    push @args,
-        '-dither', 'None', '-remap', $remap,
-        '-filter', ucfirst $p->{ filter }, '-resize', "${w}x${h}!";
+    # One staging, because it was one run of the command line: nothing in
+    # here is rounded until the picture is back at full size.
+    $ctx->in_process(
+        sub {
+            my ( $img ) = @_;
 
-    $ctx->magick( @args );
+            GlitchVape::Magick::check(
+                $img->Resize( geometry => "${sw}x${sh}!", filter => 'Point' ),
+                'bitmap: could not shrink the picture' );
+
+            if ( $matrix )
+            {
+                GlitchVape::Magick::check( $img->Roll( x => $dx, y => $dy ),
+                    'bitmap: could not move the picture under the matrix' )
+                    if $dx || $dy;
+
+                # result = amount*tile + image - amount/2, so the matrix is
+                # centred on zero and shifts a pixel either way rather than
+                # only brightening it.
+                GlitchVape::Magick::check(
+                    $img->Composite(
+                        image   => $matrix,
+                        compose => 'Mathematics',
+                        args    => sprintf( '0,%.4f,1,%.4f',
+                            $p->{ amount },
+                            -$p->{ amount } / 2 ),
+                    ),
+                    'bitmap: could not add the matrix'
+                );
+
+                GlitchVape::Magick::check(
+                    $img->Roll( x => -$dx, y => -$dy ),
+                    'bitmap: could not move the picture back'
+                ) if $dx || $dy;
+            }
+
+            # No dithering in the lookup: the remap would diffuse its own
+            # error and tear the matrix pattern up.
+            GlitchVape::Magick::check(
+                $img->Remap( image => $map, 'dither-method' => 'None' ),
+                'bitmap: could not force the picture into the palette'
+            );
+
+            GlitchVape::Magick::check(
+                $img->Resize(
+                    geometry => "${w}x${h}!",
+                    filter   => ucfirst $p->{ filter }
+                ),
+                'bitmap: could not enlarge the picture'
+            );
+        }
+    );
 
     return;
 }
@@ -1665,17 +1705,27 @@ sub _dither
     # circular shift, so nothing is lost at the edges and the second roll
     # returns every pixel to where it started -- only which cell of the matrix
     # it met has changed.
-    if ( $dx || $dy )
-    {
-        $ctx->magick( '-roll', sprintf( '%+d%+d', $dx, $dy ) );
-    }
+    #
+    # One staging for what were three runs of the command line, for the
+    # reason halftone gives: moving pixels changes none of them.
+    $ctx->in_process(
+        sub {
+            my ( $img ) = @_;
 
-    $ctx->magick( '-ordered-dither', "$p->{map},$p->{levels}" );
+            GlitchVape::Magick::check( $img->Roll( x => $dx, y => $dy ),
+                'dither: could not move the picture under the matrix' )
+                if $dx || $dy;
 
-    if ( $dx || $dy )
-    {
-        $ctx->magick( '-roll', sprintf( '%+d%+d', -$dx, -$dy ) );
-    }
+            GlitchVape::Magick::check(
+                $img->OrderedDither( threshold => "$p->{map},$p->{levels}" ),
+                'dither: could not dither the picture' );
+
+            GlitchVape::Magick::check(
+                $img->Roll( x => -$dx, y => -$dy ),
+                'dither: could not move the picture back'
+            ) if $dx || $dy;
+        }
+    );
 
     return;
 }

@@ -108,10 +108,15 @@ use constant {
     render   => GlitchVape::GUI::Render
     on_apply => sub { my ( $name, $params ) = @_ }
     on_empty => sub { my ( $message ) = @_ }
+    on_close => sub { }
 
 Shows the assistant and returns immediately; the outcome arrives through
 C<on_apply>. C<on_empty> is called instead when every effect is already in the
 pipeline, since there is nothing to put on the first page.
+
+C<on_close> is called once the assistant has gone, however it went. The
+window's live preview waits for it, because the previews here are drawn by the
+same render child and a live render would cancel them.
 
 =cut
 
@@ -124,6 +129,7 @@ sub run
         state    => $arg{ state },
         render   => $arg{ render },
         on_apply => $arg{ on_apply },
+        on_close => $arg{ on_close },
         stage    => undef,
         effect   => undef,
         params   => {},
@@ -246,6 +252,13 @@ sub _finish
     $self->{ gone } = 1;
 
     $self->{ assistant }->destroy;
+
+    # Once, whichever of cancel and close got here first.
+    if ( my $closed = delete $self->{ on_close } )
+    {
+        $closed->();
+    }
+
     return;
 }
 

@@ -15,6 +15,9 @@ use GlitchVape::Tools      ();
 
 our $VERSION = '0.01';
 
+# What a still preview is written as. See L</A STILL IS HANDED OVER AS BMP>.
+use constant STILL => '.bmp';
+
 =head1 NAME
 
 GlitchVape::GUI::Render - background rendering for the interface
@@ -108,6 +111,26 @@ agree with the command-line tool, but the command-line tool's own code path.
 
 =cut
 
+=head1 A STILL IS HANDED OVER AS BMP
+
+Uncompressed, because the window's loader is the only thing that reads it and
+reading it is then a copy. As PNG at compression level nine it was the largest
+single cost of adjusting an effect near the end of a pipeline: 25 to 110
+milliseconds to write at 720 pixels, depending on how hard zlib had to work,
+and 5 more to decode -- against under a millisecond each. The window is shown
+the same pixels either way; F<t/53-gui-render.t> decodes both and compares.
+
+BMP rather than the other formats that are as quick, for what each of those
+does to a picture with transparency in it, which an effect a plug-in adds may
+leave and PNG kept. PPM drops it. TIFF keeps it, but GdkPixbuf reads TIFF
+through libtiff's RGBA interface, which hands back colours already multiplied
+by their alpha, so a translucent pink came back as a dark mauve. BMP keeps it
+and gives it back as it was. Its loader comes with GdkPixbuf itself on Debian,
+and glycin reads it on Fedora, so there is no loader package to depend on.
+
+The files are larger, so the store's cap holds fewer of them: a 720-pixel
+still is a megabyte and a tenth, where the PNG was half that or more.
+
 =head2 new( %arg )
 
     cache => GlitchVape::GUI::Cache
@@ -188,10 +211,15 @@ sub busy { return defined $_[ 0 ]{ job } }
 
 =head2 cancel()
 
-Abandon the running render. The child is signalled and its result discarded;
-the callbacks for that job never fire.
+Abandon the running render. The child is signalled and its result discarded:
+its C<on_done>, C<on_error> and C<on_progress> never fire. Its C<on_cancel>
+does, at once, so that whoever was waiting for the picture hears that it will
+not arrive -- which matters when the one cancelling is somebody else. The
+window's live preview is displaced by an export or by the Add wizard's own
+previews, and without being told it would leave its spinner turning and the
+picture behind the settings.
 
-Called whenever the user applies a change while a render is still going, which
+Called whenever a render is started while another is still going, which
 during a slider-heavy session is most of the time.
 
 =cut
@@ -209,6 +237,8 @@ sub cancel
 
     kill 'TERM', $job->{ pid };
 
+    $job->{ on_cancel }->() if $job->{ on_cancel };
+
     return 1;
 }
 
@@ -219,6 +249,7 @@ sub cancel
     animate  => { frames, fps }          render a loop instead of a still
     on_done  => sub { my ( $path ) = @_ }
     on_error => sub { my ( $message ) = @_ }
+    on_cancel => sub { }                 abandoned; see cancel()
 
 Returns the cache key. When that key is already on disk the render is skipped
 and C<on_done> fires from an idle callback -- from the caller's point of view
@@ -226,32 +257,32 @@ a cache hit and a real render behave identically, they just differ in how long
 they take. That is what makes undo instant: a state on the history stack has
 been rendered before.
 
+When that key is the render already under way, it is not started again: the
+new callbacks take over the one in flight. That is Apply pressed while the
+live preview is still drawing the same settings, which would otherwise throw
+the nearly finished picture away to begin it again.
+
 =cut
 
 sub preview
 {
     my ( $self, %arg ) = @_;
 
-    my $state = $arg{ state };
-    my $size  = $arg{ size } || 720;
-    my $spec  = $arg{ animate };
+    my $spec = $arg{ animate };
 
-    my $suffix = '.png';
+    my $suffix = STILL;
     if ( $spec )
     {
         $suffix = '.mp4';
     }
 
-    # The watermark is part of the picture when it is shown, so it is part of
-    # what the cache is keyed on. Without it, turning the bar on serves the
-    # unmarked render straight back out of the store.
-    my $key = $state->cache_key(
-        size    => $size,
-        animate => $spec,
-        extra   => [ 'watermark', $arg{ watermark } // 'none' ],
-    );
+    my $key = $self->preview_key( %arg );
 
     return $key if $self->_serve_cached( $key, $suffix, \%arg );
+    return $key if $self->_join( $key, \%arg );
+
+    my $state = $arg{ state };
+    my $size  = $arg{ size } || 720;
 
     my $config = $state->pipeline_config;
 
@@ -286,6 +317,7 @@ sub preview
         on_done     => $arg{ on_done },
         on_error    => $arg{ on_error },
         on_progress => $arg{ on_progress },
+        on_cancel   => $arg{ on_cancel },
         work        => sub {
             my ( $report ) = @_;
 
@@ -304,11 +336,49 @@ sub preview
     return $key;
 }
 
+=head2 preview_key( %arg )
+
+The key L</preview( %arg )> would file this render under, from the same
+arguments, without rendering. For the window to tell whether what it is
+showing is already what its settings would give.
+
+=cut
+
+sub preview_key
+{
+    my ( $self, %arg ) = @_;
+
+    # The watermark is part of the picture when it is shown, so it is part of
+    # what the cache is keyed on. Without it, turning the bar on serves the
+    # unmarked render straight back out of the store.
+    return $arg{ state }->cache_key(
+        size    => $arg{ size } || 720,
+        animate => $arg{ animate },
+        extra   => [ 'watermark', $arg{ watermark } // 'none' ],
+    );
+}
+
+# The render under way is this one: hand it the new callbacks rather than
+# starting it again. The old ones were waiting for the same picture.
+sub _join
+{
+    my ( $self, $key, $arg ) = @_;
+
+    my $job = $self->{ job } or return 0;
+    return 0 if $job->{ cancelled };
+    return 0 unless defined $job->{ key } && $job->{ key } eq $key;
+
+    $job->{ $_ } = $arg->{ $_ } for qw(on_done on_error on_progress on_cancel);
+
+    return 1;
+}
+
 =head2 source_preview( %arg )
 
-    size     => N
-    on_done  => sub { my ( $path, $cached ) = @_ }
-    on_error => sub { my ( $message ) = @_ }
+    size      => N
+    on_done   => sub { my ( $path, $cached ) = @_ }
+    on_error  => sub { my ( $message ) = @_ }
+    on_cancel => sub { }
 
 The source as it is, with no pipeline at all -- what the interface shows the
 moment a file is opened, so that opening a photograph puts the photograph on
@@ -333,9 +403,9 @@ sub source_preview
     my $key = $self->source_key( $size );
     return $key unless defined $key;
 
-    return $key if $self->_serve_cached( $key, '.png', \%arg );
+    return $key if $self->_serve_cached( $key, STILL, \%arg );
 
-    my $staged = $self->{ cache }->scratch( '.png' );
+    my $staged = $self->{ cache }->scratch( STILL );
 
     # An empty pipeline rather than a special case in the child: run() over no
     # effects does nothing, and the load and save either side are the same
@@ -344,11 +414,12 @@ sub source_preview
 
     $self->_spawn(
         key         => $key,
-        suffix      => '.png',
+        suffix      => STILL,
         staged      => $staged,
         on_done     => $arg{ on_done },
         on_error    => $arg{ on_error },
         on_progress => $arg{ on_progress },
+        on_cancel   => $arg{ on_cancel },
         work        => sub {
             $self->_render_preview(
                 pipeline => $pipeline,
@@ -426,6 +497,7 @@ sub _serve_cached
     on_done  => sub { my ( $path ) = @_ }
     on_error => sub { my ( $message ) = @_ }
     on_progress => sub { my ( $done, $total ) = @_ }
+    on_cancel   => sub { }
 
 The four in the middle are what L<GlitchVape::GUI::Export> decided; each is
 passed on only when it was set, so an export nobody has configured behaves
@@ -467,6 +539,7 @@ sub export
         on_done     => $arg{ on_done },
         on_error    => $arg{ on_error },
         on_progress => $arg{ on_progress },
+        on_cancel   => $arg{ on_cancel },
         work        => sub {
             my ( $report ) = @_;
 
@@ -528,9 +601,31 @@ sub _render_preview
         GlitchVape::Watermark::apply( $ctx->image, $arg{ watermark } ) )
         if $arg{ watermark };
 
-    GlitchVape::IO::save( $ctx->image, $arg{ output }, quality => 92 );
+    _write_still( $ctx->image, $arg{ output } );
 
     return $arg{ output };
+}
+
+# The finished picture, for the window and nobody else -- see L</A STILL IS
+# HANDED OVER AS BMP>.
+sub _write_still
+{
+    my ( $img, $path ) = @_;
+
+    # Rounded to eight bits here, as GlitchVape::Frames does before it writes
+    # a PPM: the pipeline leaves fractional sixteen-bit values behind, and the
+    # other writers round those a level apart from PNG's on some pixels. Done
+    # first, the window shows the pixels the exported PNG will hold.
+    $img->Set( depth => 8 );
+
+    # Stated rather than left to the picture, which remembers how the
+    # photograph was compressed, and a writer may take that as a request: a
+    # palette picture from an RLE source would go out run-length encoded.
+    $img->Set( compression => 'None' );
+
+    GlitchVape::IO::save( $img, $path );
+
+    return $path;
 }
 
 sub _render_preview_loop
@@ -856,6 +951,9 @@ sub _reaped
             ->commit( $job->{ staged }, $job->{ key }, $job->{ suffix } );
         $self->{ cache }->trim;
     }
+
+    # Here, with no child running, so nothing is reading what goes.
+    $self->{ cache }->trim_layers;
 
     $job->{ on_done }->( $path, 0 ) if $job->{ on_done };
 

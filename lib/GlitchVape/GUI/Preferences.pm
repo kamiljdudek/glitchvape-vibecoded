@@ -189,6 +189,19 @@ sub _page_preview
 
     $box->pack_start(
         $self->_switch(
+            'live_preview',
+            'Update the preview as settings change',
+            'A still is rendered a moment after a control stops moving, so '
+                . 'the picture follows what you do, and Apply keeps the result '
+                . 'as a step to undo back to. Off, nothing is rendered until '
+                . 'Apply is pressed, which suits a slow machine or a full-size '
+                . 'preview. A loop always waits for Apply.'
+        ),
+        0, 0, 0
+    );
+
+    $box->pack_start(
+        $self->_switch(
             'muted',
             'Silent preview',
             'Plays the preview without sound while you work on it. The '

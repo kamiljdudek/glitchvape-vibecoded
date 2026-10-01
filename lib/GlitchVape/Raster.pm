@@ -5,7 +5,8 @@ use warnings;
 
 use File::Spec ();
 
-use GlitchVape::Tools ();
+use GlitchVape::Magick ();
+use GlitchVape::Tools  ();
 
 our $VERSION = '0.01';
 
@@ -357,6 +358,33 @@ sub tiled
         unless system( @argv ) == 0 && -s $out;
 
     return $out;
+}
+
+=head2 tiled_image( $tile_png, $w, $h )
+
+The same expansion as L</tiled( $ctx, $tile_png, $w, $h )>, done here and
+handed back as an L<Image::Magick> rather than written for another process to
+read. For an effect that composites it through
+L<GlitchVape::Context/in_process( $code )>, where a file would be a round trip
+to nowhere: the same pixels, without the second process and the full-size
+write that were most of what C<scanlines> cost.
+
+=cut
+
+sub tiled_image
+{
+    my ( $tile, $w, $h ) = @_;
+    require Image::Magick;
+
+    my $img = Image::Magick->new( size => "${w}x${h}" );
+    GlitchVape::Magick::check( $img->Read( "tile:$tile" ),
+        "GlitchVape::Raster: failed tiling $tile to ${w}x${h}" );
+
+    # The label the MIFF round trip gave it. The values are the tile's own
+    # eight-bit ones either way.
+    $img->Set( depth => 8 );
+
+    return $img;
 }
 
 1;

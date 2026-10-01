@@ -419,7 +419,14 @@ sub cached_file
 {
     my ( $path, $build ) = @_;
 
-    return $path if -s $path;
+    if ( -s $path )
+    {
+        # A read is a use, for the window's trim -- see layer().
+        my $now = time;
+        utime $now, $now, $path;
+
+        return $path;
+    }
 
     my ( $vol, $dir, $file ) = File::Spec->splitpath( $path );
     $CACHED_SEQ++;
@@ -437,6 +444,85 @@ sub cached_file
     }
 
     return $path;
+}
+
+=head2 layer( \@key, $build )
+
+A picture that depends on the settings and the size and never on the picture
+underneath -- a vignette's falloff, a watermark's lattice -- built by C<$build>
+once and kept in L</cachedir()>, so that the next render asking for the same
+one reads it rather than drawing it again. C<$build> returns an
+L<Image::Magick>, and so does this.
+
+The checkpoints already spare a render the effects before the one that changed;
+this spares it the part of each effect after it that did not. Adjusting
+C<grade> used to redraw C<vignette>'s blurred falloff and every letter of
+C<watermark>'s lattice, neither of which had changed: a fifth of a second and
+a third of one, on one core at 720 pixels.
+
+It helps only where the directory outlives the render -- the frames of a loop,
+and the window's session -- so a context that was not handed one builds and
+keeps nothing. A still from the command line would write a file nobody reads.
+
+Kept as MIFF at sixteen bits, which gives back exactly the values written: the
+render that builds a layer and the one that reads it have to composite the
+same picture, or what a preview shows would depend on which of the two it
+happened to be.
+
+C<\@key> names everything the layer depends on, the effect's name first, and
+is digested, so a value of any shape will do. A key that leaves something out
+serves a stale layer, which is the one way this can be wrong.
+
+=cut
+
+sub layer
+{
+    my ( $self, $key, $build ) = @_;
+
+    return $build->() unless $self->{ cachedir };
+
+    require GlitchVape::Checkpoint;
+    require Image::Magick;
+
+    my $path = File::Spec->catfile( $self->cachedir,
+        'layer-' . GlitchVape::Checkpoint::digest( @$key ) . '.miff' );
+
+    if ( -s $path )
+    {
+        my $img = Image::Magick->new;
+        my $err = $img->Read( $path );
+
+        # Unreadable is the same as absent, as it is for a checkpoint: drawn
+        # again rather than failing a render over a file that only saves time.
+        if ( !GlitchVape::Magick::is_error( $err ) && @$img )
+        {
+            # A read is a use. The window trims its layers by when they were
+            # last used, and the access time alone is not kept on every mount.
+            my $now = time;
+            utime $now, $now, $path;
+
+            return $img;
+        }
+    }
+
+    my $img = $build->();
+
+    # Keeping it is a saving rather than a step of the render: a full disk
+    # costs the next render the time, and never this one its picture.
+    local $@;
+    eval {
+        cached_file(
+            $path,
+            sub {
+                GlitchVape::Magick::check(
+                    $img->Write( filename => $_[ 0 ], depth => 16 ),
+                    'could not keep a layer' );
+            }
+        );
+        1;
+    };
+
+    return $img;
 }
 
 =head2 tmpfile( $suffix )
@@ -491,10 +577,12 @@ sub log
 Run the ImageMagick CLI on the working image: writes it to a temp file,
 appends that as the input operand, runs C<@args>, reads the result back.
 
-Most effects use PerlMagick directly. This exists for the handful of
-operations whose CLI form is dramatically clearer than the binding's -- the
-C<-fx> expression compiler and multi-image C<-layers> composites in
-particular.
+Most effects use PerlMagick directly, and anything the binding can say goes
+through L</in_process( $code )> instead, which stages the picture the same way
+without the other process. This is for what it cannot say: a picture pulled
+apart into planes in another colour space and put back together (C<-separate>
+and C<-combine>, which C<chroma_bleed> and C<cmyk> are made of), and
+multi-image C<-layers> composites.
 
 =head3 Staged as MIFF, rounded to eight bits
 
@@ -553,6 +641,107 @@ sub magick
 
     $self->{ image } = $new;
     return $new;
+}
+
+=head2 in_process( $code )
+
+What L</magick( @args )> does, without the other process. The picture is
+rounded to eight bits and loses an alpha channel with nothing in it on the way
+in, as it is for C<magick>; C<$code> is handed it to change in place through
+the binding; and on the way out it makes the trip the command line's result
+made -- written as MIFF at eight bits and read back, in memory rather than
+through a file -- and is relieved of an empty alpha channel again. So an effect
+can move from one to the other without a pixel moving, and
+F<t/54-in-process.t> holds each one that has to the command line it replaced.
+
+The other process was most of what a short operation cost. C<scanlines> spent
+nine tenths of its time handing the picture across and back: at 720 pixels a
+round trip is ten to twenty milliseconds whatever it is for, and a preset
+makes several. The trip in memory is a millisecond and a half.
+
+Each call is one staging. Two operations that were two C<magick> runs stay two
+calls here, because the rounding between them is part of the picture: the
+second of two overlapping shapes is drawn over the first one's rounded edge.
+
+=head3 Why the trip is still made
+
+Because the picture that comes back from a file is a new one, and a new
+picture has forgotten things the old one was carrying -- which every effect
+after a staging was handed without them. The one that showed is an artifact:
+the binding's C<Modulate> leaves C<modulate:colorspace> on the picture when it
+is given a brightness, so C<grade> marks the picture HSB, and the next
+C<Modulate> that is not told otherwise works in that rather than in HSL.
+C<chroma_bleed>'s saturation always came after a staging and so always worked
+in HSL; kept in this process, the mark from C<grade> moved every pixel of six
+presets. There is no enumerating what the binding may leave behind, and the
+trip forgets exactly what the file did.
+
+=head3 What the command line did not hand back
+
+Its settings. C<-background> and C<-bordercolor> were options of that run and
+never reached the picture it wrote, where the binding stores the same thing on
+the picture itself -- and MIFF keeps them, so the trip would carry them on to
+the next effect that fills past an edge. They are put back as they were first.
+
+Whether the picture comes back as a palette is the one thing this does not
+decide in general, because the command line did not either: it depended on the
+operation. Where the two differ the effect says so -- C<palette> is the case --
+and F<t/54-in-process.t> compares the class along with the pixels, because an
+effect that quantizes skips the work on a palette picture that already has few
+enough colours.
+
+=cut
+
+# The settings the binding keeps on the picture, which the command line took
+# as options of the run and MIFF would carry on to the next effect.
+my @SETTINGS = qw(background bordercolor);
+
+sub in_process
+{
+    my ( $self, $code ) = @_;
+
+    my $img = $self->{ image };
+
+    $img->Set( depth => 8 );
+    _drop_opaque_alpha( $img );
+
+    my %was = map { $_ => $img->Get( $_ ) } @SETTINGS;
+
+    $code->( $img );
+
+    for my $key ( @SETTINGS )
+    {
+        $img->Set( $key => _quantum_colour( $was{ $key } ) )
+            if defined $was{ $key };
+    }
+
+    my ( $blob ) = $img->ImageToBlob( magick => 'MIFF', depth => 8 );
+
+    my $back = Image::Magick->new;
+    GlitchVape::Magick::check( $back->BlobToImage( $blob ),
+        'could not restage the picture' );
+
+    _drop_opaque_alpha( $back );
+
+    $self->{ image } = $back;
+    return $back;
+}
+
+# A colour as Get reports it -- quantum values, comma-separated -- in a form
+# Set reads back to the same values: sixteen bits a channel, which is exact
+# whatever the quantum depth, since the scaling back is the scaling forward.
+sub _quantum_colour
+{
+    my ( $value ) = @_;
+
+    my @q = split /,/, $value;
+    return $value unless @q >= 3;
+
+    push @q, Image::Magick->QuantumRange if @q == 3;
+
+    my $range = Image::Magick->QuantumRange;
+    return sprintf '#%04X%04X%04X%04X',
+        map { int( $_ * 65_535 / $range + 0.5 ) } @q[ 0 .. 3 ];
 }
 
 sub _drop_opaque_alpha

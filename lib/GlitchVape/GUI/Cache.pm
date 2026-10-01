@@ -27,9 +27,11 @@ stack a file lookup rather than a re-render.
 =head2 Layout
 
     ~/.cache/glitchvape/
-        previews/<key>.png       shared, kept between runs, LRU-capped
+        previews/<key>.bmp       stills, and .mp4 loops; shared, kept
+                                 between runs, LRU-capped
         session-<pid>/           transient working files, removed on exit
-            layers/              screens and tiles; see layers_dir
+            layers/              screens, tiles and kept layers; see
+                                 layers_dir, LRU-capped by trim_layers
             steps/               the picture after each effect; see steps_dir
             tmp/                 the render child's scratch files
 
@@ -66,6 +68,12 @@ entries, since that directory is deliberately never emptied.
 # 256 MB of previews is a few hundred renders: enough that a session's undo
 # history stays warm, small enough to not be noticed.
 use constant DEFAULT_MAX_BYTES => 256 * 1024 * 1024;
+
+# The session's layers -- screens, tiles, lookups and the pictures effects
+# keep of what does not depend on the photograph. A vignette at 720 pixels is
+# a few megabytes and one at full size a few dozen, and every slider position
+# a render reaches is another one, so they are capped as the previews are.
+use constant LAYERS_MAX_BYTES => 256 * 1024 * 1024;
 
 # A session directory whose pid is gone is stale. One whose pid has been
 # recycled by an unrelated process would never be collected, so an age limit
@@ -106,6 +114,7 @@ sub root
 
     root       => path    override the location (tests)
     max_bytes  => N       cap on the shared preview directory
+    layers_max => N       cap on this session's layers directory
 
 Creates the directories and sweeps anything a previous run left behind.
 
@@ -128,12 +137,13 @@ sub new
     }
 
     my $self = bless {
-        root      => $root,
-        previews  => File::Spec->catdir( $root, 'previews' ),
-        session   => File::Spec->catdir( $root, "session-$$" ),
-        max_bytes => $max,
-        owner_pid => $$,
-        seq       => 0,
+        root       => $root,
+        previews   => File::Spec->catdir( $root, 'previews' ),
+        session    => File::Spec->catdir( $root, "session-$$" ),
+        max_bytes  => $max,
+        layers_max => $arg{ layers_max } // LAYERS_MAX_BYTES,
+        owner_pid  => $$,
+        seq        => 0,
     }, $class;
 
     File::Path::make_path( $self->{ previews }, $self->{ session } );
@@ -252,10 +262,12 @@ sub scratch_dir
 
 The C<cachedir> every render of this session is handed: screens, tiles and
 colour lookups, which depend on the settings and the size and not on the
-picture. See L<GlitchVape::Context/cachedir()>. Kept for the session rather
-than for one render, because the window renders the same settings at the same
-size over and over, and a C<cmyk> preview spent nine tenths of its time
-rebuilding four screens it had built the Apply before.
+picture, and the layers effects keep through
+L<GlitchVape::Context/layer( \@key, $build )>. See
+L<GlitchVape::Context/cachedir()>. Kept for the session rather than for one
+render, because the window renders the same settings at the same size over and
+over, and a C<cmyk> preview spent nine tenths of its time rebuilding four
+screens it had built the Apply before. Capped by L</trim_layers()>.
 
 =head2 steps_dir()
 
@@ -339,14 +351,43 @@ sub trim
 {
     my ( $self ) = @_;
 
-    opendir my $dh, $self->{ previews } or return 0;
+    return _trim_dir( $self->{ previews }, $self->{ max_bytes } );
+}
+
+=head2 trim_layers()
+
+The same for this session's L</layers_dir()>, which every render adds to and
+nothing else empties until the window closes. What goes first is what was
+used longest ago -- reading a layer counts as using it -- and anything that
+goes is built again by the next render that wants it.
+
+Called after every render, between one render child and the next, so that
+nothing is reading a file while it is removed.
+
+=cut
+
+sub trim_layers
+{
+    my ( $self ) = @_;
+
+    my $dir = File::Spec->catdir( $self->{ session }, 'layers' );
+    return 0 unless -d $dir;
+
+    return _trim_dir( $dir, $self->{ layers_max } // LAYERS_MAX_BYTES );
+}
+
+sub _trim_dir
+{
+    my ( $dir, $max ) = @_;
+
+    opendir my $dh, $dir or return 0;
     my @entries;
     my $total = 0;
 
     for my $file ( readdir $dh )
     {
         next if $file eq '.' || $file eq '..';
-        my $path = File::Spec->catfile( $self->{ previews }, $file );
+        my $path = File::Spec->catfile( $dir, $file );
 
         my @st = stat $path;
         next unless @st && -f _;
@@ -356,12 +397,12 @@ sub trim
     }
     closedir $dh;
 
-    return 0 if $total <= $self->{ max_bytes };
+    return 0 if $total <= $max;
 
     my $removed = 0;
     for my $e ( sort { $a->{ atime } <=> $b->{ atime } } @entries )
     {
-        last if $total <= $self->{ max_bytes };
+        last if $total <= $max;
         next unless unlink $e->{ path };
         $total -= $e->{ size };
         $removed++;

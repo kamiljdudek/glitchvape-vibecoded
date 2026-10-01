@@ -245,31 +245,46 @@ sub _chroma_bleed
 
     if ( $amount > 0 || $vertical > 0 )
     {
+        # In YCbCr the two colour-difference planes sit where green and blue
+        # do, so smearing those two channels and leaving the first alone is
+        # the separate/smear/recombine the command line did, without pulling
+        # the planes apart -- same pixels, one process. The conversion is the
+        # Colorspace method's, which transforms: Set( colorspace ) only
+        # relabels, which is why this once went through the command line.
+        $ctx->in_process(
+            sub {
+                my ( $img ) = @_;
 
-        # PerlMagick's Set(colorspace) only relabels the image, it does not
-        # transform the pixels, so the conversion has to go through the CLI --
-        # where the whole separate/blur/recombine cycle fits in one call
-        # anyway.
-        my @chroma;
-        push @chroma, '-morphology', 'Correlate', _trail_kernel( $amount )
-            if $amount > 0;
+                GlitchVape::Magick::check(
+                    $img->Colorspace( colorspace => 'YCbCr' ),
+                    'chroma_bleed: could not separate the colour'
+                );
 
-        # Along the columns only. This was a -blur, which is both ways at
-        # once, under a name and a description that said vertical.
-        push @chroma, '-morphology', 'Convolve',
-            sprintf( 'Blur:0x%.3f,90', $vertical )
-            if $vertical > 0;
+                GlitchVape::Magick::check(
+                    $img->Morphology(
+                        method  => 'Correlate',
+                        kernel  => _trail_kernel( $amount ),
+                        channel => 'Green,Blue',
+                    ),
+                    'chroma_bleed: could not smear the colour'
+                ) if $amount > 0;
 
-        $ctx->magick(
-            '-colorspace', 'YCbCr',
-            '-separate',
-            '(',       '-clone', '0', ')',             # Y, untouched
-            '(',       '-clone', '1', @chroma, ')',    # Cb
-            '(',       '-clone', '2', @chroma, ')',    # Cr
-            '-delete', '0-2',
-            '-combine',
-            '-set',        'colorspace', 'YCbCr',
-            '-colorspace', 'sRGB',
+                # Along the columns only. This was a -blur, which is both ways
+                # at once, under a name and a description that said vertical.
+                GlitchVape::Magick::check(
+                    $img->Morphology(
+                        method  => 'Convolve',
+                        kernel  => sprintf( 'Blur:0x%.3f,90', $vertical ),
+                        channel => 'Green,Blue',
+                    ),
+                    'chroma_bleed: could not smear the colour down'
+                ) if $vertical > 0;
+
+                GlitchVape::Magick::check(
+                    $img->Colorspace( colorspace => 'sRGB' ),
+                    'chroma_bleed: could not put the colour back'
+                );
+            }
         );
     }
 
@@ -422,8 +437,32 @@ sub _palette
         $orig = $ctx->clone;
     }
 
-    my @args = ( '-dither', $p->{ dither }, '-remap', $remap );
-    $ctx->magick( @args );
+    require Image::Magick;
+    my $map = Image::Magick->new;
+    GlitchVape::Magick::check( $map->Read( $remap ),
+        'palette: could not read the palette' );
+
+    # The binding's Remap takes the dither as a method and nothing else --
+    # 'none' included -- where the command line had a setting read by the
+    # operator after it. Same three answers, same pixels.
+    $ctx->in_process(
+        sub {
+            my ( $img ) = @_;
+
+            GlitchVape::Magick::check(
+                $img->Remap( image => $map, 'dither-method' => $p->{ dither } ),
+                'palette: could not force the picture into the palette'
+            );
+
+            # The command line handed a Floyd-Steinberg remap back as plain
+            # pixels and the other two as a palette, measured, and the next
+            # effect sees the difference: one that quantizes does nothing to
+            # a palette picture that already has few enough colours.
+            $img->Set(
+                type => $img->Get( 'matte' ) ? 'TrueColorAlpha' : 'TrueColor' )
+                if lc $p->{ dither } eq 'floydsteinberg';
+        }
+    );
 
     _blend_with( $ctx, $orig, $p->{ strength } ) if $orig;
     return;
@@ -551,13 +590,49 @@ sub _duotone
         $orig = $ctx->clone;
     }
 
-    my @args = qw(-colorspace Gray);
-    push @args, ( '-brightness-contrast', "0x$p->{contrast}" )
-        if $p->{ contrast };
-    push @args, ( $clut, '-clut' );
-
-    $ctx->magick( @args );
+    _gray_through( $ctx, $clut, 'duotone', $p->{ contrast } );
     _blend_with( $ctx, $orig, $p->{ strength } ) if $orig;
+    return;
+}
+
+# Grey, optionally steeper, then looked up in a colour ramp: what duotone and
+# gradient_map both are.
+#
+# The binding's Colorspace method converts the pixels, which Set( colorspace
+# ) does not -- that only changes the label, which is why these once went
+# through the command line. Converted here, the three steps give the pixels
+# the command line gave.
+sub _gray_through
+{
+    my ( $ctx, $clut_file, $effect, $contrast ) = @_;
+    require Image::Magick;
+
+    my $clut = Image::Magick->new;
+    GlitchVape::Magick::check( $clut->Read( $clut_file ),
+        "$effect: could not read the colour ramp" );
+
+    $ctx->in_process(
+        sub {
+            my ( $img ) = @_;
+
+            GlitchVape::Magick::check(
+                $img->Colorspace( colorspace => 'Gray' ),
+                "$effect: could not take the colour out"
+            );
+
+            GlitchVape::Magick::check(
+                $img->BrightnessContrast(
+                    brightness => 0,
+                    contrast   => $contrast
+                ),
+                "$effect: could not steepen the grey"
+            ) if $contrast;
+
+            GlitchVape::Magick::check( $img->Clut( image => $clut ),
+                "$effect: could not map the grey through the ramp" );
+        }
+    );
+
     return;
 }
 
@@ -650,7 +725,7 @@ sub _gradient_map
         $orig = $ctx->clone;
     }
 
-    $ctx->magick( '-colorspace', 'Gray', $clut, '-clut' );
+    _gray_through( $ctx, $clut, 'gradient_map' );
     _blend_with( $ctx, $orig, $p->{ strength } ) if $orig;
     return;
 }
