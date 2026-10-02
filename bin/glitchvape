@@ -846,6 +846,11 @@ sub check_deps
         printf "HEIC read support: %s\n", $heic;
     }
 
+    # Never missing: the Perl stands in wherever the C does not run, so this
+    # says which one is grain's and why, rather than counting against it.
+    require GlitchVape::Grain;
+    printf "Film grain: %s\n", GlitchVape::Grain::status();
+
     if ( $missing )
     {
         print "\n$missing item(s) missing.\n";

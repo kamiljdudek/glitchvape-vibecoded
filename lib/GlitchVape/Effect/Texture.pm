@@ -10,6 +10,7 @@ use GlitchVape::Defrag   ();
 use GlitchVape::Magick   ();
 use GlitchVape::Chicago  ();
 use GlitchVape::Fonts    ();
+use GlitchVape::Grain    ();
 
 our $VERSION = '0.01';
 
@@ -1281,66 +1282,14 @@ sub _grain
     my $bias = $p->{ shadow_bias };
     my $mono = $p->{ mono };
 
-    # This is the one loop in the program that runs once per pixel of a
-    # full-size picture, so it is written for that: a row's noise drawn in
-    # one call rather than a method call per value, and the luma and the
-    # clamp spelled out rather than called. Each is the same arithmetic in
-    # the same order as GlitchVape::Pixels::luma and ::clamp, so a seed
-    # grains exactly as it always has, in a little over half the time.
+    # The one loop in the program that runs once per pixel of a full-size
+    # picture, so it is in C where the CPU allows and in Perl where it does
+    # not -- the same bytes either way. See GlitchVape::Grain.
     GlitchVape::Pixels->edit(
         $ctx,
         sub {
             my ( $px ) = @_;
-
-            $px->each_row(
-                sub {
-                    my ( undef, $row ) = @_;
-                    my @v = unpack 'C*', $row;
-
-                    my @noise =
-                        $rng->gauss_list( $mono ? @v / 3 : scalar @v, 0, $sd );
-                    my $k = 0;
-
-                    for ( my $i = 0 ; $i < @v ; $i += 3 )
-                    {
-                        my $scale = 1;
-                        if ( $bias )
-                        {
-                            my $luma =
-                                ( 0.299 * $v[ $i ] +
-                                    0.587 * $v[ $i + 1 ] +
-                                    0.114 * $v[ $i + 2 ] ) / 255;
-                            $scale = 1 - $bias * $luma;
-                        }
-
-                        if ( $mono )
-                        {
-                            my $n = $noise[ $k++ ] * $scale;
-                            for my $j ( $i .. $i + 2 )
-                            {
-                                my $t = $v[ $j ] + $n;
-                                $v[ $j ] =
-                                      $t < 0   ? 0
-                                    : $t > 255 ? 255
-                                    :            int $t;
-                            }
-                        }
-                        else
-                        {
-                            for my $j ( $i .. $i + 2 )
-                            {
-                                my $t = $v[ $j ] + $noise[ $k++ ] * $scale;
-                                $v[ $j ] =
-                                      $t < 0   ? 0
-                                    : $t > 255 ? 255
-                                    :            int $t;
-                            }
-                        }
-                    }
-
-                    return pack 'C*', @v;
-                }
-            );
+            GlitchVape::Grain::pixels( $rng, $px, $sd, $bias, $mono );
         }
     );
     return;
@@ -1358,25 +1307,13 @@ sub _coarse_grain
     my $gw = int( $w / $p->{ size } ) || 1;
     my $gh = int( $h / $p->{ size } ) || 1;
 
-    my $sd    = $p->{ amount } * 255;
-    my $bytes = '';
-
-    # Mid-grey is the identity for the HardLight composite below, so the noise
-    # is generated around 128 rather than around zero.
-    for ( 1 .. $gw * $gh )
-    {
-        if ( $p->{ mono } )
-        {
-            my $v = GlitchVape::Pixels::clamp( 128 + $rng->gauss( 0, $sd ) );
-            $bytes .= pack 'C3', $v, $v, $v;
-        }
-        else
-        {
-            $bytes .= pack 'C3',
-                map { GlitchVape::Pixels::clamp( 128 + $rng->gauss( 0, $sd ) ) }
-                1 .. 3;
-        }
-    }
+    # Generated around mid-grey, which is the identity for the HardLight
+    # composite below.
+    my $bytes = GlitchVape::Grain::cells(
+        $rng, $gw * $gh,
+        $p->{ amount } * 255,
+        $p->{ mono }
+    );
 
     my $noise = $ctx->tmpfile( '.ppm' );
     GlitchVape::Raster::write_ppm( $noise, $gw, $gh, $bytes );

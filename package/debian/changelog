@@ -8,5 +8,9 @@ glitchvape (0.01-1) unstable; urgency=medium
     proper would need.
   * Bundle Departure Mono and Fusion Pixel under the OFL and VCR OSD Mono
     under its author's own grant, each with its licence text beside it.
+  * Build the compiled film grain on amd64, which makes glitchvape
+    Architecture: any; the other two packages stay arch-independent and
+    depend on it by a source-version range, so that a binNMU cannot strand
+    them.
 
  -- Kamil J. Dudek <kamilek@localhost.localdomain>  Tue, 25 Aug 2026 23:00:00 +0200

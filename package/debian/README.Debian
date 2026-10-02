@@ -2,7 +2,8 @@ GlitchVape for Debian
 =====================
 
 Three binary packages come out of this source, and one of them is not in
-main. That is the only thing about this packaging that needs explaining.
+main. That, and the one thing in it that is compiled, are all that this
+packaging needs explaining.
 
   glitchvape              the library and the command-line tools
   glitchvape-gui          the Gtk3 window
@@ -50,6 +51,23 @@ Two ways forward, in order of preference:
      binary package. The font would then need a source package of its own in
      non-free, which is a separate piece of work and not worth doing while
      option 1 is open.
+
+The compiled grain
+------------------
+
+The film grain effect does arithmetic on every pixel of the picture, which in
+Perl takes a large part of a second at preview size. On amd64 it is done by a
+small library instead -- C, compiled for x86-64-v3 (AVX2, BMI2, FMA) -- that
+gives the same bytes from the same seed, a few hundred times sooner. It is in
+the base package, in perl's vendorarch directory, and is why that package is
+Architecture: any while the other two are not.
+
+It is never required. On another architecture nothing is compiled, and on an
+amd64 CPU older than x86-64-v3 the library notices before it does anything
+and the Perl runs instead; either way the pictures are the same, only slower.
+`glitchvape --check-deps` says which is in use and why, and setting
+GLITCHVAPE_PURE_PERL=1 switches the library off -- for comparing the two, or
+for ruling it out of a bug report.
 
 Where the fonts end up
 ----------------------

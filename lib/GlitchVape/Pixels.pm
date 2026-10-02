@@ -65,6 +65,25 @@ sub from_image
             . "got $got\n";
     }
 
+    return $class->from_bytes( $w, $h, $data );
+}
+
+=head2 from_bytes( $w, $h, $data )
+
+A buffer over bytes already laid out as above, with no image behind them --
+for the tests, which can then make a picture without ImageMagick.
+
+=cut
+
+sub from_bytes
+{
+    my ( $class, $w, $h, $data ) = @_;
+
+    my $want = $w * $h * CHANNELS;
+    die "GlitchVape::Pixels: expected $want bytes for ${w}x${h}, got "
+        . length( $data ) . "\n"
+        unless length( $data ) == $want;
+
     return bless {
         w      => $w,
         h      => $h,

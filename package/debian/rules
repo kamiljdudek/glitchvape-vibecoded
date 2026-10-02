@@ -1,23 +1,40 @@
 #!/usr/bin/make -f
 
-# GlitchVape has nothing to compile, so this is almost entirely a matter of
-# telling the Makefile where things go. The Makefile is the one definition of
-# that -- it is what `make install` and the RPM spec both use -- so nothing
-# here restates a path.
+# GlitchVape compiles one small library and is otherwise Perl and data, so
+# this is almost entirely a matter of telling the Makefile where things go.
+# The Makefile is the one definition of that, and of how the library is
+# compiled -- it is what `make install` and the RPM spec both use -- so
+# nothing here restates a path or a flag.
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-# The two the Makefile cannot guess. /usr/share/perl5 is Debian's vendor
-# directory for architecture-independent modules, which is what these are:
-# the suite is pure Perl and the effects shell out to ImageMagick.
-WHERE = PREFIX=/usr PERLDIR=/usr/share/perl5
+# And the flags that asks for, exported to every step rather than only to the
+# ones dh_auto_* runs. The Makefile records what the library was compiled
+# with and compiles it again when that changes, so a test or install step
+# that saw different CFLAGS would quietly rebuild it -- and the library
+# installed would not be the one the suite had just tested.
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
+# The three the Makefile cannot guess. /usr/share/perl5 is Debian's vendor
+# directory for architecture-independent modules, which is what all of the
+# Perl is. The compiled grain is the exception and goes to perl's vendorarch,
+# the directory for architecture-dependent ones, named by the perl it was
+# built against.
+WHERE = PREFIX=/usr PERLDIR=/usr/share/perl5 \
+    PERLARCHDIR=$(shell perl -MConfig -e 'print $$Config{vendorarch}')
 
 %:
 	dh $@
 
-# The default target only prints what the targets are, which would be noise
-# in a build log and is not a build.
+# Only the compiled grain: the default target builds it too, then prints what
+# the other targets are, which is noise in a build log. Through dh_auto_build
+# rather than $(MAKE), because that is what hands the Makefile
+# dpkg-buildflags' CFLAGS and LDFLAGS -- the hardening asked for above --
+# and the cross compiler when there is one. On anything but amd64 the target
+# says it compiles nothing, and does nothing.
 override_dh_auto_build:
+	dh_auto_build -- xs
 
 # Installed a package at a time rather than into debian/tmp and split back
 # out with .install files, because the split already exists: the Makefile has
@@ -45,5 +62,5 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	$(MAKE) test
 endif
 
-# Nothing is compiled and nothing is stripped, but dh_auto_clean would run the
-# Makefile's clean, which is what removes perltidy's leavings. Keep it.
+# dh_auto_clean runs the Makefile's clean, which removes build/ -- where the
+# library was compiled -- and perltidy's leavings. Keep it.

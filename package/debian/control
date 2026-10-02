@@ -6,6 +6,13 @@ Rules-Requires-Root: no
 Build-Depends:
  debhelper-compat (= 13),
  perl,
+# The compiled grain, on amd64: GCC 14 for C23, glibc 2.39 for <stdbit.h>,
+# and perl's headers for the glue -- by the virtual name Debian gives them for
+# building extensions, which is also the one that works for a cross build. On
+# every other architecture `make xs` compiles nothing and these go unused.
+ gcc (>= 4:14),
+ libc6-dev (>= 2.39),
+ perl-xs-dev,
 # The suite is Perl-only apart from the effects, which need ImageMagick both
 # as a library and as a binary -- GlitchVape::Tools shells out to `magick` for
 # the things PerlMagick cannot do in-process. The window tests skip themselves
@@ -29,11 +36,17 @@ Homepage: https://github.com/kamiljdudek/glitchvape-vibecoded
 Vcs-Browser: https://github.com/kamiljdudek/glitchvape-vibecoded
 Vcs-Git: https://github.com/kamiljdudek/glitchvape-vibecoded.git
 
+# Architecture-dependent for one file: the compiled grain, built on amd64 into
+# perl's vendorarch, which is why ${perl:Depends} also names the perl ABI it
+# was built against. Built anywhere else, this package carries no binary at
+# all and the grain runs in Perl, exactly as it does on an amd64 CPU too old
+# for the library. See GlitchVape::Grain.
 Package: glitchvape
-Architecture: all
+Architecture: any
 Depends:
  ${misc:Depends},
  ${perl:Depends},
+ ${shlibs:Depends},
  imagemagick,
  libimage-magick-perl,
  libfile-which-perl,
@@ -97,12 +110,17 @@ Description: apply VHS, CRT and databending effects to photographs
  ~/.local/share/glitchvape/fonts, or in /usr/share/glitchvape/fonts for every
  account on the machine.
 
+# The two architecture-independent packages pin the base package by source
+# version and a range rather than by an equals: glitchvape is built per
+# architecture now, and a binNMU of it -- 0.01-1+b1 -- would otherwise leave
+# these uninstallable beside it.
 Package: glitchvape-gui
 Architecture: all
 Depends:
  ${misc:Depends},
  ${perl:Depends},
- glitchvape (= ${source:Version}),
+ glitchvape (>= ${source:Version}),
+ glitchvape (<< ${source:Version}.1~),
  libgtk3-perl,
  libglib-perl,
  libglib-object-introspection-perl,
@@ -123,7 +141,8 @@ Section: non-free/fonts
 Architecture: all
 Depends:
  ${misc:Depends},
- glitchvape (= ${source:Version}),
+ glitchvape (>= ${source:Version}),
+ glitchvape (<< ${source:Version}.1~),
 Description: typefaces for GlitchVape whose terms are not established
  The typefaces GlitchVape looks for that the base package will not
  distribute, installed where it already searches for them. Nothing needs

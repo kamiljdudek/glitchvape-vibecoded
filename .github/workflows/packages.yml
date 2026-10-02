@@ -1,6 +1,8 @@
 # Builds every package this project ships, on every commit to main: the three
 # .deb files, the three .rpm files and the source RPM, each uploaded as an
-# artifact.
+# artifact -- with the debug symbols of the one compiled file beside them,
+# the -dbgsym .deb and the -debuginfo and -debugsource RPMs, since both runners
+# are x86-64 and that is where the film grain is compiled.
 #
 # All of it from the tarball `make dist` writes, which is the point of doing
 # it here at all -- a file the tarball failed to include is a build failure in
@@ -83,7 +85,7 @@ jobs:
       # no deb-src entry needed -- which is the .deb side of what `dnf
       # builddep` does for the spec, and it brings build-essential and
       # fakeroot with it, which dpkg-checkbuilddeps requires of every source
-      # package however little there is to compile.
+      # package -- and which the compiled grain now needs as well.
       #
       # Repeating the list here instead was tried, and drifted from
       # debian/control within the hour.

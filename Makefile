@@ -1,6 +1,8 @@
-# GlitchVape has nothing to compile: it is Perl and data files. This exists so
-# that `make install DESTDIR=...` is one command with one definition of where
-# everything goes, rather than that knowledge living in a spec file where only
+# GlitchVape is Perl and data files, and one small library: film grain's
+# arithmetic in C, which the Perl beside it can always stand in for (see "The
+# compiled grain" below). This exists so that `make install DESTDIR=...` is
+# one command with one definition of where everything goes and what is
+# compiled how, rather than that knowledge living in a spec file where only
 # rpmbuild can exercise it.
 
 NAME       = glitchvape
@@ -29,6 +31,12 @@ METAINFODIR = $(PREFIX)/share/metainfo
 # Where the modules go. Overridden by the packaging with the distribution's
 # own vendor directory; the default is what a plain `make install` should use.
 PERLDIR    ?= $(PREFIX)/share/perl5
+
+# Where the compiled grain goes. Beside the modules by default, which is where
+# perl looks first; the distributions keep architecture-dependent modules in a
+# directory of their own -- perl's vendorarch -- and pass it here. Wherever it
+# is, it has to be on @INC: that is how GlitchVape::Grain finds it installed.
+PERLARCHDIR ?= $(PERLDIR)
 
 INSTALL         = install
 INSTALL_DATA    = $(INSTALL) -m 644
@@ -93,12 +101,12 @@ SCRIPTS   = glitchvape glitchvape-batch glitchvape-gui
 GUI_MODULES = lib/GlitchVape/GUI.pm $(shell find lib/GlitchVape/GUI -name '*.pm')
 CLI_MODULES = $(filter-out $(GUI_MODULES), $(shell find lib -name '*.pm'))
 
-.PHONY: all test check check-split check-licenses tidy critic dist deb \
+.PHONY: all xs test check check-split check-licenses tidy critic dist deb \
         srpm rpm rpms man install install-cli install-fonts \
         install-fonts-extra install-gui uninstall clean
 
-all:
-	@echo "$(NAME) $(VERSION) -- nothing to build."
+all: xs
+	@echo "$(NAME) $(VERSION)"
 	@echo "make test      run the test suite"
 	@echo "make install   PREFIX=$(PREFIX)"
 	@echo "make deb       build the Debian packages"
@@ -107,7 +115,11 @@ all:
 # With the machine's plug-ins switched off: one installed here has no business
 # failing the program's own tests, and t/48-plugins.t loads the fixtures it
 # means to by name. See GlitchVape::Plugins.
-test check:
+#
+# After the compiled grain is built, so that the suite runs what will ship --
+# and t/56-grain-c.t holds it to the Perl. GLITCHVAPE_PURE_PERL=1 runs the
+# whole suite on the Perl alone.
+test check: xs
 	GLITCHVAPE_PLUGINS=none $(PROVE) -Ilib -r t/
 
 # The base package must not need Gtk3. A module that reaches for it from
@@ -163,6 +175,195 @@ $(words $(EXTRA_FONT_FILES)) from $(words $(EXTRA_FONT_DIRS)) in \
 $(NAME)-fonts-extra, each with its licence"
 
 # ---------------------------------------------------------------------------
+# The compiled grain
+#
+# The one thing here that is compiled: the arithmetic of `grain`, the one loop
+# that does Perl arithmetic on every pixel of a full-size picture. It is a
+# speed-up and never a requirement. GlitchVape::Grain keeps the Perl it
+# replaces as the reference and the fallback, gives the same bytes either way,
+# and uses the Perl wherever this was not built -- any architecture but x86-64
+# -- or the CPU predates what it was built for.
+#
+# Two objects in one library, compiled two different ways:
+#
+#   xs/Grain.xs  the glue, compiled the way perl compiles an extension: its
+#                own ccflags, for the baseline every x86-64 machine runs,
+#                because this is the code that asks the CPU what it can do.
+#   xs/grain.c   the kernel, C23 for x86-64-v3 (AVX2, BMI2, FMA), reached
+#                only once the glue has had a yes.
+#
+# Into $(BUILDDIR)/xs, laid out the way perl looks for a library, which is
+# where GlitchVape::Grain loads it from in a checkout.
+
+# GCC by name, because the kernel is written for it: GCC's attributes and
+# builtins, and C23 at GCC 14 or later. A CC given on the command line or in
+# the environment still wins.
+ifeq ($(origin CC),default)
+CC = gcc
+endif
+
+# Asked of the compiler rather than of uname, so that a cross build asks about
+# the machine it builds for -- and of uname when there is no compiler, so that
+# an x86-64 machine without one fails loudly instead of quietly building the
+# Perl-only program.
+XS_TARGET := $(shell $(CC) -dumpmachine 2>/dev/null || uname -m)
+
+XS_DIR = $(BUILDDIR)/xs
+XS_SO  = $(XS_DIR)/auto/GlitchVape/Grain/Grain.so
+
+# What perl was built with, which the glue has to match: the defines change
+# the layout of perl's own structures, so they are not a matter of taste.
+PERL_CONFIG = $(shell $(PERL) -MConfig -e 'print $$Config{$(1)}')
+
+# The distribution's flags when it passes them (dpkg-buildflags, Fedora's
+# %set_build_flags), and perl's own optimisation when it does not -- which is
+# also how debhelper builds every other perl extension. The kernel takes the
+# distribution's flags too, for their hardening and their debug information,
+# with its own after them, so that where the two disagree -- -O2 against -O3,
+# -march=x86-64 against x86-64-v3, -flto against -fno-lto -- the kernel's win.
+XS_OPTIMIZE = $(or $(CFLAGS),$(call PERL_CONFIG,optimize))
+
+XS_GLUE_FLAGS = $(call PERL_CONFIG,ccflags) $(XS_OPTIMIZE) $(CPPFLAGS) \
+    -std=c23 $(call PERL_CONFIG,cccdlflags) \
+    -I$(call PERL_CONFIG,archlibexp)/CORE -Ixs \
+    -DVERSION=\"$(VERSION)\" -DXS_VERSION=\"$(VERSION)\"
+
+# The kernel's own, each for a reason:
+#
+#   -std=c23                   what it is written in.
+#   -O3                        half a percent over -O2, measured.
+#   -march=x86-64-v3           AVX2, BMI2, FMA and MOVBE, and nothing newer:
+#                              the floor GlitchVape::Grain asks the CPU for.
+#                              Not -march=native, because a package runs on
+#                              machines other than the one that built it, and
+#                              the tuning stays generic: -mtune=native bought
+#                              nothing measurable. AVX-512 is deliberately
+#                              not used; GFNI is, where the CPU has it, by an
+#                              attribute on the two functions that need it.
+#   -ffp-contract=off          the bytes depend on it. Without it GCC fuses a
+#                              multiply and an add into one FMA -- vector
+#                              intrinsics included -- which rounds once where
+#                              Perl rounds twice.
+#   -fno-math-errno            change no value: sqrt becomes one instruction
+#   -fno-trapping-math         instead of a call that might set errno.
+#   -funroll-loops             about one percent.
+#   -fno-plt                   calls to log through the GOT rather than a
+#                              stub: about one and a half percent, since
+#                              there are a million of them at 720 pixels.
+#   -fvisibility=hidden        nothing in the kernel is for anyone outside
+#                              the library.
+#   -fno-lto                   nothing crosses into the kernel per pixel, so
+#                              LTO has nothing to inline -- and the code this
+#                              command compiles is then the code that ships,
+#                              not code recompiled at link time under the
+#                              link's options, which are the glue's.
+#
+# What is not here is mostly what would change a value: -ffast-math and
+# everything in it, and a vector log, which rounds unlike the scalar one Perl
+# calls -- the link below refuses a library that calls one. -fipa-pta and
+# -fno-semantic-interposition were measured and bought nothing.
+GRAIN_CFLAGS = -std=c23 -O3 -march=x86-64-v3 -ffp-contract=off \
+    -fno-math-errno -fno-trapping-math -funroll-loops -fno-plt \
+    -fvisibility=hidden -fno-lto -Wall -Wextra -Wpedantic
+
+# make xs PGO=1: profile-guided, by compiling the kernel instrumented, running
+# xs/train.c over it, and compiling it again from what that recorded. Opt-in,
+# because it buys one or two percent and costs reproducibility: the profile
+# records which way the training machine's CPU stepped the generator, so two
+# builds of the same source on different machines differ. The profile sits
+# beside the object, which is how GCC finds it again: both compiles name the
+# same object.
+PGO ?=
+
+ifneq ($(findstring x86_64,$(XS_TARGET)),)
+
+xs: $(XS_SO)
+
+# A recipe that fails leaves no target behind. Without this, a PGO build that
+# failed after its first compile would leave the instrumented kernel in place,
+# looking up to date, for the next build to link into the library.
+.DELETE_ON_ERROR:
+
+# What the library was last built with, rewritten only when that changes, so
+# that a different PGO, CFLAGS or compiler rebuilds everything -- timestamps
+# alone would keep an object built the other way and call it current.
+XS_RECORD = $(CC) $(XS_GLUE_FLAGS) $(KERNEL) $(LDFLAGS) PGO=$(PGO)
+
+$(XS_DIR)/flags: FORCE
+	@mkdir -p $(@D)
+	@echo '$(XS_RECORD)' > $@.new
+	@if cmp -s $@.new $@; then rm $@.new; else mv $@.new $@; fi
+
+.PHONY: FORCE
+FORCE:
+
+$(XS_DIR)/Grain.c: xs/Grain.xs $(XS_DIR)/flags
+	@mkdir -p $(@D)
+	$(PERL) -MExtUtils::ParseXS -e \
+	    'ExtUtils::ParseXS->new->process_file(filename => $$ARGV[0], prototypes => 0)' \
+	    $< > $@.tmp
+	mv $@.tmp $@
+
+$(XS_DIR)/Grain.o: $(XS_DIR)/Grain.c xs/grain.h $(XS_DIR)/gcc-ok $(XS_DIR)/flags
+	$(CC) -c $(XS_GLUE_FLAGS) -o $@ $<
+
+# C23 is GCC 14's: before that -std=c23 is not even a flag, and the error
+# would say so less plainly than this.
+$(XS_DIR)/gcc-ok:
+	@mkdir -p $(@D)
+	@v=$$($(CC) -dumpversion 2>/dev/null | cut -d. -f1); \
+	    if [ -z "$$v" ]; then \
+	        echo "xs: $(CC) is not installed, and the grain is compiled" \
+	            "on $(XS_TARGET)" >&2; exit 1; \
+	    elif [ "$$v" -lt 14 ]; then \
+	        echo "xs: xs/grain.c is C23 and needs GCC 14 or later;" \
+	            "$(CC) is $$v" >&2; exit 1; \
+	    fi
+	@touch $@
+
+KERNEL = $(CC) -c $(CPPFLAGS) $(CFLAGS) $(GRAIN_CFLAGS) \
+    $(call PERL_CONFIG,cccdlflags) -o $(XS_DIR)/grain.o xs/grain.c
+
+ifeq ($(PGO),1)
+# The training run has to execute the kernel, so the machine building it has
+# to be one the kernel runs on; train says so if it is not.
+$(XS_DIR)/grain.o: xs/grain.c xs/grain.h xs/train.c $(XS_DIR)/gcc-ok \
+        $(XS_DIR)/flags
+	rm -f $(XS_DIR)/grain.gcda
+	$(KERNEL) -fprofile-generate -fprofile-update=single
+	$(CC) -c $(CPPFLAGS) $(CFLAGS) -std=c23 -O2 -Ixs -o $(XS_DIR)/train.o \
+	    xs/train.c
+	$(CC) $(LDFLAGS) -fprofile-generate -o $(XS_DIR)/train \
+	    $(XS_DIR)/train.o $(XS_DIR)/grain.o -lm
+	$(XS_DIR)/train
+	$(KERNEL) -fprofile-use -fprofile-partial-training
+else
+$(XS_DIR)/grain.o: xs/grain.c xs/grain.h $(XS_DIR)/gcc-ok $(XS_DIR)/flags
+	$(KERNEL)
+endif
+
+# glibc's vector maths -- _ZGV* -- would round differently from the scalar
+# log Perl calls, and t/56-grain-c.t might not catch one bit in the last
+# place of a gaussian that a byte then truncates. So a library that calls it
+# is not one to ship.
+$(XS_SO): $(XS_DIR)/Grain.o $(XS_DIR)/grain.o
+	@mkdir -p $(@D)
+	$(CC) $(call PERL_CONFIG,lddlflags) $(LDFLAGS) -o $@.tmp $^ -lm
+	@if nm -D --undefined-only $@.tmp | grep -q '_ZGV'; then \
+	    echo "xs: the grain calls glibc's vector maths, which rounds" \
+	        "unlike Perl" >&2; rm -f $@.tmp; exit 1; \
+	fi
+	mv $@.tmp $@
+
+else
+
+xs:
+	@echo "xs: the grain is compiled only for x86-64; $(or $(XS_TARGET),this machine)" \
+	    "keeps to the Perl"
+
+endif
+
+# ---------------------------------------------------------------------------
 # Manual pages
 
 # Section 1 with the project as the "source" and no date, so that two builds
@@ -189,7 +390,7 @@ install: install-cli install-fonts install-gui
 # ---------------------------------------------------------------------------
 # The command line, the library and the data
 
-install-cli:
+install-cli: xs
 	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(DATADIR)/presets
 	$(INSTALL_DIR) $(DESTDIR)$(DATADIR)/assets/artwork
@@ -208,6 +409,14 @@ install-cli:
 	    d=$(DESTDIR)$(PERLDIR)/$$(dirname $${m#lib/}); \
 	    $(INSTALL_DIR) $$d && $(INSTALL_DATA) $$m $$d; \
 	done
+
+# The compiled grain, where this machine builds one: under auto/, as perl
+# lays its extensions out, and executable as perl installs them -- which is
+# also what the packagings' strip and debug-information steps look for.
+ifneq ($(findstring x86_64,$(XS_TARGET)),)
+	$(INSTALL_DIR) $(DESTDIR)$(PERLARCHDIR)/auto/GlitchVape/Grain
+	$(INSTALL_PROGRAM) $(XS_SO) $(DESTDIR)$(PERLARCHDIR)/auto/GlitchVape/Grain/
+endif
 
 # The one line that has to change between a checkout and an install. Written
 # as a constant on a line of its own precisely so this substitution can be a
@@ -399,7 +608,7 @@ dist: check-licenses
 	tar -cf - \
 	    --exclude='*.bak' --exclude='*.tdy' \
 	    --exclude='*.ERR' --exclude='*.LOG' \
-	    bin lib presets t Makefile README.md docs LICENSE $(PKGDIR) \
+	    bin lib presets t xs Makefile README.md docs LICENSE $(PKGDIR) \
 	    assets/artwork $(FONT_DIRS) $(EXTRA_FONT_DIRS) \
 	    .perlcriticrc .perltidyrc \
 	  | tar -xf - -C $(BUILDDIR)/$(DIST)
@@ -546,21 +755,22 @@ deb: dist
 	cd $(BUILDDIR)/$(DIST) && dpkg-buildpackage -us -uc -b $(DPKGFLAGS)
 	@echo
 	@echo "Built in $(BUILDDIR):"
-	@ls -1 $(BUILDDIR)/$(NAME)*_$(VERSION)-*_all.deb 2>/dev/null || true
+	@ls -1 $(BUILDDIR)/$(NAME)*_$(VERSION)-*.deb 2>/dev/null || true
 
 uninstall:
 	rm -f  $(addprefix $(DESTDIR)$(BINDIR)/,$(SCRIPTS))
 	rm -f  $(addprefix $(DESTDIR)$(MANDIR)/man1/,$(MAN1))
 	rm -rf $(DESTDIR)$(DATADIR)
 	rm -rf $(DESTDIR)$(PERLDIR)/GlitchVape $(DESTDIR)$(PERLDIR)/GlitchVape.pm
+	rm -rf $(DESTDIR)$(PERLARCHDIR)/auto/GlitchVape
 	rm -f  $(DESTDIR)$(APPDIR)/$(NAME).desktop
 	rm -f  $(DESTDIR)$(METAINFODIR)/$(NAME).metainfo.xml
 	rm -f  $(DESTDIR)$(ICONDIR)/256x256/apps/$(NAME).png
 
-# $(BUILDDIR) goes whole: the tarball, the unpacked trees both packagings
-# build in, the .deb files and the rpmbuild tree are all inside it, so there
-# is one thing to remove rather than a list to keep in step with the targets
-# that create them.
+# $(BUILDDIR) goes whole: the compiled grain, the tarball, the unpacked trees
+# both packagings build in, the .deb files and the rpmbuild tree are all
+# inside it, so there is one thing to remove rather than a list to keep in
+# step with the targets that create them.
 clean:
 	rm -f $(MAN1)
 	find . -name '*.bak' -o -name '*.tdy' -o -name '*.ERR' -o -name '*.LOG' \

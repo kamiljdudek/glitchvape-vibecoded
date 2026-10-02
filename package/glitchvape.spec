@@ -27,9 +27,26 @@ License:        MIT AND OFL-1.1 AND LicenseRef-VCR-OSD-Mono
 URL:            https://github.com/kamiljdudek/glitchvape-vibecoded
 Source0:        %{name}-%{version}.tar.gz
 
-BuildArch:      noarch
+# Not noarch: the base package carries one compiled file on x86_64, the film
+# grain's arithmetic, built for x86-64-v3 into %%{perl_vendorarch}. On every
+# other architecture nothing is compiled and the grain runs in Perl, as it
+# also does on an x86_64 CPU older than the library -- the same pictures,
+# slower. The window and the extra fonts stay noarch. See GlitchVape::Grain.
+#
+# With nothing compiled there is nothing to make debug information from, and
+# an empty debuginfo package is a build failure rather than an empty package.
+%ifnarch x86_64
+%global debug_package %{nil}
+%endif
 
 BuildRequires:  make
+# The compiled grain: GCC 14 for C23, glibc 2.39 for <stdbit.h>, perl's
+# headers and typemap for the glue (perl-devel), and xsubpp's engine to turn
+# the glue into C.
+BuildRequires:  gcc >= 14
+BuildRequires:  glibc-devel >= 2.39
+BuildRequires:  perl-devel
+BuildRequires:  perl(ExtUtils::ParseXS)
 BuildRequires:  perl-generators
 BuildRequires:  perl-interpreter
 # Defines %%{perl_vendorlib}, which %%install passes to the Makefile.
@@ -125,6 +142,17 @@ Requires:       perl(Digest::SHA)
 # already; it is here because the module is here, and a module that cannot
 # load is not one that ships.
 Requires:       perl(Test::Builder)
+
+%ifarch x86_64
+# The compiled grain is a perl extension, built against this perl's ABI and
+# loaded through DynaLoader -- it is in vendorarch and the module that loads
+# it is in vendorlib, so XSLoader always falls through to DynaLoader to find
+# it. MODULE_COMPAT is what keeps a perl upgrade from installing beside a
+# library built for the perl before.
+Requires:       perl(:MODULE_COMPAT_%(eval "$(%{__perl} -V:version)"; echo $version))
+Requires:       perl(XSLoader)
+Requires:       perl(DynaLoader)
+%endif
 
 # Plug-ins are Perl modules in GlitchVape::Plugin::*, and one packaged for
 # Fedora depends on the API it was written for rather than on a version of
@@ -230,6 +258,7 @@ you may do with this font, get it from its author rather than from here.
 Summary:        Graphical front end for GlitchVape
 # No fonts in this subpackage: the assets belong to the base package.
 License:        MIT
+BuildArch:      noarch
 Requires:       %{name} = %{version}-%{release}
 Requires:       perl(Gtk3)
 Requires:       perl(Gtk3::ImageView)
@@ -257,14 +286,20 @@ tool -- the result is identical to the equivalent invocation.
 
 
 %build
-# Nothing is compiled. The default target only prints what the targets are,
-# which would be noise in a build log.
+# Only the compiled grain, which the Makefile builds on x86_64 and declines
+# to anywhere else. With the distribution's flags, which the Makefile puts
+# ahead of its own: the hardening and the debug information are Fedora's,
+# and where the two disagree -- -O2 and -O3, -march, -flto -- the kernel's
+# own win, for the reasons the Makefile gives beside them.
+%set_build_flags
+%make_build xs
 
 
 %install
 %make_install \
     PREFIX=%{_prefix} \
-    PERLDIR=%{perl_vendorlib}
+    PERLDIR=%{perl_vendorlib} \
+    PERLARCHDIR=%{perl_vendorarch}
 
 # Not part of the default install target -- see the note above it in the
 # Makefile -- so it is asked for by name here. Both packages are built from
@@ -276,7 +311,8 @@ tool -- the result is identical to the equivalent invocation.
 %{__make} install-fonts-extra \
     DESTDIR=%{buildroot} \
     PREFIX=%{_prefix} \
-    PERLDIR=%{perl_vendorlib}
+    PERLDIR=%{perl_vendorlib} \
+    PERLARCHDIR=%{perl_vendorarch}
 
 desktop-file-validate %{buildroot}%{_datadir}/applications/%{name}.desktop
 appstream-util validate-relax --nonet \
@@ -338,6 +374,9 @@ make test
 %{perl_vendorlib}/GlitchVape/
 %exclude %{perl_vendorlib}/GlitchVape/GUI.pm
 %exclude %{perl_vendorlib}/GlitchVape/GUI/
+%ifarch x86_64
+%{perl_vendorarch}/auto/GlitchVape/
+%endif
 
 
 %files fonts-extra
@@ -363,3 +402,5 @@ make test
 - Bundle Departure Mono and Fusion Pixel under the OFL, licence text included.
 - Add a drop-in font directory under %{_datadir}/%{name} for the typefaces
   that are not ours to distribute.
+- Build the compiled film grain on x86_64; the base package is no longer
+  noarch, while -gui and -fonts-extra are.

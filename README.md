@@ -43,6 +43,27 @@ else degrades gracefully: without `ffmpeg` you lose animation, without
 `pngquant` the quantiser falls back to ImageMagick's, without CJK fonts the
 text effects report which package would fix it.
 
+### The compiled grain
+
+One thing is compiled: the arithmetic of the `grain` effect, which in Perl
+takes a third to half a second at preview size and in C a millisecond or two
+— the same bytes from the same seed either way. `make` builds it on x86-64
+(`make test` does too), with GCC 14 or later:
+
+```bash
+make                                    # into build/xs
+make PGO=1                              # profile-guided, one or two percent more
+```
+
+Debian needs nothing beyond `gcc`, since `perl` already brings its headers;
+Fedora needs `gcc perl-devel perl-ExtUtils-ParseXS`. The library is built for
+x86-64-v3 — AVX2, BMI2 and FMA: Intel from Haswell (2013) and AMD from
+Excavator (2015), though budget Pentium, Celeron and Atom parts went without
+for years after — and uses GFNI for its random numbers where the CPU has it.
+Anywhere it is not built, or on a CPU older than that, the Perl runs instead
+and the pictures are the same, slower. `--check-deps` says which is in use and
+why, and `GLITCHVAPE_PURE_PERL=1` switches the C off.
+
 ### For the graphical interface
 
 `glitchvape-gui` is optional and needs nothing that the command-line tool does:
@@ -74,11 +95,12 @@ There is a spec file, so the shortest route is a package:
 ```bash
 sudo dnf install -y rpm-build perl-macros
 sudo dnf builddep -y package/glitchvape.spec   # what BuildRequires names
-make rpm                                # the three binary packages
+make rpm                                # the binary packages
 ```
 
-`make srpm` builds only the source package, and `make rpms` builds both. All
-three go through the tarball rather than the spec in the tree, so a file
+Three of them, and on x86_64 the `-debuginfo` and `-debugsource` packages
+for the compiled grain as well. `make srpm` builds only the source package,
+and `make rpms` builds both. All of them go through the tarball rather than the spec in the tree, so a file
 `make dist` forgot is a build failure rather than a package quietly missing
 something.
 
@@ -117,11 +139,12 @@ There is a `package/debian/` directory, so the shortest route is again a
 package:
 
 ```bash
-sudo apt install -y build-essential debhelper devscripts
+sudo apt install -y build-essential debhelper devscripts libperl-dev
 make deb
 ```
 
-Three come out, in the parent directory:
+Three come out, in `build/` — and on amd64 a fourth, `glitchvape-dbgsym`, with
+the compiled grain's debug symbols:
 
 | | |
 |---|---|
@@ -163,7 +186,7 @@ rather than in the tree means a file `make dist` failed to include is a build
 failure rather than a package quietly missing something.
 
 Installed, the modules go to `%{perl_vendorlib}` — `/usr/share/perl5` on
-Debian — and the data to
+Debian — the compiled grain to perl's `vendorarch`, and the data to
 `/usr/share/glitchvape`, which are nowhere near each other — so the walk-up
 from `__FILE__` that finds `assets/` and `presets/` in a checkout finds
 nothing. `GlitchVape::Paths` is the one constant naming the installed data
