@@ -513,7 +513,8 @@ install-gui:
 # the tree rather than generated here: any smooth filter turns a 16-colour
 # pixel-art image into three and a half thousand blended ones and softens
 # every edge, and installing should need no image tooling at all. See
-# assets/artwork/icon-256.png; the command that made it is in the README.
+# assets/artwork/icon-256.png; the command that made it is in
+# docs/packaging.md.
 	$(INSTALL_DATA) assets/artwork/icon-256.png \
 	    $(DESTDIR)$(ICONDIR)/256x256/apps/$(NAME).png
 

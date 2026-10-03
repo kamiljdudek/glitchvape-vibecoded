@@ -537,7 +537,7 @@ The **Soundtrack** page lists what is mixed under the animation. **+** offers
    go on dragging while it plays. Past 30 seconds an exclamation appears
    saying what that costs; it does not stop you, and it goes away again if you
    drag back.
-2. **Filters.** The four under [Audio](#audio), each with a switch and an
+2. **Filters.** The four under [Audio](audio.md#audio), each with a switch and an
    amount, generated from the same declarations that drive `--audio-filter`.
    Play here renders the crop through the chain and plays *that*, so nothing
    has to be imagined. Four one-press chains — Slowed + reverb, Mallsoft,
