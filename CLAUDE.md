@@ -8,12 +8,14 @@ without noticing, and how each of them is checked.
 ## What it is
 
 A Perl image pipeline that puts a photograph through a chain of forty-seven
-VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Pure Perl
-apart from the effects, which shell out to ImageMagick, and the animated
-writers, which shell out to ffmpeg.
+VHS/CRT/glitch effects, plus a Gtk3 window over the same pipeline. Perl apart
+from the effects, which shell out to ImageMagick, the animated writers, which
+shell out to ffmpeg, and one small library: `grain`'s arithmetic in C, which
+the Perl it replaces can always stand in for — see invariant 9.
 
-Nothing is compiled. `make install` is the one definition of where files go;
-both the RPM spec and `debian/rules` drive it rather than restating paths.
+`make install` is the one definition of where files go and `make xs` of how
+the library is compiled; both the RPM spec and `debian/rules` drive them
+rather than restating paths or flags.
 
 ## Layout
 
@@ -27,12 +29,15 @@ both the RPM spec and `debian/rules` drive it rather than restating paths.
 | `lib/GlitchVape/Frames.pm`, `Workers.pm` | a loop's frames, drawn by several processes where forking is safe — see [Speed](#speed-and-what-was-measured) |
 | `lib/GlitchVape/Checkpoint.pm` | the picture as it stood after each effect, so a preview starts after what it shares with the last one |
 | `lib/GlitchVape/Test.pm` | the checks every effect owes, installed so that a plug-in's tests can make them too |
+| `lib/GlitchVape/Grain.pm` | film grain's arithmetic in Perl, and the choice between it and the C |
+| `xs/` | the C: `grain.c`, the kernel; `Grain.xs`, the glue to Perl; `train.c`, what `PGO=1` trains on |
 | `presets/*.yml` | a look, as a set of effects and parameters |
 | `assets/fonts/`, `assets/fonts-nonfree/` | bundled typefaces, split by licence — see below |
 | `package/` | the spec, `debian/`, the desktop entry and the AppStream metadata |
 | `build/` | everything the packaging targets produce; disposable, gitignored |
 | `t/` | the suite; GUI tests skip themselves without a display |
 | `t/lib/` | fixture plug-ins for `t/48-plugins.t`: one that breaks no rule, and one for each rule |
+| `docs/` | the detail behind the README: installing, packaging, the command line, presets, effects, fonts, the window, audio, the library |
 
 ## The invariants
 
@@ -246,6 +251,50 @@ declarations complete, drifts close, rerolls hold, animation settings move —
 live in `GlitchVape::Test`, which `t/03`, `t/31`, `t/38` and `t/42` call and a
 plug-in's own tests call as `GlitchVape::Test::plugin_ok('Name')`, so the two
 cannot become two slightly different sets of questions.
+
+### 9. The compiled grain is the same grain, and never required
+
+`grain` is the one effect that does arithmetic on every pixel of a full-size
+picture in Perl, so it is also written in C — `xs/grain.c`, reached through
+`GlitchVape::Grain`, which keeps the Perl as the reference and decides per
+call which of the two runs. The C has to give the Perl's bytes from the same
+seed, and leave `GlitchVape::Random` exactly where the Perl would have left
+it, since the next effect to draw from the stream would otherwise diverge
+however right the picture looked.
+
+"The same" is to the bit, and that forbids most of what makes floating point
+fast: no fused multiply-add (`-ffp-contract=off` — GCC contracts vector
+intrinsics too), nothing from `-ffast-math`, and glibc's scalar `log` rather
+than a vector one, which rounds differently. What is left is doing the same
+arithmetic many at a time: the generator stepped eight or sixteen draws at
+once by a power of its GF(2) matrix (GFNI where the CPU has it, lookup tables
+where not), the polar method's rejection without a branch, the logs back to
+back, the rest four wide in AVX2. `xs/grain.c`'s header says why for each.
+
+What checks it:
+
+- **`t/56-grain-c.t`** holds the C to the Perl on both generator paths: every
+  gaussian compared as a double, pictures through every arm of the loop at
+  sizes the vectors do not divide, the coarse grain's cells, a spare carried
+  in, a state of nought, and the generator's state and spare after each. The
+  bytes alone are not enough — built with FMA allowed, most picture tests
+  still passed, because a byte truncated from a sum hides the last bit of
+  what was added; the gaussians and the generator caught it.
+- **The link refuses a library that calls glibc's vector maths** (`_ZGV*`),
+  which a test might not catch for the same reason.
+- **The build records its flags** (`build/xs/flags`) and rebuilds when they
+  change, and `.DELETE_ON_ERROR` leaves no half-built object behind, so a
+  `PGO=1` build cannot leave an instrumented kernel to be linked by the next.
+
+It is never required. Only x86-64 builds it, it is built for x86-64-v3 and
+nothing older, and the glue — compiled for the baseline every x86-64 machine
+runs — asks the CPU before anything that needs more is reached. Which is also
+why the kernel has no constructors: the library is loaded before anyone has
+asked whether the CPU can run it, so its tables are built on first use under
+`call_once`. Where it is not built, or the CPU predates it, or
+`GLITCHVAPE_PURE_PERL` is set, the Perl runs and the pictures are the same;
+`--check-deps` says which and why. A checkout loads only its own `build/xs`,
+never an installed copy, so the Perl it is held to is the Perl beside it.
 
 ## Fonts
 
@@ -512,9 +561,21 @@ Three binary packages from one source, in both packagings, split the same way:
 
 | | |
 |---|---|
-| `glitchvape` | library + CLI |
+| `glitchvape` | library + CLI, and on x86-64 the compiled grain |
 | `glitchvape-gui` | the window |
 | `glitchvape-fonts-extra` | typefaces whose terms are not established |
+
+The compiled grain makes the base package architecture-dependent: `Architecture:
+any` and not noarch, its library in perl's vendorarch, depending on the perl
+ABI it was built against (`perlapi-*` from `dh_perl`, `MODULE_COMPAT` in the
+spec) and carrying debug packages beside it. The other two stay
+architecture-independent, so on Debian they depend on it by a source-version
+range rather than `= ${source:Version}`, which a binNMU of the base package
+would break. Elsewhere than x86-64 the base package simply carries no library.
+`debian/rules` exports `dpkg-buildflags` to every step, not only to those
+`dh_auto_*` runs: the Makefile rebuilds the library when its flags change, and
+a test or install step that saw different `CFLAGS` would rebuild it quietly —
+the installed library would not be the one the suite had tested.
 
 Everything a distribution needs is under `package/` and nothing a build
 produces is anywhere but `build/`, which is why `make clean` is one `rm -rf`.
@@ -552,7 +613,7 @@ different flags — `pod2usage` reads the same block.
 
 Both packagings are built on every push to main by
 `.github/workflows/packages.yml`, which uploads the three `.deb`s, the three
-`.rpm`s and the source RPM as artifacts. Each is built in a container of the
+`.rpm`s, the compiled grain's debug packages and the source RPM as artifacts. Each is built in a container of the
 distribution it is for — `debian:trixie` and `fedora:latest` — and each
 installs its build-dependencies out of its own packaging file, `apt-get
 build-dep ./package` reading `debian/control` and `dnf builddep` reading the
@@ -596,7 +657,9 @@ for and nothing else, which is the point.
 ## Commands
 
 ```bash
-make test              # the whole suite; GUI tests skip without a display
+make                   # the compiled grain, into build/xs (x86-64 only)
+make xs PGO=1          # the same, profile-guided
+make test              # the whole suite, after make xs; GUI tests skip without a display
 make check-split       # no Gtk3 outside GUI/
 make check-licenses    # every bundled font has its licence beside it
 make tidy critic       # perltidy + perlcritic
@@ -618,7 +681,9 @@ Three environment variables override where things are found, which is how the
 tests run against the checkout regardless of what is installed:
 `GLITCHVAPE_ASSETS`, `GLITCHVAPE_PRESETS`, `GLITCHVAPE_FONTS`. A fourth,
 `GLITCHVAPE_PLUGINS`, chooses rather than locates: `none`, a list of names, or
-`-Name` to leave one out.
+`-Name` to leave one out. A fifth, `GLITCHVAPE_PURE_PERL`, switches the
+compiled grain off — for ruling it out of a bug, or timing one against the
+other.
 
 Two escape hatches exist for building where the toolchain is not fully
 installed — `make deb DPKGFLAGS=-d` skips `dpkg-checkbuilddeps`, and
@@ -997,9 +1062,9 @@ timings, which count fractions of a second now rather than whole ones.
 
 There were two kinds of slow, and a fast machine hides only one of them:
 
-- **Perl touching every pixel.** `grain` draws one or three Gaussian numbers
+- **Perl touching every pixel.** `grain` drew one or three Gaussian numbers
   per pixel, eight million of them at 1920 pixels, on one core whatever the
-  machine has.
+  machine has — which is why it is the one thing compiled now.
 - **ImageMagick asked for something expensive** that twenty-four cores
   absorb: `chroma_bleed`'s motion blur was ten seconds of one core at 1920
   pixels, `glare`'s blur of its band eight, and every full-size picture
@@ -1020,11 +1085,18 @@ What was done about it, each checked against what it replaced:
 | twelve effects stage through `Context::in_process` instead of `magick` | `scanlines` 24–27 ms → 10–12 at 720 px | same pixels and form, `t/54-in-process.t` |
 | `vignette`, `watermark`, `glare` keep their layers (`Context::layer`) | a re-run: 0.14–0.41 s → 0.005; 0.33 → 0.005; 0.05 → 0.002 | same pixels, `t/51-layers.t` |
 | a still preview handed over as BMP, not PNG | write 23–113 ms → 1; window decode 5 ms → 0.3 | same decoded pixels, `t/53-gui-render.t` |
+| `grain` in C (`xs/grain.c`, invariant 9) | 0.28–0.50 s → 0.9–2.2 ms at 720 px; 2.1–3.6 s → 7–17 ms at 1920 px, one core | same bytes and generator, `t/56-grain-c.t` |
 
 Together: a twenty-four frame preview loop at 720 pixels on four cores went
 from 56–63 seconds to 6–8; a still preview on one core from 2.4–3.2 seconds
 plus a 0.86 second decode to 0.7–1.1, with the decode paid once per
 photograph; a full-size still on the big machine from 7–12 seconds to 2–6.
+
+The third round was the grain: the thirteen presets that use it, first render
+after opening on one core at 720 pixels, went from a median of 0.94 seconds to
+0.53, and `anaglyph`, `datamosh` and `photocopy` from about half a second to
+a fifth. `dreamcore` and `newspaper` gain least, a tenth of a second each:
+their grain is coarse, a quarter of the cells.
 
 The second round, on one core at 720 pixels across the seventeen presets:
 adjusting the last effect went from a median of 59 milliseconds of render to
@@ -1037,15 +1109,16 @@ the picture, without Apply.
 What was not done, and why:
 
 - **`grain` from a noise tile.** Generating one tile of noise and re-rolling
-  it per frame by offset and orientation measured ten times faster again. It
-  also gives different grain for the same seed, which makes it a decision
-  about the program's promises rather than an optimisation; it is waiting
-  for one.
-- **`grain` in C.** The same xorshift and polar method, in the same order of
-  arithmetic and built with `-ffp-contract=off`, gave the same bytes as the
-  Perl in 3–8 milliseconds instead of 0.3–0.5 seconds at 720 pixels, which
-  would make the noise tile unnecessary. It is the largest single cost left in
-  most presets, and it is waiting on whether "nothing is compiled" stays.
+  it per frame by offset and orientation measured ten times faster than the
+  Perl. It also gives different grain for the same seed, and the C is faster
+  again without that cost.
+- **More of the grain's speed, for a different grain.** What is left of the
+  C's time is glibc's scalar `log`, about half of it, and the divider. A
+  vector `log`, `-ffast-math` or AVX-512's approximate reciprocals would each
+  go faster and each change a bit somewhere, which is every number after it.
+  AVX-512 was left out by choice besides, to keep two generator paths rather
+  than three; PGO is opt-in (`make xs PGO=1`), because it buys one or two
+  percent and costs reproducible builds.
 - **`bloom` blurred small.** A quarter to an eighth of the size is fifteen to
   thirty times faster, and averages a quarter of a level out at worst — but
   peaks at three to twelve levels near bright edges, where `glare` and
@@ -1241,3 +1314,38 @@ What was not done, and why:
   same file is loaded a second time under its module name. It is an artefact
   of compiling a kind by path; `perl -Ilib -MGlitchVape::Noise -e1` is the
   check that means something.
+
+- **Sixteen bits give a picture back exactly only where ImageMagick counts in
+  sixteen-bit integers.** Debian builds it so; Fedora and upstream build it
+  with HDRI, where pixels are floats, and a layer kept as sixteen-bit MIFF came
+  back up to a sixteenth of a level off. Nothing here noticed, because the
+  suite had only ever run on Debian. Kept layers are floating-point
+  MIFF now; MPC was exact on both as well. Anything that keeps a picture to
+  read back belongs in one of those two.
+
+- **GCC contracts vector intrinsics into FMA too.** `_mm256_add_pd` of a
+  `_mm256_mul_pd` is one rounding instead of two unless `-ffp-contract=off`
+  says otherwise, and `-march=x86-64-v3` is what makes FMA available to do it
+  with. In `xs/grain.c` that is one bit of a draw near the polar method's
+  boundary, which is every number after it.
+
+- **C23 in GCC 14 has edges.** `__STDC_VERSION__` is still the draft's
+  `202000L` under `-std=c23`, so a check for `202311L` fails on a compiler
+  that has everything; and `constexpr` takes one declarator per declaration,
+  so `constexpr size_t W = 720, H = 540;` is an error rather than two
+  constants.
+
+- **An XS `PREINIT:` that initialises from an argument reads it before it is
+  set.** The section is emitted ahead of the argument conversions; declare
+  there and assign in `CODE:`.
+
+- **Make keeps an object built another way.** Timestamps cannot tell a kernel
+  built with `PGO=1` from one built without, or under other `CFLAGS`, so the
+  library's build records its flags in `build/xs/flags` and rebuilds when they
+  change — which is also why `debian/rules` has to export the build flags to
+  its test and install steps, or they rebuild the library the build made.
+
+- **`build/` keeps what a previous `make deb` or `make rpm` made.** When the
+  base package went from noarch to x86-64, the old `_all.deb` sat beside the
+  new `_amd64.deb`, and `apt install ./build/glitchvape_*.deb` named both.
+  Both targets clear this project's packages from `build/` first now.

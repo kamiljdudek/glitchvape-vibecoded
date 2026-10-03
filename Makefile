@@ -705,7 +705,15 @@ srpm: dist rpm-tools
 #
 # which skips the dependency check and the %check section -- and therefore
 # skips the test suite, so it proves the packaging and not the program.
+#
+# A previous build's packages go first when they are in $(BUILDDIR), so that
+# what is there afterwards is this build: docs/install.md installs them by
+# glob, and an older one beside the new -- another version, or the base
+# package from when it was noarch -- would be two of the same package. An
+# RPMTOPDIR somewhere else is somebody's own tree, and is left alone.
 rpm: dist rpm-tools
+	$(if $(filter $(CURDIR)/$(BUILDDIR)/%,$(RPMTOPDIR)), \
+	    rm -f $(RPMTOPDIR)/RPMS/*/$(NAME)-*.rpm)
 	$(RPMBUILD) $(RPM_DEFINES) $(RPMFLAGS) -tb $(TARBALL)
 	@echo "Built:"
 	@find $(RPMTOPDIR)/RPMS -name '$(NAME)*-$(VERSION)-*.rpm' \
@@ -733,7 +741,8 @@ rpms: srpm rpm
 #
 # -b for binary only: there is no signed source upload to make here, and the
 # three .deb files are what anybody asking for `make deb` wants. They land
-# beside the unpacked tree, which is to say in $(BUILDDIR).
+# beside the unpacked tree, which is to say in $(BUILDDIR) -- after a previous
+# build's have been cleared from there, for the reason given at `rpm` above.
 #
 # DPKGFLAGS is the counterpart of RPMFLAGS, and exists for the same one case:
 #
@@ -751,6 +760,8 @@ deb: dist
 	@command -v dh >/dev/null \
 	    || { echo "deb: debhelper is not installed" >&2; exit 1; }
 	rm -rf $(BUILDDIR)/$(DIST)
+	rm -f $(BUILDDIR)/$(NAME)*.deb $(BUILDDIR)/$(NAME)*.changes \
+	    $(BUILDDIR)/$(NAME)*.buildinfo
 	tar -xzf $(TARBALL) -C $(BUILDDIR)
 	mv $(BUILDDIR)/$(DIST)/$(PKGDIR)/debian $(BUILDDIR)/$(DIST)/debian
 	cd $(BUILDDIR)/$(DIST) && dpkg-buildpackage -us -uc -b $(DPKGFLAGS)

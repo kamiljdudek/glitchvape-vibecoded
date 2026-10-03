@@ -1,26 +1,24 @@
-# Building packages
+# Packaging
 
-The `.deb` and `.rpm` packages, what comes out of each build, and how the
-packaging is laid out. Split out of the [README](../README.md); running
-straight from a checkout is in [install.md](install.md).
+What the packages contain, how both packagings are built from one tarball,
+and where everything lands once installed. Split out of the
+[README](../README.md); the commands for building and installing them are in
+[install.md](install.md).
 
-## Debian and Ubuntu
+## The packages
 
-There is a `package/debian/` directory, so the shortest route is a package:
-
-```bash
-sudo apt install -y build-essential debhelper devscripts libperl-dev
-make deb
-```
-
-Three come out, in `build/` — and on amd64 a fourth, `glitchvape-dbgsym`, with
-the compiled grain's debug symbols:
+Both packagings make the same three, split the same way:
 
 | | |
 |---|---|
-| `glitchvape` | the library and the command-line tools |
+| `glitchvape` | the library and the command-line tools — and on x86-64, the compiled grain |
 | `glitchvape-gui` | the Gtk3 window |
-| `glitchvape-fonts-extra` | one typeface, `non-free/fonts` |
+| `glitchvape-fonts-extra` | one typeface, in `non-free/fonts` on Debian |
+
+On x86-64 the compiled grain's debug information comes out beside them:
+`glitchvape-dbgsym` on Debian, `glitchvape-debuginfo` and
+`glitchvape-debugsource` on Fedora. That one file is also why the base package
+is built per architecture while the other two are architecture-independent.
 
 The third is separate because of what [fonts.md](fonts.md) says about W95FA:
 its terms are a font aggregator's description rather than a document, which
@@ -35,40 +33,7 @@ settled — at which point the font moves up and the third package disappears �
 or the tarball repacked, for which `package/debian/copyright` already carries a
 commented-out `Files-Excluded` line.
 
-The packaging drives the same `Makefile` the RPM spec does, rather than
-restating where anything goes, and `package/debian/rules` installs one binary package
-at a time from the targets the Makefile already splits — which is why there
-are no `.install` files here. `make check-split`, `make check-licenses` and
-the test suite all run during the build.
-
-## Fedora
-
-There is a spec file, so the shortest route is again a package:
-
-```bash
-sudo dnf install -y rpm-build perl-macros
-sudo dnf builddep -y package/glitchvape.spec   # what BuildRequires names
-make rpm                                # the binary packages
-```
-
-Three of them, and on x86_64 the `-debuginfo` and `-debugsource` packages
-for the compiled grain as well. `make srpm` builds only the source package,
-and `make rpms` builds both. All of them go through the tarball rather than
-the spec in the tree, so a file `make dist` forgot is a build failure rather
-than a package quietly missing something.
-
-Output lands wherever `rpmbuild` would have put it, `~/rpmbuild/RPMS`.
-`RPMTOPDIR` moves it:
-
-```bash
-make rpm RPMTOPDIR=$PWD/build-rpm       # build without touching $HOME
-make rpm RPMFLAGS='--nodeps --nocheck'  # skip BuildRequires and the tests
-```
-
-The last one proves the packaging rather than the program: `--nocheck` skips
-the `%check` section, which is where the test suite runs.
-
-## How the packaging is laid out
+## How they are built
 
 Everything a distribution needs lives in `package/` — the RPM spec, `debian/`,
 the desktop entry and the AppStream metadata — and everything the packaging
@@ -81,6 +46,27 @@ moves `package/debian` into place, because `dpkg-buildpackage` insists on a
 `debian/` directly beneath the directory it runs in. Building from the tarball
 rather than in the tree means a file `make dist` failed to include is a build
 failure rather than a package quietly missing something.
+
+The packaging drives the same `Makefile` the RPM spec does, rather than
+restating where anything goes, and `package/debian/rules` installs one binary package
+at a time from the targets the Makefile already splits — which is why there
+are no `.install` files here. `make check-split`, `make check-licenses` and
+the test suite all run during the build.
+
+`make srpm` builds only the source package, and `make rpms` builds it and the
+binaries. The rpmbuild tree is `build/rpmbuild` unless `RPMTOPDIR` moves it,
+and two escape hatches exist for a machine without the whole toolchain:
+
+```bash
+make rpm RPMTOPDIR=$HOME/rpmbuild       # the habitual place instead
+make rpm RPMFLAGS='--nodeps --nocheck'  # skip BuildRequires and the tests
+make deb DPKGFLAGS=-d                   # skip the build-dependency check
+```
+
+`--nocheck` proves the packaging rather than the program: it skips the
+`%check` section, which is where the test suite runs.
+
+## Where everything goes
 
 Installed, the modules go to `%{perl_vendorlib}` — `/usr/share/perl5` on
 Debian — the compiled grain to perl's `vendorarch`, and the data to

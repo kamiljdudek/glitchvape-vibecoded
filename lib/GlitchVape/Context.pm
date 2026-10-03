@@ -464,10 +464,15 @@ It helps only where the directory outlives the render -- the frames of a loop,
 and the window's session -- so a context that was not handed one builds and
 keeps nothing. A still from the command line would write a file nobody reads.
 
-Kept as MIFF at sixteen bits, which gives back exactly the values written: the
-render that builds a layer and the one that reads it have to composite the
-same picture, or what a preview shows would depend on which of the two it
-happened to be.
+Kept as MIFF in thirty-two-bit floating point, which gives back exactly the
+values written: the render that builds a layer and the one that reads it have
+to composite the same picture, or what a preview shows would depend on which
+of the two it happened to be. Sixteen bits were exact only where ImageMagick
+keeps its pixels as sixteen-bit integers, as Debian builds it. Built with
+HDRI, as Fedora and upstream build it, pixels are floating point, and a layer
+read back from sixteen bits was up to a sixteenth of a level off the one drawn
+-- which F<t/51-layers.t> caught the first time the suite ran there. Floating
+point is exact for both, at twice the size.
 
 C<\@key> names everything the layer depends on, the effect's name first, and
 is digested, so a value of any shape will do. A key that leaves something out
@@ -484,8 +489,13 @@ sub layer
     require GlitchVape::Checkpoint;
     require Image::Magick;
 
+    # The format is in the key, so that a layer kept the way they used to
+    # be -- at sixteen bits, which HDRI builds do not get back exactly -- is
+    # never served as one kept this way.
     my $path = File::Spec->catfile( $self->cachedir,
-        'layer-' . GlitchVape::Checkpoint::digest( @$key ) . '.miff' );
+              'layer-'
+            . GlitchVape::Checkpoint::digest( 'float32', @$key )
+            . '.miff' );
 
     if ( -s $path )
     {
@@ -514,8 +524,9 @@ sub layer
         cached_file(
             $path,
             sub {
+                $img->Set( 'quantum:format' => 'floating-point' );
                 GlitchVape::Magick::check(
-                    $img->Write( filename => $_[ 0 ], depth => 16 ),
+                    $img->Write( filename => $_[ 0 ], depth => 32 ),
                     'could not keep a layer' );
             }
         );

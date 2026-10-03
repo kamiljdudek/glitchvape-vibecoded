@@ -17,40 +17,15 @@ glitchvape --preset vhs-decay Pictures/IMG_8111.HEIC
 
 ## Install
 
-Debian 13 / WSL:
+GlitchVape builds its own packages — an `.rpm` for Fedora, a `.deb` for
+Debian and Ubuntu — and is installed from those, or it runs straight from a
+clone of this repository.
 
-```bash
-sudo apt update && sudo apt install -y \
-  imagemagick libimage-magick-perl \
-  ffmpeg libheif-examples \
-  pngquant gifsicle webp libimage-exiftool-perl \
-  libpath-tiny-perl libjson-perl libyaml-libyaml-perl \
-  libtry-tiny-perl libcapture-tiny-perl libfile-which-perl \
-  libparallel-forkmanager-perl libmoo-perl libtest-deep-perl \
-  fonts-noto-cjk fonts-ipafont fonts-vlgothic fonts-mplus fonts-misaki \
-  fonts-terminus fonts-unifont fonts-cascadia-code fonts-hack
-```
-
-Check what the tool can actually see:
-
-```bash
-./bin/glitchvape --check-deps
-./bin/glitchvape --check-fonts
-```
-
-Only `imagemagick` and `libimage-magick-perl` are strictly required. Everything
-else degrades gracefully: without `ffmpeg` you lose animation, without
-`pngquant` the quantiser falls back to ImageMagick's, without CJK fonts the
-text effects report which package would fix it.
-
-The window needs GTK 3's Perl binding as well, and its animated preview
-GStreamer. Everything else about getting it onto a machine is in `docs/`:
-
-| | |
-|---|---|
-| [install.md](docs/install.md) | Fedora, the window's dependencies, and the one part that is compiled |
-| [packaging.md](docs/packaging.md) | building the `.deb` and `.rpm` packages, and how they are laid out |
-| [fonts.md](docs/fonts.md) | the typefaces the presets ask for, which ship and which do not |
+**[docs/install.md](docs/install.md)** has both: the dependencies on each
+distribution, building and installing the packages, and running from a clone.
+[docs/packaging.md](docs/packaging.md) says what is in each package and how
+they are built, and [docs/fonts.md](docs/fonts.md) which typefaces the
+presets ask for and which of them ship.
 
 ---
 
